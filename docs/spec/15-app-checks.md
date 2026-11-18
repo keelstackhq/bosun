@@ -126,7 +126,8 @@ key goes only to the token step, the token only to the bosun step. main-health's
   `checks: read`, a 403 that is not a rate limit) reads statuses only, one stderr line; any other error fails the reader. Readers: risk-check (pending repair, carry), `bosun
   approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
   context counts only as a check run of the App and `ci-ok` only from github-actions; in
-  `statuses` and `dual` a status or check run, as today). `Ctx::load` records the trusted App
+  `statuses` a status or check run, as today; the gate contexts of `pr --ready`'s
+  `pending_checks` are read by the same rule: in `dual` the worse of status and App run). `Ctx::load` records the trusted App
   once per process; `gate_statuses` and `gate_history` (`src/github/gate.rs`) give the App's runs
   as statuses (title as the description, an `error:` title as `error`, an open run as `pending`),
   so the readers keep their logic. `bosun pr --auto-merge` reports the gates from them.

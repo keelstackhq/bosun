@@ -128,3 +128,13 @@ fn statuses_mode_ignores_app_runs() {
     fake.app_run(HEAD, "review-verdict", "failure", "x", SLUG, APP_ID);
     assert_eq!(ready(&list(&fake, &statuses)), [1]);
 }
+
+#[test]
+fn dual_an_open_app_run_holds_a_green_status() {
+    // The App's run is still in progress (the verdict not yet written): a green status, which
+    // any workflow can post, does not jump ahead of it.
+    let fake = waiting();
+    let dual = repo("dual");
+    fake.check_run_app(HEAD, "review-verdict", "in_progress", None, SLUG, APP_ID);
+    assert!(ready(&list(&fake, &dual)).is_empty());
+}
