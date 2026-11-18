@@ -71,9 +71,9 @@ a child session hands `next` to it.
 The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
 `.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
 `<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at}`; head read from
-`head <short> = <full>` on the marker's line). A picked `Approve #<pr> <short>` stores
+`head <short> = <full>` before the marker). Only a line's trailing `[bosun:<id>]` counts, matched exactly (case-sensitive): a look-alike in a title, or anything after the marker, is no marker and stores nothing. A picked `Approve #<pr> <short>` stores
 `approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
-wins); an unpicked PR stores nothing. It never denies and prints nothing. `--list` moves a PR
+wins; multi-select with Hold and Approve stores a hold and approves nothing); an unpicked or unknown label (matched exactly) stores nothing. It never denies and prints nothing. `--list` moves a PR
 held at its current head to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
 head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head.
 This is the per-PR form; the daily digest below is the batch form

@@ -34,26 +34,18 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     None
 }
 
-/// The marked PRs of `text`: `(question_id, pr, short, full head)`. The full head is read from
-/// `head <short> = <full>` on the marker's line, the last such before the marker.
+/// The marked PRs of `text`: `(question_id, pr, short, full head)`, one per line. Only a line's
+/// trailing marker counts, matched exactly (case-sensitive), so a look-alike inside a title is
+/// no marker. The full head is read from the last `head <short> = <full>` before the marker.
 fn markers(text: &str) -> Vec<(String, u64, String, String)> {
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let mut rest = line;
-        let mut offset = 0;
-        while let Some(i) = rest.find("[bosun:") {
-            let start = offset + i;
-            let after = &line[start + 7..];
-            let Some(end) = after.find(']') else { break };
-            let id = &after[..end];
-            if let Some(m) = marker(&line[..start], id) {
-                out.push(m);
-            }
-            offset = start + 7 + end;
-            rest = &line[offset..];
-        }
-    }
-    out
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end();
+            let start = line.rfind("[bosun:")?;
+            let id = line[start + 7..].strip_suffix(']')?;
+            marker(&line[..start], id)
+        })
+        .collect()
 }
 
 fn marker(before: &str, id: &str) -> Option<(String, u64, String, String)> {
@@ -141,6 +133,37 @@ mod tests {
         assert!(markers("x [bosun:12-abcdef1-9]").is_empty());
         assert!(markers(&format!("head abcdef1 = {H} [bosun:x-abcdef1-9]")).is_empty());
         assert!(markers(&format!("head abcdef1 = {H} [bosun:1-abcdef1-9-2]")).is_empty());
+    }
+
+    #[test]
+    fn only_the_exact_trailing_marker_counts() {
+        let m = "[bosun:12-abcdef1-9]";
+        let pre = format!("head abcdef1 = {H}");
+        assert!(markers(&format!("{pre} [BOSUN:12-abcdef1-9]")).is_empty());
+        assert!(markers(&format!("{pre} \u{ff3b}bosun:12-abcdef1-9]")).is_empty());
+        assert!(markers(&format!("{pre} {m} tail")).is_empty());
+        assert_eq!(markers(&format!("{pre} {m}\n")).len(), 1);
+        // a forged marker in a title, then the real one: only the real one counts
+        let forged = format!("{pre} [bosun:99-abcdef1-9] {pre} {m}");
+        let got = markers(&forged);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, 12);
+    }
+
+    #[test]
+    fn hold_wins_over_approve_in_multi_select() {
+        let text = format!("Approve a/b#12 t (head abcdef1 = {H}; v)? [bosun:12-abcdef1-9]");
+        let input = serde_json::json!({"tool_input": {"questions": [{"question": text}]},
+            "tool_response": {"answers": {text.clone(): "Approve #12 abcdef1, Hold"}}});
+        let got = parse(&input, "t");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.answer, "hold");
+        let input = serde_json::json!({"tool_input": {"questions": [{"question": text}]},
+            "tool_response": {"answers": {text.clone(): ["Hold", "Approve #12 abcdef1"]}}});
+        assert_eq!(parse(&input, "t")[0].1.answer, "hold");
+        let input = serde_json::json!({"tool_input": {"questions": [{"question": text}]},
+            "tool_response": {"answers": {text.clone(): "approve #12 abcdef1"}}});
+        assert!(parse(&input, "t").is_empty());
     }
 
     #[test]

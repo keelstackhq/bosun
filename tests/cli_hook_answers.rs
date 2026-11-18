@@ -54,16 +54,17 @@ fn stored(repo: &Path) -> Value {
 fn question(items: &[(u64, &str)], answer: &str) -> Value {
     let line = |pr: u64, h: &str| {
         format!(
-            "acme/widget#{pr} `t` (risk R-gov; head {s} = {h}; verdict: ok) [bosun:{pr}-{s}-1792663200]",
+            "acme/widget#{pr} `t` (risk R-gov; head {s} = {h}; verdict: ok)",
             s = &h[..7]
         )
     };
+    let mark = |pr: u64, h: &str| format!("[bosun:{pr}-{}-1792663200]", &h[..7]);
     let text = match items {
-        [(pr, h)] => format!("Approve {}?", line(*pr, h)),
+        [(pr, h)] => format!("Approve {}? {}", line(*pr, h), mark(*pr, h)),
         many => {
             let lines: Vec<String> = many
                 .iter()
-                .map(|(p, h)| format!("- {}", line(*p, h)))
+                .map(|(p, h)| format!("- {} {}", line(*p, h), mark(*p, h)))
                 .collect();
             format!(
                 "Approve which PRs? Hold approves none.\n{}",
@@ -247,4 +248,22 @@ fn held_pr_reasked_new_head() {
     assert_eq!(v["data"]["ready"][0]["pr"], json!(12), "{v}");
     assert_eq!(v["data"]["held"], json!([]));
     assert_eq!(v["next"][0]["tool"], json!("AskUserQuestion"));
+}
+
+#[test]
+fn look_alike_marker_stores_nothing() {
+    let r = repo();
+    let h = head("abc1234");
+    for variant in [
+        "[BOSUN:12-abc1234-1792663200]",
+        "\u{ff3b}bosun:12-abc1234-1792663200]",
+    ] {
+        let mut input = question(&[(12, &h)], "Approve #12 abc1234");
+        let text =
+            format!("Approve acme/widget#12 `t` (head abc1234 = {h}; verdict: ok)? {variant}");
+        input["tool_input"]["questions"][0]["question"] = json!(text);
+        input["tool_response"]["answers"] = json!({text: "Approve #12 abc1234"});
+        post(r.path(), &input);
+    }
+    assert_eq!(stored(r.path()), json!({}));
 }
