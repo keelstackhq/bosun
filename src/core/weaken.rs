@@ -1302,8 +1302,8 @@ mod tests {
             t(c, "project = \"p\"\n", &gh.replace("github", "none")),
             [".bosun/bosun.toml: ci.provider (none) → none"]
         );
-        // Another provider, or dropping the key (github), keeps CI on.
-        // Any other change of `[ci]` is judged too, and so is a non-table `ci`.
+        // Moving to another provider (circleci) is a finding too, as is any other change of
+        // `[ci]` and a non-table `ci`.
         assert_eq!(
             t(c, gh, &gh.replace("github", "circleci")),
             [".bosun/bosun.toml: ci.provider github → circleci"]

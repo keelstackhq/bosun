@@ -261,21 +261,29 @@ fn rust_test_with_no_affected_package_stamps_as_skipped() {
 }
 
 #[test]
-fn test_integrity_does_not_stamp_a_tree_with_untracked_files() {
-    // It judges the diff against the base; a new untracked file is never read.
+fn test_integrity_stamps_a_tree_with_untracked_files() {
+    // Untracked files are judged as added files, so the working tree is stamped like any gate's,
+    // and a commit of exactly that work carries the stamp at HEAD.
     let (_tmp, root) = repo();
     put(&root, "src/lib.rs", "pub fn f() { let _ = 3; }\n");
-    put(&root, "src/new.rs", "pub fn g() {}\n");
-    let (code, v) = gate(&root, &[]);
-    assert_eq!(code, 0, "{v}");
-    assert!(v["data"]["stamp"].is_null(), "{v}");
-    assert!(!stamps_dir(&root).exists());
-    // Ignored files are not part of the stamped tree, so they do not block it.
-    fs::remove_file(root.join("src/new.rs")).unwrap();
+    put(&root, "tests/new.rs", TWO_ASSERTS);
     put(&root, ".gitignore", "junk\n");
-    git(&root, &["add", ".gitignore"]);
     put(&root, "junk", "x\n");
     let (code, v) = gate(&root, &[]);
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["stamp"].is_string(), "{v}");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "work"]);
+    assert_eq!(stamp_text(&root, "test-integrity").as_deref(), Some("ok\n"));
+}
+
+#[test]
+fn test_integrity_refuses_an_untracked_test_with_a_skip() {
+    let (_tmp, root) = repo();
+    put(&root, "tests/new.rs", &format!("#[ignore]\n{TWO_ASSERTS}"));
+    let (code, v) = gate(&root, &[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["findings"][0]["kind"], "new-skip", "{v}");
+    assert_eq!(v["data"]["findings"][0]["file"], "tests/new.rs", "{v}");
+    assert!(!stamps_dir(&root).exists());
 }

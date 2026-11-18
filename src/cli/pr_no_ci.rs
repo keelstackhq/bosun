@@ -27,8 +27,14 @@ pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
 /// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
+    // The author's own sessions are the lease holders of the linked tasks (the lookup D-017 and
+    // risk-check use): with no linked task that has a lease there is no way to tell who is
+    // independent, so nothing counts (fail closed).
     let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
     let (comments, mut excluded) = verdict_inputs(gh, pull.number, &linked)?;
+    if excluded.is_empty() {
+        return Ok(Vec::new());
+    }
     excluded.push(app.ctx.session.clone());
     let models = review_models(gh, &pull.base_sha)?;
     let head = &pull.head_sha;
