@@ -665,8 +665,8 @@ pub struct KeygenArgs {
     /// Key id for .bosun/approvers.toml (default `<role>-<YYYY-MM>`); A-Z a-z 0-9 . _ - only.
     #[arg(long)]
     pub id: Option<String>,
-    /// The key's role: `owner` (default), `delegate` or `signer` (the CI signer, autonomous form only).
-    #[arg(long, value_parser = ["owner", "delegate", "signer"])]
+    /// The key's role: `owner` (default), `delegate`, `signer` (the CI signer, autonomous form only) or `reviewer` (signs verdicts without CI).
+    #[arg(long, value_parser = ["owner", "delegate", "signer", "reviewer"])]
     pub role: Option<String>,
     /// Append the key to <repo>/.bosun/approvers.toml (created when missing).
     #[arg(long)]

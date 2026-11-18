@@ -166,7 +166,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
         return Err(BosunError::needs_human(
             format!("PR #{pr} has no clean verdict on head {head} from another session"),
             format!(
-                "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from -`, then rerun `bosun merge {pr}`"
+                "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from - --sign-key <reviewer.pem>`, then rerun `bosun merge {pr}`"
             ),
         ));
     }

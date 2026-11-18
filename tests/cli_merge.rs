@@ -444,7 +444,7 @@ fn merge_default_branch_github_head_none_takes_the_ci_path() {
     assert!(merge_puts(&fake).is_empty(), "{v}");
 }
 
-/// Merge counts only a gate App record or an enrolled key's signature as a verdict.
+/// Merge counts only an enrolled key's signature as a verdict, never an App record.
 #[test]
 fn merge_counts_only_app_or_signed_verdicts() {
     let (fake, dir) = setup(false, Some(NO_CI));
@@ -465,8 +465,7 @@ fn merge_counts_only_app_or_signed_verdicts() {
     assert_eq!(code, 5, "{v}");
     assert!(merge_puts(&fake).is_empty());
     noci::app_verdict(&fake, "session_rev");
-    let (code, v) = merge(&fake, dir.path());
-    assert_eq!(code, 0, "{v}");
+    assert_eq!(merge(&fake, dir.path()).0, 5);
 }
 
 /// What must pass is the default branch's: the checkout's profile drops `lint`, the base keeps it.

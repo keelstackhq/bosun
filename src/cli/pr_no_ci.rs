@@ -61,12 +61,17 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     excluded.push(app.ctx.session.clone());
     let models = review_models(gh, &pull.base_sha)?;
     let head = &pull.head_sha;
-    let found = autonomous_clean(&comments, head, &excluded, models.as_deref());
-    if !found.is_empty() || provider_default(gh)? != CiProvider::None {
-        return Ok(found);
+    if provider_default(gh)? != CiProvider::None {
+        return Ok(autonomous_clean(
+            &comments,
+            head,
+            &excluded,
+            models.as_deref(),
+        ));
     }
-    // No gate App verdict: only a verdict signed by an enrolled key counts (D-019). A comment
-    // by a writer, or a session tag, is no proof of who reviewed.
+    // Without CI no App record counts: `[checks] mode = "checks"` is refused with provider none,
+    // and in `statuses` mode `github-actions[bot]` is any writer's push workflow. Only a
+    // signature of an enrolled key counts (D-019), never a writer's comment or a session tag.
     let keys = super::risk_check::enrolled_keys(gh).unwrap_or_default();
     let (repo, pr) = (&app.ctx.repo, pull.number);
     let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -147,7 +152,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
             BosunError::needs_human(
                 format!("PR #{pr} has no clean verdict on head {head} from another session"),
                 format!(
-                    "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from -` (approve, no blocker or major), then rerun `{rerun}`"
+                    "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from - --sign-key <reviewer.pem>` (approve, no blocker or major), then rerun `{rerun}`"
                 ),
             ),
             &data,

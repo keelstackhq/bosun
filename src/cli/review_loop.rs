@@ -89,7 +89,7 @@ fn reviewer_prompt(n: u64, head: &str) -> String {
     format!(
         "Review PR #{n} at head {head}. Read `bosun review-pack {n}` and follow its instructions. A read-only \
 reviewer cannot write statuses: save the verdict JSON to a file in your scratchpad first (it survives a \
-restart), then post it with `bosun verdict comment --from -` (JSON on stdin) or `--from <file>`."
+restart), then post it with `bosun verdict comment --from -` (JSON on stdin) or `--from <file>` (without CI add `--sign-key <reviewer.pem>`)."
     )
 }
 
