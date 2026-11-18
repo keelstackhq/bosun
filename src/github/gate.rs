@@ -353,7 +353,8 @@ fn worse_of_app(mut statuses: Vec<Status>, runs: Vec<CheckRun>, id: u64) -> Vec<
     statuses
 }
 
-fn as_status(r: CheckRun) -> Status {
+/// A check run read as a status: an `error:` title is `error`, an open run is `pending`.
+pub(crate) fn as_status(r: CheckRun) -> Status {
     let state = match (r.status.as_str(), r.conclusion.as_deref()) {
         ("completed", Some("success")) => "success",
         ("completed", _) if r.title.starts_with("error:") => "error",

@@ -1,0 +1,1 @@
+- 2026-11-18 · B2 gate sources · src/gates/sources.rs, src/cli/gate.rs, spec §15 §7 · this PR
