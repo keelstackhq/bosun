@@ -15,9 +15,11 @@ use crate::core::guard::{
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
-use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
+use crate::core::repeat::{Verdict as Repeat, is_poll, repeat_key, repeat_step, repeat_verdict};
 use crate::core::stamps::gate_loop;
 use crate::core::touch::{is_plan_file, is_plan_tick};
+use crate::core::verdict::{Verdict, comment_json};
+use crate::github::IssueState;
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -137,10 +139,28 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = fetch_config(&dir, command, &default) {
             return Some(deny(&why));
         }
-        if let Some(why) = push_gates(&dir, command, &read, &default) {
-            return Some(deny(&why));
+        let pushed = match push_gates(&dir, command, &read, &default) {
+            Ok(p) => p,
+            Err(why) => return Some(deny(&why)),
+        };
+        if repeat.as_deref().is_some_and(is_deny) {
+            return repeat;
         }
-        return repeat;
+        let mut notes: Vec<String> = repeat
+            .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|v| {
+                v["hookSpecificOutput"]["additionalContext"]
+                    .as_str()
+                    .map(String::from)
+            })
+            .into_iter()
+            .collect();
+        notes.extend(stale_verdicts(pushed));
+        return (!notes.is_empty()).then(|| {
+            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                "additionalContext": notes.join("\n")}})
+            .to_string()
+        });
     }
     if let Some(file) = repeat_file(&dir, input) {
         // Another tool call (an edit between test runs) ends the run of repeats.
@@ -417,12 +437,14 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
 /// ready gate, read in the checkout where git runs. A repo whose config is unset or `ready`
 /// pushes as before; a push whose checkout the guard cannot tell (interpreter code, a `cd`
 /// it cannot read, `--git-dir`) is refused when the hook directory's repo is in push mode.
+/// `Err` is the deny reason; `Ok` lists each ref pushed in push mode, for [`stale_verdicts`].
 fn push_gates(
     dir: &Path,
     command: &str,
     read: &dyn Fn(&str) -> Option<Script>,
     default: &str,
-) -> Option<String> {
+) -> Result<Vec<Pushed>, String> {
+    let mut pushed = Vec::new();
     for mut push in pushes(command, read, default) {
         // `--git-dir` and `--work-tree` name a checkout `--show-toplevel` does not report.
         push.dir = push.dir.filter(|d| d.iter().all(|o| !o.starts_with("--")));
@@ -442,7 +464,7 @@ fn push_gates(
             continue;
         }
         if push.dir.is_none() {
-            return Some(
+            return Err(
                 "push-gates: the guard cannot tell which checkout this push runs in; push with \
                  a literal `cd <dir> &&` or `git -C <dir>`"
                     .into(),
@@ -450,7 +472,7 @@ fn push_gates(
         }
         let gates = match stamps::ready_gates(root) {
             Ok(g) => g,
-            Err(e) => return Some(format!("push-gates: {}; {}", e.message, e.fix)),
+            Err(e) => return Err(format!("push-gates: {}; {}", e.message, e.fix)),
         };
         let srcs = if push.srcs.is_empty() {
             vec!["HEAD".to_string()]
@@ -460,7 +482,7 @@ fn push_gates(
         for src in srcs {
             let Some(tree) = at(&["rev-parse", "--verify", "-q", &format!("{src}^{{tree}}")])
             else {
-                return Some(format!(
+                return Err(format!(
                     "push-gates: cannot read the tree of `{src}`; name a local branch to push"
                 ));
             };
@@ -470,16 +492,90 @@ fn push_gates(
                 .cloned()
                 .collect();
             if !missing.is_empty() && !stamps::carried(root, &src, &gates, &at) {
-                return Some(format!(
+                return Err(format!(
                     "push-gates (push_gates = \"push\"): the tree of `{src}` has no passing stamp \
                      for {}: commit your work, run `{}`, fix what fails, then push again",
                     missing.join(", "),
                     gate_loop(&missing)
                 ));
             }
+            let sha = at(&["rev-parse", "--verify", "-q", &format!("{src}^{{commit}}")]);
+            let branch = at(&["rev-parse", "--abbrev-ref", &src]);
+            if let (Some(sha), Some(branch)) = (sha, branch)
+                && branch != "HEAD"
+                && branch != default
+            {
+                pushed.push(Pushed {
+                    root: root.to_path_buf(),
+                    sha,
+                    branch,
+                });
+            }
         }
     }
-    None
+    Ok(pushed)
+}
+
+/// A ref that push-gates let through: its checkout, commit and branch.
+struct Pushed {
+    root: std::path::PathBuf,
+    sha: String,
+    branch: String,
+}
+
+/// How long the stale-verdict lookups may hold up a push.
+const VERDICT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A warning (never a deny) per pushed branch whose open PR's newest verdict is for another
+/// head (spec §7): one `list_pulls` and one `list_comments` each, in a thread that waits at
+/// most `VERDICT_WAIT`. Any GitHub or config error skips the check with a stderr warning.
+fn stale_verdicts(pushed: Vec<Pushed>) -> Vec<String> {
+    if pushed.is_empty() {
+        return Vec::new();
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let found: Result<Vec<String>, String> = pushed
+            .iter()
+            .map(stale_verdict)
+            .filter_map(Result::transpose)
+            .collect();
+        let _ = tx.send(found);
+    });
+    let why = match rx.recv_timeout(VERDICT_WAIT) {
+        Ok(Ok(notes)) => return notes,
+        Ok(Err(e)) => e,
+        Err(_) => format!("no answer from GitHub within {VERDICT_WAIT:?}"),
+    };
+    eprintln!("bosun: warning: push-gates verdict check skipped: {why}");
+    Vec::new()
+}
+
+/// The warning for one pushed branch, `None` without an open PR, a verdict, or when the
+/// newest verdict is for the pushed commit.
+fn stale_verdict(p: &Pushed) -> Result<Option<String>, String> {
+    let app = App::load(Some(&p.root)).map_err(|e| e.message)?;
+    let head = format!("{}:{}", app.ctx.repo.owner, p.branch);
+    let pulls = app.gh.list_pulls(Some(&head), IssueState::Open);
+    let Some(pull) = pulls.map_err(|e| e.message)?.into_iter().next() else {
+        return Ok(None);
+    };
+    let n = pull.number;
+    let comments = app.gh.list_comments(n).map_err(|e| e.message)?;
+    let newest = comments
+        .iter()
+        .filter_map(|c| comment_json(&c.body).and_then(|t| Verdict::parse(t).ok()))
+        .rfind(|v| v.pr == n);
+    let Some(v) = newest.filter(|v| v.head_sha != p.sha) else {
+        return Ok(None);
+    };
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    Ok(Some(format!(
+        "push-gates: PR #{n}'s verdict is for {}, not {}: it carries over only a clean merge of \
+         main (risk-check); otherwise review the new head (`bosun review-loop {n}`)",
+        short(&v.head_sha),
+        short(&p.sha)
+    )))
 }
 
 /// A script the merge-lock scans, relative to `dir`: at most 1 MiB is read (procfs files report
@@ -563,8 +659,8 @@ fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> 
         return None;
     }
     match repeat_verdict(step.count)? {
-        Verdict::Deny(why) => Some(deny(&why)),
-        Verdict::Warn(why) => Some(
+        Repeat::Deny(why) => Some(deny(&why)),
+        Repeat::Warn(why) => Some(
             json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": why}})
                 .to_string(),
         ),

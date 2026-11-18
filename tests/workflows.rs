@@ -197,6 +197,10 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         );
     }
     assert!(yaml.contains("contains(github.event.comment.body, '<!-- bosun:verdict -->')"));
+    // A trusted bot's verdict carries no marker (spec §7): job if: and concurrency.
+    // The fence keeps bosun's own record comments (App token, "head_sha", no fence) out of it.
+    let bot = "(github.event.comment.user.type == 'Bot' && contains(github.event.comment.body, '\"head_sha\"') && contains(github.event.comment.body, '```json'))";
+    assert_eq!(yaml.matches(bot).count(), 2, "{yaml}");
     runs_the_pinned_release(&yaml);
     let refs: Vec<&str> = yaml
         .lines()

@@ -1,0 +1,1 @@
+- Handoff notes go to `docs/handoff/<branch>.md`, outside R-gov: a handoff PR is normal risk and `bosun pr --one-off` takes it; instruction files and nested `.claude/` folders anywhere stay R-gov (new `**/.claude/**` in the built-ins, bosun's rules and the channel), and nothing imports the notes (spec §4, §8).

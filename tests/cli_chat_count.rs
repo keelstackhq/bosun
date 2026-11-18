@@ -296,13 +296,78 @@ fn chat_counts_under_owner_gated_and_autonomous_policy() {
 }
 
 #[test]
-fn chat_counts_on_trust_file_pr() {
+fn chat_never_counts_on_trust_file_pr() {
     let fake = high_pr(true);
     let patch = Some("@@ -1,1 +1,2 @@\n [[owner]]\n+github = \"eve\"");
     fake.pull_file(1, "governance/owners.toml", "modified", 1, 0, patch);
-    // A signature would not count here; the chat record does.
     app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    refused(&fake);
+    // The owner's own GitHub comment still counts there.
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
     assert_eq!(approved(&fake), "ada");
+}
+
+#[test]
+fn chat_never_counts_when_the_diff_is_unseen() {
+    let fake = high_pr(true);
+    // A patch-less file the rules cannot read: R-unseen.
+    fake.pull_file(1, "src/big.rs", "modified", 1, 0, None);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["data"]["matches"].to_string().contains("R-unseen"), "{v}");
+    assert_eq!(v["data"]["approved_by"], Value::Null, "{v}");
+}
+
+#[test]
+fn chat_record_for_another_pr_not_counted() {
+    let fake = high_pr(true);
+    let other = chat(HEAD, "session_orch").replace("question=1-", "question=2-");
+    app_comment(&fake, "ada", &other);
+    refused(&fake);
+}
+
+#[test]
+fn chat_judged_by_the_join_in_force_at_record_time() {
+    // The orchestrator rejoined (a new comment) after the record: the earlier join was in force.
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    join(&fake, "session_orch", "spawned", None, 1);
+    assert_eq!(approved(&fake), "ada");
+    // A join only after the record does not vouch for it.
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "");
+    fake.pull_as_issue(1, "change");
+    fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
+    fake.content("governance/owners.toml", BASE, OWNERS);
+    let patch = Some("@@ -0,0 +1,1 @@\n+x");
+    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, patch);
+    fake.issue(REG, "bosun registry", &["bosun:registry"], "");
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    join(&fake, "session_orch", "spawned", None, 1);
+    refused(&fake);
+}
+
+#[test]
+fn a_lapsed_orchestrator_is_named_in_the_fix() {
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    fake.comment(
+        REG,
+        r#"{"bosun":"leave","session":"session_orch","reason":"done"}"#,
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("chat approval record"), "{fix}");
+    // No record at all: the fix does not mention one.
+    let (_, v) = check(&high_pr(true));
+    assert!(
+        !v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("chat approval record")
+    );
 }
 
 #[test]
