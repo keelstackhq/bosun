@@ -279,6 +279,10 @@ pub struct Approvals {
     /// Whether a chat approval record counts as the owner's approval. Unset: true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat: Option<bool>,
+    /// Whether a chat approval record counts only with a signature by an enrolled approver key
+    /// (known from 0.21.0). Unset: false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_signed: Option<bool>,
 }
 
 impl Approvals {
@@ -298,6 +302,11 @@ impl Approvals {
     /// Whether a chat approval record counts as the owner's approval (default true).
     pub fn chat_enabled(&self) -> bool {
         self.chat.unwrap_or(true)
+    }
+
+    /// Whether a chat record needs an enrolled key's signature (default false).
+    pub fn chat_signed(&self) -> bool {
+        self.chat_signed.unwrap_or(false)
     }
 }
 
