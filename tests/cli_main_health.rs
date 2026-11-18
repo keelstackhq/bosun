@@ -155,3 +155,30 @@ fn failure_rejudges_prs_even_when_the_issue_is_already_open() {
     assert_eq!(v["data"]["rejudged"], 1);
     assert_eq!(main_open_state(&fake, "sha10"), "failure");
 }
+
+#[test]
+fn main_health_skips_without_ci() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        "[ci]\nprovider = \"none\"\n",
+    )
+    .unwrap();
+    let fake = FakeGithub::start();
+    let (code, v) = run(
+        &fake,
+        "session_a",
+        NOW,
+        &[
+            "-C",
+            tmp.path().to_str().unwrap(),
+            "main-health",
+            "--result",
+            "failure",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], "ci provider none");
+    assert!(issues_with(&fake, "bosun:main-red").is_empty());
+}

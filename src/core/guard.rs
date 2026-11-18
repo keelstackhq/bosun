@@ -14,13 +14,15 @@ use crate::core::meta::OPEN;
 mod interp;
 mod literals;
 mod prose;
-pub use interp::{Script, script_rules};
+pub use interp::{Script, answers_script_lock, script_rules};
 mod writes;
 pub use writes::bash_writes;
 
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates \
     (a PR with no task: `bosun pr --pr <n> --auto-merge`)";
+
+const BOSUN_MERGE_PREFIX: &str = "run `bosun merge <pr>` bare: a prefix (assignment, wrapper) could set the identity it checks (D-019)";
 
 /// Whether a refusal reason is about a merge, tag or push, so that the "never merge, tag or
 /// force-push" advice fits it. Reasons that carry their own fix, or are about something else,
@@ -181,6 +183,9 @@ pub fn tool_rules(
 ) -> Option<String> {
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        if let Some(why) = merge_env_tamper(command) {
+            return Some(why);
+        }
         return bash_rules(command, branch_at, default_branch);
     }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
@@ -435,6 +440,90 @@ pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
     prereqs_lock_for(tool, input, false)
 }
 
+/// Answers-lock (spec 14): the owner's stored answers (`<git common dir>/bosun/answers.json`) are
+/// written by the PostToolUse hook only. Refuses an edit tool on that file (the path is
+/// normalised: `//`, `.` and `x/..` collapse), and a Bash command (also inside `bash -c`, `eval`,
+/// quotes and redirects) that names that path, names a bare `answers.json` while naming a
+/// `.git/.../bosun` directory, or runs `hook post-tool-use` after any bosun global flags. A
+/// local hint, never proof: this stops confused workers, not liars (a command can build the path
+/// in a variable, a glob or `$(git rev-parse ...)`, which is not covered).
+pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
+    let hit = match tool {
+        "Bash" => {
+            let c = input.get("command").and_then(Value::as_str).unwrap_or("");
+            answers_hook_words(c) || answers_in_command(c, 0)
+        }
+        _ => edited_path(tool, input).is_some_and(|p| is_answers_path(&p)),
+    };
+    hit.then(|| {
+        "the owner's answers file is written only by the PostToolUse hook for AskUserQuestion; \
+         do not edit it or run the hook by hand. Ask the owner with `bosun approve --list` \
+         and let the answer arrive through the tool"
+            .to_string()
+    })
+}
+
+/// Whether `text` (a command, or the text of a script or interpreter code) holds both words
+/// `hook` and `post-tool-use`, after line continuations are joined. Any such text is refused:
+/// the hook that stores answers runs from settings.json, never through PreToolUse, and a
+/// command that builds the pair from variables, `xargs`, `$(...)` or a subprocess call still
+/// names both words.
+pub fn answers_hook_words(text: &str) -> bool {
+    let joined = text.replace("\\\r\n", "").replace("\\\n", "");
+    joined.contains("hook") && joined.contains("post-tool-use")
+}
+
+/// Only read-only viewers (`cat`, `jq`, `less`, `head`, `tail`, `cd`), no redirect that writes,
+/// no `$(...)` or backticks: naming `answers.json` there reads it.
+fn answers_read_only(command: &str) -> bool {
+    if command.contains(['`', '>']) || command.contains("$(") {
+        return false;
+    }
+    rough_segments(command).iter().all(|seg| {
+        let words = shell_words(seg);
+        let first = words.iter().find(|w| *w != SEP && !w.contains('='));
+        // An empty segment is the second `&` of `&&`.
+        first.is_none_or(|w| {
+            matches!(
+                w.rsplit('/').next().unwrap_or(w),
+                "cat" | "jq" | "less" | "head" | "tail" | "cd"
+            )
+        })
+    })
+}
+
+/// `.../bosun/answers.json` once lexically normalised.
+fn is_answers_path(path: &str) -> bool {
+    let norm = lexical(&path.replace('\\', "/"));
+    let mut parts = norm.rsplit('/');
+    parts.next() == Some("answers.json") && parts.next() == Some("bosun")
+}
+
+fn answers_in_command(command: &str, depth: usize) -> bool {
+    // A redirect or `--opt=` glued to a path: try the word, its tail after `=`, and without `<>`.
+    let words = shell_words(command);
+    let cands = |w: &str| -> Vec<String> {
+        let bare = w.trim_start_matches(['<', '>', '&']);
+        let tail = bare.rsplit('=').next().unwrap_or(bare);
+        vec![w.to_string(), bare.to_string(), tail.to_string()]
+    };
+    let direct = words
+        .iter()
+        .any(|w| cands(w).iter().any(|c| is_answers_path(c)));
+    let bare = words
+        .iter()
+        .any(|w| cands(w).iter().any(|c| lexical(c) == "answers.json"))
+        && words.iter().any(|w| {
+            let n = lexical(w.trim_end_matches('/'));
+            n.rsplit('/').next() == Some("bosun") && n.split('/').any(|p| p == ".git")
+        });
+    ((direct || bare) && !answers_read_only(command))
+        || (depth < 3
+            && word_scripts(command)
+                .iter()
+                .any(|s| answers_in_command(s, depth + 1)))
+}
+
 /// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
 /// session, spec §4): the checklist and epic markers stay refused.
 pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<String> {
@@ -457,6 +546,63 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
     hit.then(|| {
         "bosun's markers (owner checklist, task and epic metadata) are written by bosun only \
          (bosun prereqs --post writes the checklist); fix the plan instead"
+            .to_string()
+    })
+}
+
+/// The command with quotes and backslashes removed, split at whitespace and shell separators.
+fn merge_words(command: &str) -> Vec<String> {
+    let plain: String = command
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    plain
+        .split(|c: char| c.is_whitespace() || ";&|()`$<>".contains(c))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// D-019: `bosun merge` judges the caller from its own environment, so a command that runs bosun
+/// to merge and also exports, unsets, declares or assigns `BOSUN_*` or `CLAUDE_CODE_CHILD_SESSION`
+/// anywhere in it (a subshell, an earlier statement, `set -a`) is refused. The bosun word may be
+/// hidden in a variable or substitution (`b=bosun; $b merge 1`, `$(which bosun) merge 1`).
+/// `${!name}` indirect expansion counts as tamper too. Best effort: a file that is sourced, or a
+/// name built at run time by other means, is missed.
+fn merge_env_tamper(command: &str) -> Option<String> {
+    let words = merge_words(command);
+    let runs_bosun = words
+        .iter()
+        .any(|w| base(w) == "bosun" || w.ends_with("=bosun") || w.starts_with("bosun"));
+    if !runs_bosun || !words.iter().any(|w| w == "merge") {
+        return None;
+    }
+    let names_identity =
+        |w: &str| w.starts_with("BOSUN_") || w.contains("CLAUDE_CODE_CHILD_SESSION");
+    let verbs = [
+        "export", "unset", "declare", "typeset", "env", "set", "readonly",
+    ];
+    let assigns = words.iter().any(|w| names_identity(w) && w.contains('='));
+    let verb_names = words.iter().any(|w| verbs.contains(&w.as_str()))
+        && words.iter().any(|w| names_identity(w));
+    let set_a = words
+        .windows(2)
+        .any(|p| p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"));
+    // The command word is a variable or substitution: it may be bosun in disguise.
+    let indirect = shell_words(command).split(|w| w == SEP).any(|seg| {
+        seg.iter().any(|w| w == "merge")
+            && seg
+                .iter()
+                .find(|w| !w.contains('=') || w.starts_with('$'))
+                .is_some_and(|w| w.starts_with('$') || w.starts_with('`'))
+    });
+    // `${!name}` expands the variable `name` points to: the identity variable can be named at
+    // run time (`n=BOSUN_SESSION; export ${!n}=x`).
+    let by_name = command.contains("${!");
+    (assigns || verb_names || set_a || indirect || by_name).then(|| {
+        "a command that runs `bosun merge` may not set, export or unset BOSUN_* or \
+         CLAUDE_CODE_CHILD_SESSION: the merge checks the caller's own identity (D-019); run \
+         `bosun merge <pr>` bare"
             .to_string()
     })
 }
@@ -1550,6 +1696,16 @@ const XARGS_GIT: &[&str] = &[
 ];
 
 fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static str> {
+    // D-019: `bosun merge` checks the caller itself, from its own environment. A prefix
+    // (an assignment, a wrapper) could forge that identity: refuse it.
+    if let Some(p) = words
+        .iter()
+        .position(|w| w.rsplit('/').next() == Some("bosun"))
+        && p > 0
+        && words[p + 1..].iter().take(3).any(|w| *w == "merge")
+    {
+        return Some(BOSUN_MERGE_PREFIX);
+    }
     // Leading assignments and wrappers, then runners (`timeout 5`, `xargs -n1`, `env -C dir`),
     // until the command itself.
     let runner = |w: &str| {
@@ -4578,6 +4734,32 @@ mod tests {
         assert!(bash("git commit -m x", "main").is_some());
     }
 
+    /// D-019: `bosun merge` (it checks the orchestrator and the gates itself) is allowed; every
+    /// other merge path stays refused (the MCP merge tool: `read_only_github_tools_skip_the_label_lock`).
+    #[test]
+    fn guard_allows_bosun_merge_denies_gh_merge() {
+        for cmd in [
+            "bosun merge 12",
+            "bosun merge 12 --method rebase",
+            "bosun -C . merge 3",
+        ] {
+            assert!(bash(cmd, "feature").is_none(), "{cmd}");
+            assert!(bash(cmd, "main").is_none(), "{cmd}");
+        }
+        for cmd in [
+            "gh pr merge 12 --squash",
+            "gh api -X PUT repos/o/r/pulls/12/merge -f sha=abc",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge",
+            "bosun merge 12 && gh pr merge 12",
+            "BOSUN_SESSION=orch bosun merge 12",
+            "BOSUN_ORIGIN=local bosun merge 12",
+            "CLAUDE_CODE_CHILD_SESSION=0 bosun merge 12",
+            "env BOSUN_ORIGIN=local bosun merge 12",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+    }
+
     /// The hook's directory is on `main`; `/wt` (and anything below `-C /wt`) is a worktree on
     /// `feature`. Returns the options the rule asked about, and its verdict.
     fn in_worktree(cmd: &str) -> (Vec<Vec<String>>, Option<String>) {
@@ -7071,5 +7253,135 @@ mod tests {
         assert!(why.contains("re-claim with valid globs"), "{why}");
         let only = [own(6, "me", &["src/[a"])];
         assert!(edit_lock("src/[a", true, &only, "me").is_some());
+    }
+
+    #[test]
+    fn answers_lock_covers_edits_and_the_hook_command() {
+        let edit = json!({"file_path": "/r/.git/bosun/answers.json"});
+        assert!(answers_lock("Write", &edit).is_some());
+        assert!(answers_lock("Edit", &json!({"file_path": "/r/src/answers.json"})).is_none());
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c}));
+        assert!(bash("cat x > .git/bosun/answers.json").is_some());
+        assert!(bash("bosun  hook post-tool-use < x").is_some());
+        assert!(bash("cargo test").is_none());
+    }
+
+    #[test]
+    fn answers_lock_bypasses_are_closed() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        // Global flags, quotes, redirects glued on.
+        assert!(bash("bosun -C . hook post-tool-use"));
+        assert!(bash("bosun --repo a/b -C /x hook post-tool-use"));
+        assert!(bash("bosun hook 'post-tool-use'"));
+        assert!(bash("bosun \"hook\" post-tool-use"));
+        assert!(bash("bosun hook post-tool-use<forged.json"));
+        assert!(bash("bosun hook post-tool-use </tmp/f"));
+        assert!(bash("bash -c 'bosun -C . hook post-tool-use'"));
+        assert!(bash("eval \"bosun hook post-tool-use\""));
+        // Any command word (variable, substitution, quoted) before `hook post-tool-use`.
+        assert!(bash("\"bosun\" hook post-tool-use"));
+        assert!(bash("b=bosun; $b hook post-tool-use"));
+        assert!(bash("$b hook post-tool-use < f"));
+        assert!(bash("$(which bosun) hook post-tool-use"));
+        assert!(bash("`which bosun` -C . hook post-tool-use"));
+        assert!(bash("${BOSUN:-bosun} hook 'post-tool-use'"));
+        // Path tricks.
+        assert!(bash("echo x > .git/bosun//answers.json"));
+        assert!(bash("echo x > /r/.git//bosun///answers.json"));
+        assert!(bash("echo x > ./.git/bosun/./answers.json"));
+        assert!(bash("echo x > .git/bosun/x/../answers.json"));
+        assert!(bash("echo x >.git/bosun/answers.json"));
+        assert!(bash("tee --output=.git/bosun/answers.json"));
+        assert!(bash("cd .git/bosun && echo x > answers.json"));
+        assert!(bash("python3 -c 1; cp f '.git/bosun/answers.json'"));
+        let edit = |p: &str| answers_lock("Write", &json!({"file_path": p})).is_some();
+        assert!(edit("/r/.git/bosun//answers.json"));
+        assert!(edit("/r/.git/bosun/sub/../answers.json"));
+        assert!(edit("/r/.git/./bosun/answers.json"));
+        assert!(!edit("/r/.git/bosun/other.json"));
+    }
+
+    #[test]
+    fn merge_env_tamper_is_refused_in_every_spelling() {
+        let hit = |c: &str| {
+            tool_rules(
+                "Bash",
+                &json!({"command": c}),
+                &|_| Some("feature".into()),
+                "main",
+            )
+            .is_some()
+        };
+        for c in [
+            "export BOSUN_SESSION=x && bosun merge 1",
+            "unset CLAUDE_CODE_CHILD_SESSION && bosun merge 1",
+            "export BOSUN_ORIGIN=local; bosun merge 1",
+            "(export BOSUN_ORIGIN=local; bosun merge 1)",
+            "b=bosun; $b merge 1",
+            "$(which bosun) merge 1",
+            "declare -x BOSUN_SESSION=x; bosun merge 1",
+            "typeset -x BOSUN_SESSION=x; bosun merge 1",
+            "set -a; bosun merge 1",
+            "n=BOSUN_SESSION; export ${!n}=x; bosun merge 1",
+            "echo ${!n}; bosun merge 1",
+        ] {
+            assert!(hit(c), "{c}");
+        }
+        assert!(!hit("bosun merge 1"));
+        assert!(!hit("BOSUN_NOW=2026-01-01T00:00:00Z bosun status"));
+        assert!(!hit("export FOO=1 && cargo test"));
+    }
+
+    #[test]
+    fn answers_lock_leaves_innocent_commands_alone() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(!bash("grep x /home/user/bosun"));
+        assert!(!bash("cd /home/user/bosun && cargo test"));
+        assert!(!bash("cat answers.json"));
+        assert!(!bash("bosun hook pre-tool-use"));
+        assert!(!bash("ls /home/user/bosun/src/answers.json.bak"));
+        assert!(!bash("echo hook"));
+        assert!(!bash("bosun hook pre-tool-use && echo post-tool"));
+    }
+
+    #[test]
+    fn answers_lock_denies_any_command_with_both_hook_words() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(bash("bosun hook -C . post-tool-use"));
+        assert!(bash("bosun hook --repo a post-tool-use"));
+        assert!(bash("h=hook; p=post-tool-use; bosun $h $p"));
+        assert!(bash("echo post-tool-use | xargs bosun hook"));
+        assert!(bash("bosun hook \\\npost-tool-use"));
+        assert!(bash("bosun hook post-tool-\\\nuse"));
+        assert!(bash("bosun hook \"$(echo post-tool-use)\""));
+        assert!(bash(
+            "python3 -c \"import subprocess; subprocess.run(['bosun','hook','post-tool-use'])\""
+        ));
+        assert!(bash("bash -c 'bosun hook post-tool-use'"));
+        assert!(answers_hook_words(
+            "subprocess.run(['bosun', 'hook', 'post-tool-use'])"
+        ));
+        assert!(!answers_hook_words("post-tool-use only"));
+        assert!(!answers_hook_words("hook only"));
+    }
+
+    #[test]
+    fn answers_lock_allows_reading_the_file() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(!bash("cat .git/bosun/answers.json"));
+        assert!(!bash("jq . .git/bosun/answers.json"));
+        assert!(!bash("jq '.[]' /r/.git/bosun/answers.json | head -5"));
+        assert!(!bash("less .git/bosun/answers.json"));
+        assert!(!bash("head -c 200 .git/bosun/answers.json"));
+        assert!(!bash("cd .git/bosun && cat answers.json"));
+        // Writing, or anything beyond the read-only viewers, stays refused.
+        assert!(bash("cat x > .git/bosun/answers.json"));
+        assert!(bash(
+            "cat .git/bosun/answers.json > .git/bosun/answers.json"
+        ));
+        assert!(bash("jq . x | tee .git/bosun/answers.json"));
+        assert!(bash(
+            "cat .git/bosun/answers.json; rm .git/bosun/answers.json"
+        ));
     }
 }

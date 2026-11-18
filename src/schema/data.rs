@@ -89,7 +89,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
-    registry: {action: str, reason?: str, number?: int}};
+    registry: {action: str, reason?: str, number?: int}, ci: str | null, workflows_skipped: [str]};
 uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels: [{action: str,
     name: str, fix?: str}], registry: {action: str, number?: int}};
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
@@ -123,7 +123,7 @@ main-health = {result: str, changed: bool, opened: bool, closed: bool, main_red:
     note: str, rejudged: int, rejudge_errors: [any], skipped_unknown: [int],
     conflicts: [{issue: int, pr: int, posted: bool, fix: str}], conflict_errors: [{error: str,
     issue?: int}], gate_missed: {created?: bool, issue?: int, error?: str} | null,
-    lesson: {created: bool, hits: int, issue: int} | null};
+    lesson: {created: bool, hits: int, issue: int} | null} | {result: str, skipped: str};
 gate-missed = {issue: int, created: bool, key: str};
 review-ci = {pr: int, head_sha?: str, since_sha?: str | null, model?: str, skipped?: str,
     dry_run?: bool, approved?: bool, status?: str, reasons?: [str], task_state?: str | null,
@@ -161,12 +161,13 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     after_review?: int, key_id?: str, policy?: str | null, policy_source?: str | null, role?: str}],
     approve_command?: str | null, auth?: str, cloud?: bool, hint?: str, message?: str | null,
     message_id?: str | null, message_pairs?: [str] | null, ready?: [{pr: int, title: str,
-    head_sha: str, files: [str], files_truncated: bool, risk_from_status: [str]}],
+    head_sha: str, files: [str], files_truncated: bool, risk_from_status: [str],
+    ask?: {question_id: str, question: str, options: [str]}}], ask_more?: int, handoff?: str, held?: [{pr: int, head_sha: str}],
     skipped?: [{pr: int | null, why: str}], waiting?: [{pr: int, why: str}], skipped_fix?: str,
     main_open?: {head_sha: str, pr: int}, bodies?: [{after_review: int | null, body: str}],
     body?: str, bootstrap_until?: str | null, head_sha?: str, key_id?: str, policy?: str | null,
     policy_source?: str | null, pr?: int, role?: str, requested?: bool, workflow?: str,
-    ref?: str, ci_ok?: str};
+    ref?: str, ci_ok?: str, comment_id?: int, question_id?: str | null};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
@@ -187,11 +188,14 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
     gates?: [{context: str, state: str}], pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]},
-    epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
+    epic_error?: str, task?: int, claim?: {..}, stamps?: [str], risk?: str, verdicts?: [str],
+    approval?: str | null, merge_next?: str, next_command?: str} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
     pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}};
+merge = {pr: int, head_sha: str, merged: bool, already_merged?: bool, method?: str,
+    ci_provider?: str, tasks: [int]};
 status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     integrity_reason?: str, main_red: int | null, process_red: int | null,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,

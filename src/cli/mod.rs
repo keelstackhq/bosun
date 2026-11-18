@@ -6,6 +6,7 @@ use clap::{Args, Parser, Subcommand};
 pub mod adopt;
 pub mod answer;
 pub mod approve;
+pub mod approve_chat;
 pub mod ask;
 pub mod budget;
 mod budget_pr;
@@ -29,6 +30,7 @@ pub mod keygen;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
+pub mod merge;
 pub mod metrics;
 pub mod migrate;
 pub mod mode;
@@ -42,6 +44,7 @@ pub mod plan_pr;
 pub mod pr;
 mod pr_bundle;
 pub mod pr_gov;
+pub mod pr_no_ci;
 pub mod pr_oneoff;
 pub mod prereqs;
 pub mod prereqs_gate;
@@ -151,6 +154,8 @@ pub enum Command {
     Approve(ApproveArgs),
     /// Make an ed25519 approval key (PEM, mode 0600, outside the repo); `--enroll` adds it to .bosun/approvers.toml.
     Keygen(KeygenArgs),
+    /// Orchestrator only: re-check every gate on the PR's head and merge it (spec D13, D-019).
+    Merge(MergeArgs),
     /// Judge a PR with the risk rules of its base branch.
     RiskCheck(RiskCheckArgs),
     /// Refuse deleted tests, new skips and fewer assertions.
@@ -321,6 +326,7 @@ impl Command {
             Command::Gate(_) => "gate",
             Command::Approve(_) => "approve",
             Command::Keygen(_) => "keygen",
+            Command::Merge(_) => "merge",
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
@@ -344,6 +350,7 @@ impl Command {
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
+            Command::Hook(HookCmd::PostToolUse) => "hook post-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Hook(HookCmd::Stop) => "hook stop",
             Command::Hook(HookCmd::PreCompact) => "hook pre-compact",
@@ -641,6 +648,15 @@ pub struct RiskCheckArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct MergeArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// GitHub merge method.
+    #[arg(long, value_parser = ["squash", "merge", "rebase"], default_value = "squash")]
+    pub method: String,
+}
+
+#[derive(Debug, Args)]
 pub struct KeygenArgs {
     /// Where to write the private key PEM (default ~/.bosun/approver.pem). Never overwritten, and
     /// never inside any git worktree. A relative path is relative to `-C` when given.
@@ -692,6 +708,16 @@ pub struct ApproveArgs {
     /// the default branch; an owner key only.
     #[arg(long, requires = "sign_key")]
     pub bootstrap: bool,
+    /// Record the owner's chat answer for one `<pr>@<head>` as a chat approval comment (an
+    /// orchestrator only; spec section 8).
+    #[arg(long, conflicts_with_all = ["list", "main_open", "via_signer"])]
+    pub chat: bool,
+    /// With --chat (required): the question id the owner answered (`data.ready[].ask.question_id`).
+    #[arg(long, value_name = "ID", requires = "chat")]
+    pub question: Option<String>,
+    /// With --chat: the owner's Slack user ID who answered in the Claude Tag thread.
+    #[arg(long, value_name = "U...", requires = "chat")]
+    pub slack_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -898,6 +924,8 @@ pub struct LessonTriageArgs {
 pub enum HookCmd {
     /// PreToolUse: edit-lock, label-lock, merge-lock.
     PreToolUse,
+    /// PostToolUse: store the owner's answer to a bosun AskUserQuestion.
+    PostToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
     /// Stop: block once while the lease has no result or handoff; warn on a stale gate.
@@ -1267,6 +1295,10 @@ pub struct AdoptArgs {
     /// Write `[approvals] policy` into .bosun/bosun.toml (spec §8); the pinned release must know it.
     #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
     pub policy: Option<String>,
+    /// Write `[ci] provider` (spec §9). Default: `circleci` when the repo has `.circleci/` and no
+    /// Actions workflows, else `github`. `none` installs no GitHub workflows. Needs pin 0.21.0+.
+    #[arg(long, value_parser = ["github", "circleci", "none"])]
+    pub ci: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.
     #[arg(long)]
     pub dry_run: bool,

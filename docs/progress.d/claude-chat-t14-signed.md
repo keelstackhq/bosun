@@ -1,0 +1,1 @@
+- T14 chat_signed: signed chat records (opt-in), risk-check verifies, approve --chat --sign-key signs; spec 08 updated

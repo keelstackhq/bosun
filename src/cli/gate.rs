@@ -179,6 +179,10 @@ mod tests {
     fn a_gate_is_skipped_only_when_every_run_is() {
         use serde_json::json;
         assert!(all_skipped(&json!({"skipped": true})));
+        // `ci-minutes` with `[ci] provider = "none"` stamps a skip, not a pass.
+        assert!(all_skipped(
+            &json!({"gate": "ci-minutes", "skipped": true, "reason": "ci provider none"})
+        ));
         assert!(!all_skipped(&json!({"exit_status": 0})));
         let mixed = json!({"skipped": true, "runs": [{"skipped": false}, {"skipped": true}]});
         assert!(!all_skipped(&mixed));

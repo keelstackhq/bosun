@@ -379,6 +379,164 @@ fn chat_record_withdrawn_by_newer_changes_requested() {
     refused(&fake);
 }
 
+// `[approvals] chat_signed`: a chat record counts only with an enrolled owner key's signature.
+mod signed {
+    use super::*;
+    use bosun::core::approve::signed_message_chat;
+    use bosun::github::b64;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+
+    const MAIN: &str = "refs/heads/main";
+    const Q: &str = "1-0123456-1";
+
+    fn kp(seed: u8) -> Ed25519KeyPair {
+        Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap()
+    }
+
+    fn setup(cfg: &str) -> FakeGithub {
+        let fake = high_pr(true);
+        fake.content(".bosun/bosun.toml", BASE, cfg);
+        let k = b64::encode(kp(1).public_key().as_ref());
+        let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{k}\"\n");
+        fake.content(".bosun/approvers.toml", MAIN, &keys);
+        fake
+    }
+
+    /// A chat record for HEAD signed as `message` says, by the key `seed` under id `id`.
+    fn record(seed: u8, id: &str, repo: &str, pr: u64, head: &str) -> String {
+        let (o, r) = repo.split_once('/').unwrap();
+        let msg = signed_message_chat(o, r, pr, head, Q);
+        let sig = b64::encode(kp(seed).sign(msg.as_bytes()).as_ref());
+        format!(
+            "{}\n<!-- bosun:chat-sig v1 key={id} sig={sig} -->",
+            chat(HEAD, "session_orch")
+        )
+    }
+
+    const ON: &str = "[approvals]\nchat_signed = true\n";
+
+    #[test]
+    fn unsigned_record_counts_unless_chat_signed() {
+        for cfg in [
+            "[approvals]\nchat = true\n",
+            "[approvals]\nchat_signed = false\n",
+        ] {
+            let fake = setup(cfg);
+            app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+            assert_eq!(approved(&fake), "ada", "{cfg}");
+        }
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        refused(&fake);
+    }
+
+    #[test]
+    fn enrolled_key_signature_counts() {
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+        assert_eq!(approved(&fake), "ada");
+        // Case of the repo name does not matter.
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &record(1, "k1", "Acme/Widget", 1, HEAD));
+        assert_eq!(approved(&fake), "ada");
+    }
+
+    #[test]
+    fn wrong_key_head_pr_or_repo_does_not_count() {
+        for (seed, id, repo, pr, head) in [
+            (2, "k1", "acme/widget", 1, HEAD),
+            (2, "k2", "acme/widget", 1, HEAD),
+            (1, "k1", "acme/widget", 1, OLD),
+            (1, "k1", "acme/widget", 2, HEAD),
+            (1, "k1", "acme/gadget", 1, HEAD),
+        ] {
+            let fake = setup(ON);
+            app_comment(&fake, "ada", &record(seed, id, repo, pr, head));
+            refused(&fake);
+        }
+    }
+
+    #[test]
+    fn two_signature_lines_do_not_count() {
+        let fake = setup(ON);
+        let one = record(1, "k1", "acme/widget", 1, HEAD);
+        let line = one.lines().last().unwrap().to_string();
+        app_comment(&fake, "ada", &format!("{one}\n{line}"));
+        refused(&fake);
+    }
+
+    #[test]
+    fn a_key_that_is_not_enrolled_on_main_does_not_count() {
+        let fake = setup(ON);
+        fake.content(".bosun/approvers.toml", MAIN, "");
+        app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+        refused(&fake);
+    }
+
+    fn keys_file(entries: &[(&str, u8, &str)]) -> String {
+        (entries.iter())
+            .map(|(id, seed, role)| {
+                let k = b64::encode(kp(*seed).public_key().as_ref());
+                format!("[[key]]\nid = \"{id}\"\ned25519 = \"{k}\"\nrole = \"{role}\"\n")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn delegate_and_signer_keys_do_not_count() {
+        for role in ["delegate", "signer"] {
+            let fake = setup(ON);
+            fake.content(
+                ".bosun/approvers.toml",
+                MAIN,
+                &keys_file(&[("k1", 1, role)]),
+            );
+            app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+            refused(&fake);
+        }
+    }
+
+    #[test]
+    fn head_config_cannot_turn_chat_signed_off() {
+        let fake = setup(ON);
+        fake.content(
+            ".bosun/bosun.toml",
+            HEAD,
+            "[approvals]\nchat_signed = false\n",
+        );
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        refused(&fake);
+    }
+
+    #[test]
+    fn signed_record_without_question_is_refused() {
+        let fake = setup(ON);
+        let signed = record(1, "k1", "acme/widget", 1, HEAD);
+        app_comment(&fake, "ada", &signed.replace(" question=1-0123456-1", ""));
+        refused(&fake);
+    }
+
+    #[test]
+    fn duplicate_key_ids_count_for_none() {
+        let fake = setup(ON);
+        let dup = keys_file(&[("k1", 1, "owner"), ("k1", 2, "owner")]);
+        fake.content(".bosun/approvers.toml", MAIN, &dup);
+        app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+        refused(&fake);
+    }
+
+    #[test]
+    fn the_failure_names_the_unsigned_record() {
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{v}");
+        let fix = v["error"]["fix"].as_str().unwrap();
+        assert!(fix.contains("unsigned under chat_signed"), "{fix}");
+        assert!(!fix.contains("orchestrator session left"), "{fix}");
+    }
+}
+
 fn fix_of(fake: &FakeGithub) -> String {
     let (code, v) = check(fake);
     assert_eq!(code, 5, "{v}");

@@ -1,0 +1,1 @@
+- Chat approvals T8: `[ci] provider` config, adopt detection, none skips CI-only commands, R-weaken flags it.

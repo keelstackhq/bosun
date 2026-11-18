@@ -60,6 +60,12 @@ pub fn judge_pr(gh: &dyn Github, w: &GateWriter, pull: &Pull, red: Option<u64>) 
     Ok(post(w, pull, red, mainfix)?.pass)
 }
 
+/// No-CI mode: judge one PR against `red` with a writer that posts nothing.
+pub fn judge_local(gh: &dyn Github, pull: &Pull, red: Option<u64>) -> Result<Verdict> {
+    let mainfix = red.is_some() && is_mainfix(gh, pull)?;
+    post(&GateWriter::statuses(gh).dry(true), pull, red, mainfix)
+}
+
 fn post(w: &GateWriter, pull: &Pull, red: Option<u64>, mainfix: bool) -> Result<Verdict> {
     let v = judge(red, mainfix);
     let state = if v.pass { "success" } else { "failure" };

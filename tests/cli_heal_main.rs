@@ -294,3 +294,21 @@ fn a_branch_that_only_looks_like_a_revert_does_not_opt_out() {
     let v = heal(&fake, &dir, Some(PR_ONLY));
     assert_eq!(v["data"]["main"]["action"], "revert", "{v}");
 }
+
+#[test]
+fn revert_auto_without_ci_leaves_merging_to_the_orchestrator() {
+    let (_t, dir, sha) = repo();
+    let fake = world(&sha, "broken");
+    let v = heal(&fake, &dir, Some(AUTO));
+    let m = v["data"]["main"]["revert_pr"].as_u64().unwrap();
+    inverse_with_verdict(&fake, m, "broken");
+    fake.content(
+        ".bosun/bosun.toml",
+        "base0000",
+        "[ci]\nprovider = \"none\"\n",
+    );
+    let v = heal(&fake, &dir, Some(AUTO));
+    assert_eq!(v["data"]["main"]["action"], "skip", "{v}");
+    assert!(why(&v).contains(&format!("bosun merge {m}")), "{v}");
+    assert!(fake.auto_merge_enabled(m).is_none());
+}

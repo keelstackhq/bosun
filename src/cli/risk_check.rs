@@ -459,6 +459,12 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     ]
 }
 
+/// No-CI mode (spec §4): judge `pull` as the risk workflow would, with a writer that posts nothing.
+pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
+    let w = GateWriter::statuses(app.gh.as_ref()).dry(true);
+    judge(app, &w, pull.clone())
+}
+
 fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;
@@ -897,17 +903,28 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         ),
         _ => String::new(),
     };
-    let chat_note = match lapse {
-        Lapse::NoRecord => String::new(),
-        Lapse::Withdrawn => format!(
-            "a chat approval record for head {head} exists but does not count: it was withdrawn by the owner's review (changes requested, or dismissed); the owner must approve again, or: "
-        ),
-        Lapse::Orchestrator => format!(
-            "a chat approval record for head {head} exists but does not count: its orchestrator session left or expired (its join had expired when the record was written; the registry is read at check time); a live orchestrator must join and record the owner's chat approval again, or: "
-        ),
-        Lapse::Unsigned => format!(
-            "a chat approval record for head {head} exists but does not count: it is unsigned (no owner's unedited comment carries it); the orchestrator must post it again as the owner, or: "
-        ),
+    let unsigned = lapse != Lapse::NoRecord
+        && chat_signed(gh, base)?
+        && (gh.list_comments(n)?.iter()).any(|c| {
+            approve::parse_chat_record(&c.body, head, Some(n)).is_some_and(|r| r.sig.is_none())
+        });
+    let chat_note = if unsigned {
+        format!(
+            "a chat approval record for head {head} exists but does not count: unsigned under chat_signed (`[approvals] chat_signed = true`); the orchestrator records it again with `bosun approve {n}@{head} --chat --question <id> --sign-key <pem>`, or: "
+        )
+    } else {
+        match lapse {
+            Lapse::NoRecord => String::new(),
+            Lapse::Withdrawn => format!(
+                "a chat approval record for head {head} exists but does not count: it was withdrawn by the owner's review (changes requested, or dismissed); the owner must approve again, or: "
+            ),
+            Lapse::Orchestrator => format!(
+                "a chat approval record for head {head} exists but does not count: its orchestrator session left or expired (its join had expired when the record was written; the registry is read at check time); a live orchestrator must join and record the owner's chat approval again, or: "
+            ),
+            Lapse::Unsigned => format!(
+                "a chat approval record for head {head} exists but does not count: it is unsigned (no owner's unedited comment carries it); the orchestrator must post it again as the owner, or: "
+            ),
+        }
     };
     let fix = if autonomous {
         format!(
@@ -1497,6 +1514,19 @@ fn approver(
     Ok(by.map(|id| (format!("key {id}"), true)))
 }
 
+/// Whether a counted chat record approves the head of `p` (the board's no-CI check).
+pub(crate) fn chat_counted(gh: &dyn Github, p: &Pull) -> Result<bool> {
+    if !chat_enabled(gh, &p.base_sha)? {
+        return Ok(false);
+    }
+    let owners = owner_logins(gh, &p.base_sha)?;
+    let chat = Chat {
+        author: &p.user,
+        base: &p.base_sha,
+    };
+    Ok(chat_approver(gh, p.number, &p.head_sha, &owners, &chat)?.is_some())
+}
+
 /// The owner whose chat record (spec §8) approves `head`: written by an orchestrator session
 /// for the owner who authored the comment, unedited; an owner's withdrawal (changes requested,
 /// or a dismissal not followed by a newer record) stops it. With no owners file at all the repo
@@ -1567,13 +1597,28 @@ fn chat_scan(
         notes: &notes,
         now: crate::core::lease::members(&notes),
     };
+    // `[approvals] chat_signed`: a record counts only with an enrolled owner key's signature.
+    let enrolled = if chat_signed(gh, chat.base)? {
+        let keys = enrolled_keys(gh).unwrap_or_else(|why| {
+            eprintln!("bosun: risk-check: chat_signed: no key counts: {why}");
+            Vec::new()
+        });
+        let repo = RepoId {
+            owner: gh.repo_owner().into(),
+            name: gh.repo_name().into(),
+        };
+        Some((repo, keys))
+    } else {
+        None
+    };
     let mut withdrawn_by_review = false;
     let by = owners.iter().find(|o| {
         let one = std::slice::from_ref(*o);
         match decisive_review(&reviews, o, head).as_deref() {
             Some("DISMISSED") => {
                 let newer = newer_than(&comments, dismissed_at(gh, pr, &reviews, o, head));
-                let ok = chat_comment_by(&newer, one, &reg, (pr, head)).is_some();
+                let ok =
+                    chat_comment_by(&newer, one, &reg, (pr, head, enrolled.as_ref())).is_some();
                 withdrawn_by_review |= !ok && signed_by(o);
                 ok
             }
@@ -1581,7 +1626,7 @@ fn chat_scan(
                 withdrawn_by_review |= signed_by(o);
                 false
             }
-            _ => chat_comment_by(&comments, one, &reg, (pr, head)).is_some(),
+            _ => chat_comment_by(&comments, one, &reg, (pr, head, enrolled.as_ref())).is_some(),
         }
     });
     let lapse = if by.is_some() {
@@ -1629,6 +1674,32 @@ pub(crate) fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
     })
 }
 
+/// `[approvals] chat_signed` at base (unset: off). A config that does not parse reads as on.
+pub(crate) fn chat_signed(gh: &dyn Github, base: &str) -> Result<bool> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => Config::parse(&t, CONFIG_FILE).map_or(true, |c| c.approvals.chat_signed()),
+        None => false,
+    })
+}
+
+/// Whether the record carries a valid signature of an enrolled owner key over repo, PR, head
+/// and its question id (`bosun-chat v1 <owner>/<repo>#<pr> <head> <question>`).
+fn chat_signature_ok(
+    r: &approve::ChatRecord,
+    repo: &RepoId,
+    keys: &[ApproverKey],
+    (pr, head): (u64, &str),
+) -> bool {
+    let (Some(q), Some((id, sig))) = (&r.question, &r.sig) else {
+        return false;
+    };
+    let msg = approve::signed_message_chat(&repo.owner, &repo.name, pr, head, q);
+    keys.iter()
+        .find(|k| k.id == *id && k.role == Role::Owner)
+        .and_then(|k| b64::decode(&k.ed25519).zip(b64::decode(sig)))
+        .is_some_and(|(k, s)| verify_ed25519(&k, msg.as_bytes(), &s))
+}
+
 /// The chat record approving `head` of PR `pr`: unedited, by one of `owners`, through any app
 /// (the cloud posts as the owner via the Claude app), whose marker names an orchestrator
 /// session. The orchestrator is judged by the join in force when the record was written (the
@@ -1637,7 +1708,7 @@ fn chat_comment_by<'a>(
     comments: &'a [Comment],
     owners: &[String],
     reg: &Registry,
-    (pr, head): (u64, &str),
+    (pr, head, enrolled): (u64, &str, Option<&(RepoId, Vec<ApproverKey>)>),
 ) -> Option<&'a Comment> {
     comments.iter().find(|c| {
         c.unedited()
@@ -1647,6 +1718,11 @@ fn chat_comment_by<'a>(
                 let Some(at) = parse_rfc3339(&c.created_at) else {
                     return false;
                 };
+                if enrolled.is_some_and(|(repo, keys)| !chat_signature_ok(&r, repo, keys, (pr, head)))
+                {
+                    eprintln!("bosun: risk-check: comment {}: no valid enrolled-key signature, not counted (chat_signed)", c.id);
+                    return false;
+                }
                 let before: Vec<Note> = (reg.notes.iter())
                     .filter(|n| n.id < c.id)
                     .cloned()

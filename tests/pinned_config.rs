@@ -127,6 +127,24 @@ const KNOWN: &[(&str, &[&str])] = &[
             "mode",
         ],
     ),
+    (
+        "0.21.0",
+        &[
+            "project",
+            "stack",
+            "review",
+            "slack",
+            "cloud",
+            "prices",
+            "approvals",
+            "intake",
+            "trailers",
+            "checks",
+            "session",
+            "mode",
+            "ci",
+        ],
+    ),
 ];
 
 /// The `.bosun/limits.toml` keys (`table.key`) each pinned release accepts.
@@ -314,6 +332,7 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
             "review_models",
             "signer",
             "chat",
+            "chat_signed",
         ],
     ),
 ];
@@ -478,7 +497,8 @@ fn policy_known_follows_the_release_table() {
 #[test]
 fn an_unlisted_release_falls_back_to_the_newest_older_entry() {
     // Key sets only grow, so the newest older release is a safe subset: no hand-added entry.
-    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.14.0"));
+    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.21.0"));
+    assert_eq!(known_for(KNOWN, "0.20.0"), known_for(KNOWN, "0.14.0"));
     assert_eq!(known_for(KNOWN, "0.12.0"), known_for(KNOWN, "0.10.0"));
     assert_eq!(
         known_for(KNOWN_LIMITS, "0.9.3"),
@@ -528,6 +548,13 @@ fn signer_is_known_from_0_15_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"signer"));
     assert!(!has("0.14.0"));
     assert!(has("0.15.0"));
+}
+
+#[test]
+fn chat_signed_is_known_from_0_21_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat_signed"));
+    assert!(!has("0.20.0"));
+    assert!(has("0.21.0"));
 }
 
 #[test]
