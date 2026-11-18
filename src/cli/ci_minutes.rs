@@ -46,14 +46,15 @@ pub fn findings_json(findings: &[Finding]) -> Vec<Value> {
         .collect()
 }
 
-/// The CI provider at the merge-base with the PR base (`origin/$GITHUB_BASE_REF`, else
-/// `origin/main`), never the working tree: a PR that sets `none` cannot skip the gate on itself.
+/// The CI provider at the merge-base with the PR base (the gates' base, `resolve_base_in`:
+/// `origin/$GITHUB_BASE_REF`, else what `origin/HEAD` points to, else `origin/main`), never the working tree: a PR that sets `none` cannot skip the gate on itself.
 /// Any doubt (no base, no file, unparsable) is the default provider, so the gate runs.
 pub fn base_provider(root: &Path) -> CiProvider {
-    let base_ref = std::env::var("GITHUB_BASE_REF")
-        .ok()
-        .filter(|b| !b.is_empty())
-        .map_or_else(|| "origin/main".to_string(), |b| format!("origin/{b}"));
+    let base_ref = crate::cli::gate::resolve_base_in(
+        root,
+        None,
+        std::env::var("GITHUB_BASE_REF").ok().as_deref(),
+    );
     let Some(base) = crate::hooks::git_out(root, &["merge-base", "HEAD", &base_ref]) else {
         return CiProvider::default();
     };
