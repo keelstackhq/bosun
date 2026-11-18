@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::{IntakeCheckArgs, IntakeSignArgs, IntakeVerifyArgs};
 use crate::app::{App, default_ref};
 use crate::cli::approve::read_key;
-use crate::cli::risk_check::{OWNERS_PATH, chat_enabled, fallback_owners, live_at, owner_logins};
+use crate::cli::risk_check::{OWNERS_PATH, chat_enabled, fallback_owners, owner_logins};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, is_orchestrator, parse_approvers, parse_intake_chat_record,
     verify_ed25519,
@@ -356,7 +356,7 @@ fn verify_chat(
             ("chat_edited", "it was edited")
         } else if !owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user)) {
             ("chat_not_owner", "its author is not an owner")
-        } else if !is_orchestrator(&live_at(&members, &c.created_at), &r.session) {
+        } else if !made.is_some_and(|t| is_orchestrator(&members, &r.session, t)) {
             (
                 "chat_not_orchestrator",
                 "its session was not a live orchestrator in the registry",

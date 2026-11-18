@@ -217,3 +217,92 @@ fn stamps_carry_over_a_docs_only_diff_since_the_last_stamped_tree() {
     git(r.path(), &["config", "diff.relative", "true"]);
     assert!(hook(&r.path().join("docs"), PUSH).is_some());
 }
+
+/// The hook's whole output for a push in `cwd` against `api`; `Value::Null` when it prints none.
+/// Each call is its own session, so repeat-lock never counts these pushes.
+fn hook_at(cwd: &Path, command: &str, api: &str) -> Value {
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let input = json!({"session_id": format!("s{n}"), "tool_name": "Bash", "cwd": cwd.to_str().unwrap(),
+        "tool_input": {"command": command}});
+    let out = bosun()
+        .current_dir(cwd)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", "2026-11-12T10:00:00Z")
+        .env("BOSUN_GITHUB_API", api)
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    serde_json::from_slice(&out.stdout).unwrap_or(Value::Null)
+}
+
+fn head_of(dir: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn verdict_comment(pr: u64, head: &str) -> String {
+    format!(
+        "Review verdict.\n\n<!-- bosun:verdict -->\n```json\n{{\"pr\":{pr},\"head_sha\":\"{head}\",\
+         \"verdict\":\"approve\",\"confidence\":0.9,\"findings\":[]}}\n```"
+    )
+}
+
+const OLD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn a_push_past_the_open_prs_verdict_head_warns_without_denying() {
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    let fake = FakeGithub::start();
+    fake.pull(7, "work", "feat", "");
+    fake.comment(7, &verdict_comment(7, &"f".repeat(40)));
+    fake.comment(7, &verdict_comment(7, OLD));
+    let new = head_of(r.path());
+    let v = hook_at(r.path(), PUSH, &fake.url());
+    let out = &v["hookSpecificOutput"];
+    assert_eq!(out["permissionDecision"], Value::Null, "{v}");
+    let ctx = out["additionalContext"].as_str().expect("a warning");
+    assert!(ctx.contains("PR #7"), "{ctx}");
+    assert!(ctx.contains(&OLD[..7]) && ctx.contains(&new[..7]), "{ctx}");
+    assert!(ctx.contains("bosun review-loop 7"), "{ctx}");
+    // `HEAD` names the current branch's PR too.
+    let v = hook_at(r.path(), "git push origin HEAD", &fake.url());
+    assert!(
+        v["hookSpecificOutput"]["additionalContext"].is_string(),
+        "{v}"
+    );
+    // A deny of an earlier rule still wins.
+    commit(r.path(), &[("src/lib.rs", "fn x() {}")]);
+    let v = hook_at(r.path(), PUSH, &fake.url());
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{v}");
+}
+
+#[test]
+fn a_verdict_at_the_pushed_head_no_verdict_no_pr_or_no_github_warn_nothing() {
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    let head = head_of(r.path());
+    let fake = FakeGithub::start();
+    fake.pull(7, "work", "feat", "");
+    fake.comment(7, &verdict_comment(7, OLD));
+    fake.comment(7, &verdict_comment(7, &head));
+    assert_eq!(hook_at(r.path(), PUSH, &fake.url()), Value::Null);
+    // Another branch's PR, a PR without a verdict, no GitHub: nothing.
+    let fake = FakeGithub::start();
+    fake.pull(8, "other", "other", "");
+    fake.comment(8, &verdict_comment(8, OLD));
+    assert_eq!(hook_at(r.path(), PUSH, &fake.url()), Value::Null);
+    let fake = FakeGithub::start();
+    fake.pull(7, "work", "feat", "");
+    fake.comment(7, "looks fine");
+    assert_eq!(hook_at(r.path(), PUSH, &fake.url()), Value::Null);
+    assert_eq!(hook_at(r.path(), PUSH, "http://127.0.0.1:9"), Value::Null);
+}
