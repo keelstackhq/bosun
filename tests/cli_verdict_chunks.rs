@@ -66,11 +66,32 @@ fn a_missing_chunk_refuses_post_and_comment_and_writes_nothing() {
         r#"{"pr":42,"head_sha":"sha42","verdict":"approve","confidence":0.95}"#,
     );
     assert_eq!(code, 1, "{v}");
+    // No list to paste: every chunk is missing, so none is named.
+    assert_eq!(
+        v["error"]["message"],
+        "verdict reviews no chunks (3 chunks)"
+    );
+    assert_eq!(
+        v["error"]["fix"],
+        "review the 3 chunks of `bosun review-pack 42` (its `chunks`), add each one you reviewed to \"chunks_reviewed\", then post again"
+    );
+}
+
+#[test]
+fn a_long_missing_list_is_cut() {
+    let fake = setup(9);
+    let (code, v) = call(&fake, "post", &verdict("[1]"));
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(
+        v["error"]["message"],
+        "verdict lists chunks [1] of 9; missing [2, 3, 4, 5, 6] and 3 more"
+    );
     assert!(
-        v["error"]["message"]
+        v["error"]["fix"]
             .as_str()
             .unwrap()
-            .contains("missing [1, 2, 3]")
+            .starts_with("review chunks [2, 3, 4, 5, 6] and 3 more of the 9"),
+        "{v}"
     );
 }
 
@@ -136,7 +157,7 @@ fn apply_refuses_a_comment_without_every_chunk() {
         v["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("missing [1, 2, 3]"),
+            .contains("reviews no chunks (3 chunks)"),
         "{v}"
     );
     assert!(fake.statuses_of("sha42").is_empty());

@@ -304,14 +304,27 @@ pub(crate) fn require_all_chunks(
     if missing.is_empty() {
         return Ok(());
     }
+    const ADD: &str = "add each one you reviewed to \"chunks_reviewed\", then post again";
+    let n = verdict.pr;
+    if missing.len() == count {
+        // No list to paste: nothing was reviewed, so no chunk is named.
+        return Err(BosunError::error(
+            format!("verdict reviews no chunks ({count} chunks)"),
+            format!("review the {count} chunks of `bosun review-pack {n}` (its `chunks`), {ADD}"),
+        ));
+    }
+    // At most `SHOWN` missing chunks are named, then "and K more".
+    const SHOWN: usize = 5;
+    let mut names = format!("{:?}", &missing[..missing.len().min(SHOWN)]);
+    if missing.len() > SHOWN {
+        names.push_str(&format!(" and {} more", missing.len() - SHOWN));
+    }
     let mut listed = verdict.chunks_reviewed.clone();
     listed.sort_unstable();
     Err(BosunError::error(
-        format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
+        format!("verdict lists chunks {listed:?} of {count}; missing {names}"),
         format!(
-            "review chunks {missing:?} of the {count} in `bosun review-pack {}` (its `chunks`), \
-             add each one you reviewed to \"chunks_reviewed\", then post again",
-            verdict.pr
+            "review chunks {names} of the {count} in `bosun review-pack {n}` (its `chunks`), {ADD}"
         ),
     ))
 }
