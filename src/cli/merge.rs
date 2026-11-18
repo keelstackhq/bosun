@@ -145,7 +145,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             format!("`git fetch origin pull/{pr}/head`, then rerun `bosun merge {pr}`"),
         )
     })?;
-    let all = stamps::ready_gates(dir)?;
+    let all = stamps::ready_gates_at(gh)?;
     let missing: Vec<String> = all
         .iter()
         .filter(|g| !stamps::has(dir, &tree, g))

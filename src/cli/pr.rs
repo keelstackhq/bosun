@@ -299,7 +299,12 @@ fn touch_check(
 
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
-pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(), BosunError> {
+pub(crate) fn check_local_gates(
+    app: &App,
+    rerun: &str,
+    pull: &Pull,
+    required: Option<Vec<String>>,
+) -> Result<Vec<String>, BosunError> {
     let (n, dir) = (pull.number, app.ctx.dir.as_path());
     let local = stamps::head_sha(dir).ok_or_else(|| {
         BosunError::error(
@@ -327,12 +332,16 @@ pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(
             "run bosun inside the repo checkout",
         )
     })?;
-    let missing: Vec<String> = stamps::ready_gates(dir)?
-        .into_iter()
+    let all = match required {
+        Some(r) => r,
+        None => stamps::ready_gates(dir)?,
+    };
+    let missing: Vec<String> = (all.iter())
         .filter(|g| !stamps::has(dir, &tree, g))
+        .cloned()
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return Ok(all);
     }
     Err(BosunError::error(
         format!(
@@ -617,7 +626,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
             return super::pr_no_ci::ready(&app, n, &issue, plain, pull);
         }
-        check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
+        check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull, None)?;
         pending = not_green(gh, &base, &pull.head_sha)?;
         gates = merge_gates(gh, &pull.head_sha)?;
         // Auto-merge waits only for what the branch enforces: never turn it on for a branch

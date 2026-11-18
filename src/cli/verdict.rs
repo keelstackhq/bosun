@@ -8,7 +8,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::review_ci::flat;
-use super::{ApplyArg, FromArg, VerdictCmd};
+use super::{ApplyArg, CommentArgs, FromArg, VerdictCmd};
 use crate::app::default_branch;
 use crate::app::{App, kill_switch, set_state};
 use crate::config::{CONFIG_FILE, Config};
@@ -70,21 +70,60 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 env_model().as_deref(),
             )
         }
-        VerdictCmd::Comment(FromArg { from }) => {
+        VerdictCmd::Comment(CommentArgs {
+            from: FromArg { from },
+            sign_key,
+        }) => {
             let verdict = parse(&read_input(from)?)?;
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-            let c = gh.add_comment(
-                verdict.pr,
-                &comment_body(&verdict, &app.ctx.session, env_model().as_deref()),
-            )?;
+            let mut body = comment_body(&verdict, &app.ctx.session, env_model().as_deref());
+            if let Some(path) = sign_key {
+                body = signed(&app, &verdict, body, path)?;
+            }
+            let c = gh.add_comment(verdict.pr, &body)?;
             Ok(Outcome::data(
                 json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
-                "comment_id": c.id, "applied_by": "the verdict workflow"}),
+                "comment_id": c.id, "signed": sign_key.is_some(), "applied_by": "the verdict workflow"}),
             ))
         }
         VerdictCmd::Apply(ApplyArg { comment_id }) => apply(&app, *comment_id),
     }
+}
+
+/// `body` plus the `bosun-sig` line of the enrolled key at `path` (spec §4, no-CI trust).
+fn signed(app: &App, v: &Verdict, body: String, path: &Path) -> Result<String, BosunError> {
+    use crate::github::b64;
+    let pair = super::approve::read_key(path)?;
+    let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
+    let keys = super::risk_check::enrolled_keys(app.gh.as_ref()).map_err(|why| {
+        BosunError::error(
+            format!("signed verdicts are off: {why}"),
+            "enroll the key in .bosun/approvers.toml on the default branch",
+        )
+    })?;
+    let key = (keys.iter())
+        .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
+        .ok_or_else(|| {
+            BosunError::error(
+                "this key is not enrolled in .bosun/approvers.toml on the default branch",
+                "sign with an enrolled key",
+            )
+        })?;
+    if !matches!(key.role, crate::core::approve::Role::Reviewer) {
+        return Err(BosunError::error(
+            format!(
+                "key {} is a {} key: only reviewer keys sign verdicts",
+                key.id,
+                key.role.name()
+            ),
+            "sign with a reviewer key (never the orchestrator's owner key) enrolled in .bosun/approvers.toml",
+        ));
+    }
+    let r = &app.ctx.repo;
+    let msg = crate::core::verdict::signed_message(&r.owner, &r.name, v.pr, &v.head_sha, &body);
+    let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
+    Ok(format!("{body}\nbosun-sig ed25519 {} {sig}", key.id))
 }
 
 /// The reviewer model this session declares: `BOSUN_MODEL`, else `ANTHROPIC_MODEL` (as the

@@ -125,7 +125,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             "open a task for the change (`bosun pr <issue> --ready`), or the orchestrator merges it with `bosun merge`",
         ));
     }
-    check_local_gates(&app, &rerun, &pull)?;
+    check_local_gates(&app, &rerun, &pull, None)?;
     let pending = not_green(gh, &base, &pull.head_sha)?;
     let gates = merge_gates(gh, &pull.head_sha)?;
     let enforced = enforced_checks(gh, &base, &pull, &rerun)?;

@@ -27,7 +27,7 @@ use crate::core::risk::{
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::core::weaken;
-use crate::ctx::RepoId;
+use crate::ctx::{Ctx, RepoId};
 use crate::gates::{adapters, ts};
 use crate::github::gate::GateWriter;
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
@@ -95,7 +95,7 @@ pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
             e.message
         );
     }
-    let out = judge(&app, &w, pull.clone());
+    let out = judge(app.gh.as_ref(), &app.ctx, &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
         // The cleanup write must not fail on the time budget that stopped the run.
@@ -461,12 +461,16 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
 
 /// No-CI mode (spec §4): judge `pull` as the risk workflow would, with a writer that posts nothing.
 pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
-    let w = GateWriter::statuses(app.gh.as_ref()).dry(true);
-    judge(app, &w, pull.clone())
+    evaluate_with(app.gh.as_ref(), &app.ctx, pull)
 }
 
-fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
-    let gh = app.gh.as_ref();
+/// As [`evaluate_local`] with the client and context apart (the approve board has no `App`).
+pub fn evaluate_with(gh: &dyn Github, ctx: &Ctx, pull: &Pull) -> CmdResult {
+    let w = GateWriter::statuses(gh).dry(true);
+    judge(gh, ctx, &w, pull.clone())
+}
+
+fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
@@ -518,7 +522,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let mut task = None;
     let mut plan_high = Vec::new();
     let mut one_off = false;
-    for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
+    for i in linked_issues_in(&pull.body, &ctx.repo.to_string()) {
         let issue = gh.get_issue(i)?;
         let meta = issue.as_ref().and_then(task_meta);
         // The body is the author's: it can only add. The plan file on the base, reached through
@@ -530,7 +534,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             plan_high.push(format!("#{i} is `risk: high` in the plan"));
         }
         if let (Some(meta), Some(issue)) = (meta, issue.as_ref()) {
-            one_off |= is_one_off(gh, issue, &meta, base, &app.ctx.config.project)?;
+            one_off |= is_one_off(gh, issue, &meta, base, &ctx.config.project)?;
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }
@@ -609,7 +613,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
     matches.extend(risk::bundle_gated(
-        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &app.ctx.repo.to_string())?.count(),
+        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &ctx.repo.to_string())?.count(),
         &files,
         &rules,
     ));
@@ -633,7 +637,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     apply_floor(&mut matches, &critical);
     let level = risk::level(&matches);
     let high = level == "high";
-    let out_of_touch = out_of_touch(app, task, &pr_files, pull.changed_files);
+    let out_of_touch = out_of_touch(gh, ctx, task, &pr_files, pull.changed_files);
 
     let warning = out_of_touch.as_deref().and_then(touch_warning);
     if let Some(w) = &warning {
@@ -686,13 +690,13 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let (mut bootstrap, policy_source) = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
-        let today = app.ctx.now.to_string();
+        let today = ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
     } else {
         (Err("signed approvals do not count on this PR".into()), None)
     };
-    let repo = app.ctx.repo.to_string();
+    let repo = ctx.repo.to_string();
     let linked = linked_issues_in(&pull.body, &repo);
     // D-017: the signature counts only with a clean verdict and a task the author leased.
     let auto = if policy_source.is_some() && bootstrap.is_ok() {
@@ -712,7 +716,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // owner's own GitHub approval (or comment) as the only form.
     let chat_on = high && signed_ok && chat_enabled(gh, base)?;
     let need = Need {
-        repo: &app.ctx.repo,
+        repo: &ctx.repo,
         pr: n,
         base_ref: &pull.base_ref,
         owners: &owners,
@@ -819,15 +823,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         _ if high => Ok(None),
         _ => {
             let owners = owner_logins(gh, base)?;
-            let by = approver(
-                gh,
-                &app.ctx.repo,
-                n,
-                head,
-                &owners,
-                signed_ok,
-                (None, signer),
-            )?;
+            let by = approver(gh, &ctx.repo, n, head, &owners, signed_ok, (None, signer))?;
             if let Some(b) = by.filter(|b| b.1) {
                 return Ok(Some(b.0));
             }
@@ -1331,7 +1327,8 @@ fn touch_warning(out: &[String]) -> Option<String> {
 /// the comments cannot be read. The task is the first linked issue with task metadata; humans'
 /// PRs have no lease and so get `None`.
 fn out_of_touch(
-    app: &App,
+    gh: &dyn Github,
+    ctx: &Ctx,
     task: Option<u64>,
     pr_files: &[PrFile],
     changed_files: u64,
@@ -1342,7 +1339,7 @@ fn out_of_touch(
     }
     let task = task?;
     // Only a warning: a failed read costs the warning, never the check.
-    let notes = match trusted_notes(app.gh.as_ref(), task) {
+    let notes = match trusted_notes(gh, task) {
         Ok(notes) => notes,
         Err(e) => {
             eprintln!(
@@ -1354,7 +1351,7 @@ fn out_of_touch(
     };
     let lease = leases_of(task, &notes)
         .into_iter()
-        .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())
+        .filter(|l| l.is_live(ctx.now) && !l.touch.is_empty())
         .max_by_key(|l| l.comment_id)?;
     let changed: Vec<Changed> = pr_files
         .iter()

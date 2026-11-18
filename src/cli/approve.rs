@@ -116,7 +116,7 @@ fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
 /// The open PRs whose risk-check waits for an owner, split into ready and waiting, by number.
 /// Statuses, check runs and files all describe the head sha read with the PR. With `lenient`
 /// (a tokenless listing) a failed read skips that PR, or the whole list, into `skipped`.
-pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
+pub(crate) fn board(gh: &dyn Github, ctx: &Ctx, lenient: bool) -> Result<Board> {
     let mut pulls = match gh.list_pulls(None, IssueState::Open) {
         Ok(p) => p,
         Err(e) if lenient => {
@@ -131,12 +131,12 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     };
     pulls.sort_by_key(|p| p.number);
     if !lenient {
-        return board_of(gh, pulls);
+        return board_of(gh, ctx, pulls);
     }
     let mut all = Board::default();
     for p in pulls {
         let n = p.number;
-        match board_of(gh, vec![p]) {
+        match board_of(gh, ctx, vec![p]) {
             Ok(b) => {
                 all.ready.extend(b.ready);
                 all.waiting.extend(b.waiting);
@@ -148,24 +148,47 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// No-CI readiness of `p`: its newest ready summary of the head by a writer.
-fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
-    let comments = gh.list_comments(p.number)?;
-    for c in comments.iter().rev() {
-        if parse_ready_summary(&c.body, &p.head_sha) && crate::app::is_writer(gh, &c.user)? {
-            return Ok(summary_readiness(Some(&c.body)));
+/// The verdict line of `p`'s newest ready summary of the head by a writer or the gate App. Only a
+/// hint that the author finished `--ready`: the readiness is recomputed from trusted data.
+fn summary_hint(gh: &dyn Github, p: &Pull) -> Result<Option<String>> {
+    for c in gh.list_comments(p.number)?.iter().rev() {
+        if !parse_ready_summary(&c.body, &p.head_sha) {
+            continue;
+        }
+        let bot = crate::github::gate::record_author(&c.user).eq_ignore_ascii_case(TRUSTED_CREATOR);
+        if bot || matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write")) {
+            return Ok(Some(summary_readiness(Some(&c.body)).1));
         }
     }
-    Ok(summary_readiness(None))
+    Ok(None)
 }
 
-/// The board of `pulls`, in their order (no CI: read from the ready summary).
-fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
+/// No-CI readiness of `p`, judged now with the base's rules (never the summary's words): high
+/// risk with no approval of this head waits for the owner.
+fn no_ci_readiness(gh: &dyn Github, ctx: &Ctx, p: &Pull) -> Result<Readiness> {
+    Ok(match crate::cli::risk_check::evaluate_with(gh, ctx, p) {
+        Ok(_) => Readiness::NotWaiting,
+        Err(e) if e.exit == crate::output::Exit::NeedsHuman => {
+            let d = e.data.unwrap_or_default();
+            let ids = d["matches"].as_array().into_iter().flatten();
+            Readiness::Ready(
+                ids.filter_map(|m| m["rule"].as_str().map(String::from))
+                    .collect(),
+            )
+        }
+        Err(e) => return Err(e),
+    })
+}
+
+/// The board of `pulls`, in their order. A PR whose base has no CI is read from its ready summary.
+fn board_of(gh: &dyn Github, ctx: &Ctx, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
         if provider_default(gh)? == CiProvider::None {
-            let (r, verdict) = summary_of(gh, &p)?;
-            if let Readiness::Ready(risk) = r
+            let Some(verdict) = summary_hint(gh, &p)? else {
+                continue;
+            };
+            if let Readiness::Ready(risk) = no_ci_readiness(gh, ctx, &p)?
                 && !chat_counted(gh, &p)?
                 && !hold(gh, &p, &mut board)?
             {
@@ -308,7 +331,7 @@ fn exec(
 ) -> CmdResult {
     let now = &ctx.now.to_string();
     if args.list {
-        let mut b = board(gh, tokenless)?;
+        let mut b = board(gh, ctx, tokenless)?;
         // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
         let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
             .into_iter()
@@ -359,7 +382,7 @@ fn exec(
         ));
     }
 
-    let b = board(gh, false)?;
+    let b = board(gh, ctx, false)?;
     targets.sort_unstable();
     targets.dedup();
     let mut not_ready = Vec::new();

@@ -1,0 +1,1 @@
+- Chat approval T13: no-CI verdict trust (signed or App verdicts, reviewer key role), base-branch required gates, recomputed approve board; spec 04 states what is verified and advisory.

@@ -78,7 +78,7 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
 /// The same board read with the session's own read token (`app.gh`), leniently: a PR it cannot
 /// read is in the third part. For `bosun notify`, which holds no owner token.
 pub(crate) fn board_read(app: &App) -> Result<Board, BosunError> {
-    let b = super::approve::board(app.gh.as_ref(), true)?;
+    let b = super::approve::board(app.gh.as_ref(), &app.ctx, true)?;
     let skipped: Vec<Value> = b
         .skipped
         .iter()

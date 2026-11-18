@@ -742,7 +742,7 @@ pub enum VerdictCmd {
     /// Post a reviewer verdict as the review-verdict status.
     Post(FromArg),
     /// Post the verdict as a PR comment; the verdict workflow applies it (no status write).
-    Comment(FromArg),
+    Comment(CommentArgs),
     /// Check a verdict comment and post its review-verdict status (the verdict workflow).
     Apply(ApplyArg),
 }
@@ -751,6 +751,16 @@ pub enum VerdictCmd {
 pub struct ApplyArg {
     /// The id of the PR comment that carries the verdict.
     pub comment_id: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct CommentArgs {
+    #[command(flatten)]
+    pub from: FromArg,
+    /// Sign the verdict with this enrolled ed25519 key (PKCS#8 PEM): without CI only a signed
+    /// verdict (or the gate App's) counts as an independent review.
+    #[arg(long)]
+    pub sign_key: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
