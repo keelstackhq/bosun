@@ -17,33 +17,60 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
+/// `git` for the adopted check: never prompts, gives up on a stalled network.
+fn git_remote(dir: &Path, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args([
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=15",
+            "-C",
+        ])
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// True when bosun was never set up in the repo at `cwd`: no `.bosun/version` in the worktree AND
-/// none on the remote default branch (`origin/HEAD`, `origin/main`, `origin/master`): a branch
-/// that deleted the file must not switch the guards off. No `origin` remote plus a `.bosun/`
-/// directory counts as adopted (fail closed).
+/// none at the head of the remote's default branch. The remote itself is asked (`git ls-remote`,
+/// then the file at that sha, fetched into a private repo when it is not local): local refs and
+/// files can be edited, so none is trusted. Fail closed: a remote that cannot be reached counts
+/// as adopted. No `origin` remote plus a `.bosun/` directory counts as adopted too.
 pub fn unadopted(cwd: &Path) -> bool {
     let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
     if root.join(".bosun/version").exists() {
         return false;
     }
-    let has_origin = crate::ctx::git_out(&root, &["remote"])
-        .is_some_and(|r| r.lines().any(|l| l.trim() == "origin"));
-    if !has_origin && root.join(".bosun").is_dir() {
+    let Some(url) = git_remote(&root, &["remote", "get-url", "origin"]) else {
+        return !root.join(".bosun").is_dir();
+    };
+    let Some(heads) = git_remote(&root, &["ls-remote", &url, "HEAD"]) else {
+        return false;
+    };
+    let Some(sha) = heads.split_whitespace().next() else {
+        return true; // reachable, no default branch yet
+    };
+    let (file, commit) = (format!("{sha}:.bosun/version"), format!("{sha}^{{commit}}"));
+    if git_remote(&root, &["cat-file", "-e", &file]).is_some() {
         return false;
     }
-    let on_remote = ["origin/HEAD", "origin/main", "origin/master"]
-        .iter()
-        .any(|r| {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(["cat-file", "-e", &format!("{r}:.bosun/version")])
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        });
-    !on_remote
+    if git_remote(&root, &["cat-file", "-e", &commit]).is_some() {
+        return true;
+    }
+    let tmp = std::env::temp_dir().join(format!("bosun-adopted-{}", std::process::id()));
+    let fetched = std::fs::create_dir_all(&tmp).is_ok()
+        && git_remote(&tmp, &["init", "-q", "--bare"]).is_some()
+        && git_remote(&tmp, &["fetch", "-q", "--depth=1", "--no-tags", &url, sha]).is_some();
+    let present = git_remote(&tmp, &["cat-file", "-e", &file]).is_some();
+    let _ = std::fs::remove_dir_all(&tmp);
+    fetched && !present
 }
 
 const NOT_SET_UP: &str = "bosun is not set up here: run `bosun adopt --policy autonomous \

@@ -33,9 +33,51 @@ fn repo() -> tempfile::TempDir {
 fn bare_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
-    let url = "https://github.com/acme/widget.git";
-    git(tmp.path(), &["remote", "add", "origin", url]);
+    // The remote is a bare repo inside `.git`: reachable offline, gone with the temp dir.
+    let remote = tmp.path().join(".git/remote.git");
+    git(
+        tmp.path(),
+        &[
+            "init",
+            "-q",
+            "-b",
+            "main",
+            "--bare",
+            remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        tmp.path(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
     tmp
+}
+
+/// Commit `.bosun/version` and push it to the remote's default branch, then delete the file.
+fn adopted_on_remote(r: &Path) {
+    std::fs::create_dir_all(r.join(".bosun")).unwrap();
+    std::fs::write(r.join(".bosun/version"), "0.21.0\n").unwrap();
+    git(r, &["add", "."]);
+    git(
+        r,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "adopt",
+        ],
+    );
+    git(r, &["push", "-q", "origin", "main"]);
+    std::fs::remove_file(r.join(".bosun/version")).unwrap();
+}
+
+fn adopted_start(r: &Path) -> String {
+    let input = json!({"hook_event_name":"SessionStart","cwd":r.to_str().unwrap()});
+    hook(Some(&FakeGithub::start()), r, T0, "session-start", &input).stdout
 }
 
 /// Issue 4 holds a live lease of `session_other` on `src/core/**`; issue 5 is `session_me`'s.
@@ -953,26 +995,58 @@ fn session_start_adopted_unchanged() {
 }
 
 #[test]
-fn a_branch_that_deleted_bosun_version_is_still_adopted_by_the_remote_default() {
-    let (fake, tmp) = (FakeGithub::start(), bare_repo());
-    let g = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .current_dir(tmp.path())
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{args:?}: {out:?}");
-    };
-    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
-    std::fs::write(tmp.path().join(".bosun/version"), "0.21.0\n").unwrap();
-    g(&["add", "."]);
-    g(&["commit", "-q", "-m", "adopt"]);
-    g(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    std::fs::remove_file(tmp.path().join(".bosun/version")).unwrap();
-    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
-    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
-    assert!(!o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+fn adopted_is_read_from_the_remote_not_from_local_refs_or_files() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    adopted_on_remote(r);
+    // A fetch has put the remote ref in place; every way of erasing the local traces still
+    // leaves the repo adopted, because the remote itself is asked.
+    git(r, &["fetch", "-q", "origin"]);
+    for tamper in [
+        vec!["branch", "-rd", "origin/main"],
+        vec!["remote", "set-head", "origin", "-d"],
+        vec!["config", "--remove-section", "remote.origin.fetch"],
+    ] {
+        let _ = std::process::Command::new("git")
+            .current_dir(r)
+            .args(&tamper)
+            .output();
+        assert!(
+            !adopted_start(r).contains("bosun adopt --policy"),
+            "{tamper:?}"
+        );
+    }
+    std::fs::remove_dir_all(r.join(".git/refs/remotes")).ok();
+    std::fs::remove_file(r.join(".git/packed-refs")).ok();
+    assert!(!adopted_start(r).contains("bosun adopt --policy"));
+}
+
+#[test]
+fn adopted_is_read_when_the_commit_is_not_local() {
+    // Another clone pushed the adoption: this repo has neither its objects nor a ref.
+    let tmp = bare_repo();
+    let other = bare_repo();
+    git(
+        other.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            tmp.path().join(".git/remote.git").to_str().unwrap(),
+        ],
+    );
+    adopted_on_remote(other.path());
+    assert!(!adopted_start(tmp.path()).contains("bosun adopt --policy"));
+}
+
+#[test]
+fn an_unreachable_remote_counts_as_adopted() {
+    let tmp = bare_repo();
+    git(
+        tmp.path(),
+        &["remote", "set-url", "origin", "/nonexistent/remote.git"],
+    );
+    assert!(!adopted_start(tmp.path()).contains("bosun adopt --policy"));
 }
 
 #[test]
@@ -987,32 +1061,11 @@ fn removing_or_moving_the_bosun_dir_is_denied() {
         "rm .bosun/version",
         "git rm -r .bosun",
         "mv .bosun/version /tmp/v",
-    ] {
-        assert!(bash(c).stdout.contains("deny"), "{c}");
-    }
-    assert!(!bash("mv notes.md .bosun/notes.md").stdout.contains("deny"));
-}
-
-#[test]
-fn dropping_the_origin_remote_or_its_refs_is_denied() {
-    let (fake, tmp) = (FakeGithub::start(), bare_repo());
-    let cwd = tmp.path().to_str().unwrap();
-    let bash = |c: &str| {
-        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
-        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
-    };
-    for c in [
-        "git update-ref -d refs/remotes/origin/HEAD",
-        "git update-ref -d refs/remotes/origin/main",
-        "git remote remove origin",
-        "git remote rm origin",
-        "git remote rename origin gone",
         "git rm --cached .bosun/version",
     ] {
         assert!(bash(c).stdout.contains("deny"), "{c}");
     }
-    assert!(!bash("git remote -v").stdout.contains("deny"));
-    assert!(!bash("git remote rename up other").stdout.contains("deny"));
+    assert!(!bash("mv notes.md .bosun/notes.md").stdout.contains("deny"));
 }
 
 #[test]

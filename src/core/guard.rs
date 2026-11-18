@@ -521,8 +521,7 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
 
 /// Bosun-dir lock: `rm`, `mv` (source paths) and `git rm|mv` (also `--cached`) on `.bosun` or
 /// under it are refused in a Bash command (also inside `bash -c` and `eval`): removing
-/// `.bosun/version` would switch the guards off. So are commands that drop the `origin` remote or
-/// its refs, which the adopted check reads. Best effort: a path built in a variable or glob is missed.
+/// `.bosun/version` would switch the guards off. Best effort: a path built in a variable or glob is missed.
 pub fn bosun_dir_lock(tool: &str, input: &Value) -> Option<String> {
     let c = (tool == "Bash").then(|| input.get("command").and_then(Value::as_str))??;
     removes_bosun_dir(c, 0).then(|| {
@@ -530,24 +529,6 @@ pub fn bosun_dir_lock(tool: &str, input: &Value) -> Option<String> {
          config, approvers); change it in a PR the owner approves"
             .to_string()
     })
-}
-
-/// `git update-ref -d refs/remotes/origin/...`, `git remote remove|rm origin` and
-/// `git remote rename origin ...`: each makes the remote default-branch check fail open.
-fn git_drops_origin(args: &[String]) -> bool {
-    let has = |w: &str| args.iter().any(|a| a == w);
-    let update_ref = has("update-ref")
-        && (has("-d") || has("--delete"))
-        && args
-            .iter()
-            .any(|a| lexical(a).starts_with("refs/remotes/origin"));
-    let remote = args.iter().position(|a| a == "remote").is_some_and(|k| {
-        let rest = &args[k + 1..];
-        rest.iter()
-            .position(|a| matches!(a.as_str(), "remove" | "rm" | "rename"))
-            .is_some_and(|j| rest.get(j + 1).is_some_and(|n| n == "origin"))
-    });
-    update_ref || remote
 }
 
 fn is_bosun_dir_path(w: &str) -> bool {
@@ -582,7 +563,6 @@ fn removes_bosun_dir(command: &str, depth: usize) -> bool {
         };
         let (kind, args) = match name {
             "rm" | "unlink" | "rmdir" | "mv" => (name, &seg[at + 1..]),
-            "git" if git_drops_origin(&seg[at + 1..]) => return true,
             "git" => match seg[at + 1..].iter().position(|w| w == "rm" || w == "mv") {
                 Some(k) => (seg[at + 1 + k].as_str(), &seg[at + 2 + k..]),
                 None => continue,
@@ -7307,16 +7287,6 @@ mod tests {
             "bash -c 'rm .bosun/version'",
             "unlink .bosun/version",
             "git rm --cached .bosun/version",
-            "git update-ref -d refs/remotes/origin/HEAD",
-            "git update-ref -d refs/remotes/origin/main",
-            "git update-ref --delete refs/remotes/origin/main",
-            "git -C /r update-ref -d refs/remotes/origin/main",
-            "git remote remove origin",
-            "git remote rm origin",
-            "git remote rename origin upstream",
-            "git -C /r remote rm origin",
-            "cd /r && git remote remove origin",
-            "bash -c 'git remote rm origin'",
         ] {
             assert!(hit(c), "{c}");
         }
@@ -7328,13 +7298,6 @@ mod tests {
             "git rm src/a.rs",
             "echo rm .bosun",
             "ls .bosun",
-            "git remote -v",
-            "git remote add up https://example.com/r.git",
-            "git remote remove up",
-            "git remote rename up other",
-            "git update-ref -d refs/heads/x",
-            "git update-ref refs/remotes/origin/main HEAD",
-            "git remote get-url origin",
         ] {
             assert!(!hit(c), "{c}");
         }
