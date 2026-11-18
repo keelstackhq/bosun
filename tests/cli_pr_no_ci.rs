@@ -96,7 +96,7 @@ fn chat(fake: &FakeGithub) {
     fake.comment(
         REG,
         &format!(
-            "{{\"bosun\":\"join\",\"session\":\"session_orch\",\"origin\":\"spawned\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
+            "{{\"bosun\":\"join\",\"session\":\"session_orch\",\"origin\":\"local\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
         ),
     );
     fake.comment_by(
