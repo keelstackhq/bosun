@@ -48,15 +48,14 @@ cloud sessions install, and the optional Routines: create them from `data.routin
 No CI, no key, no approvers file. The owner answers one chat form per gated PR (spec §8):
 
 1. Paste `bosun setup-snippet` once as the cloud environment's setup script.
-2. In the repo: `bosun adopt --policy autonomous --owner <login>`; commit, push, merge the setup PR.
-   Autonomous needs a pin that reads it (adopt checks); set `[ci] provider = "none"` in
-   `.bosun/bosun.toml` for a repo without CI.
+2. In the repo: `bosun adopt --ci none --policy autonomous --owner <login>`; commit, push, merge the
+   setup PR. The pin must be 0.21.0 or later (adopt checks) for `[ci] provider` and chat approvals.
 3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr>@<head> --chat --question <id>`
    posts the record for that head. No signing key; `.bosun/approvers.toml` is optional.
 4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>` (it re-checks every
    gate on the exact head). With CI, auto-merge does it.
 
-Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. The key is known
+Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. Trust model: The guards stop confused workers, not a worker that lies; `[approvals] chat_signed = true` (signed records, an enrolled ed25519 key) is the strong path. The key is known
 from release 0.21.0: pin that release first (the setup PR that moves `.bosun/version`), then set
 the key in a later PR; an older pin rejects it.
 

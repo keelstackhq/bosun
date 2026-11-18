@@ -46,7 +46,7 @@ creates the labels and the registry issue. It commits nothing; you commit and op
 ```bash
 bosun adopt --dry-run                          # see what would change; writes nothing
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
-bosun adopt --owner <login> --policy autonomous   # also write [approvals] policy (section 9, item 4)
+bosun adopt --ci none --policy autonomous --owner <login>   # no CI, full autonomy (section 9); pin must be 0.21.0 or later
 ```
 
 The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
@@ -263,7 +263,7 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    0.21.0, so pin that release in `.bosun/version` first and set the key in a later PR. The
    question id is required; the answer comes from the PostToolUse hook and is bound to the
    orchestrator's own session; the record names the exact head and goes stale on a new push. It
-   counts under every policy, R-weaken findings included (D-018). Who may
+   counts under every policy, R-weaken findings included (D-018). With `[approvals] chat_signed = true` only a signed record counts (spec §8). Who may
    approve after bootstrap mode is `[approvals] policy` in `.bosun/bosun.toml`: `owner`
    (default), `owner-gated` (the orchestrator, only when R-ci alone matches and no workflow
    changes, e.g. `deny.toml`) or `orchestrator`. Workflow changes always need you. Bootstrap mode
@@ -284,9 +284,8 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    otherwise read the key). Verify there or with `gh api repos/<owner>/<repo>/environments/bosun-signer/deployment-branch-policies`;
    `bosun doctor --remote` checks it.
 5. **Fresh repo, no CI, full autonomy.** Paste `bosun setup-snippet` once, then
-   `bosun adopt --policy autonomous --owner <login>`, commit and merge the setup PR. Add
-   `[ci] provider = "none"` under `[ci]` in `.bosun/bosun.toml` (`github` is the default;
-   `circleci` is the other value). With `none`, `bosun pr --ready` judges risk, verdict and
+   `bosun adopt --ci none --policy autonomous --owner <login>` (writes `[ci] provider = "none"` and
+   `[approvals] policy`; the pin must be 0.21.0 or later), commit and merge the setup PR. With `none`, `bosun pr --ready` judges risk, verdict and
    approval locally and the orchestrator merges with `bosun merge <pr>` (D-019): gates are
    re-checked on the exact head, and a moved head is exit 3.
 6. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
@@ -295,7 +294,7 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    `.bosun/version`) they run only the pure guards (merge-lock, chat and answers locks, push
    checks); run `bosun adopt` to switch the rest on. The chat-lock refuses writes that carry a
    chat record unless a live orchestrator runs `bosun approve --chat`; prose that names the marker
-   in a PR body or `git commit -m` is refused too (use `--body-file` or `-F`). An orchestrator's go
+   in a PR body or `git commit -m` is refused too. The guards stop confused workers, not a worker that lies; `[approvals] chat_signed = true` (signed records, an enrolled ed25519 key) is the strong path. An orchestrator's go
    does not carry over to a child it spawns: a child that pushes or opens a PR can wait for your
    go in that child's own session. Open the child in the Claude app when it blocks.
 

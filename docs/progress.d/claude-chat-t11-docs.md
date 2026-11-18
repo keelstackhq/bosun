@@ -1,1 +1,1 @@
-- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults, spec sections match the ported behaviour (D-018, D-019).
+- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults, spec 04 and 08 state the final behaviour and the trust model (guards stop confused workers; chat_signed is the strong path).

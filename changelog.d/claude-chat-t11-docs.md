@@ -1,1 +1,1 @@
-- Chat approval docs: full `approve <pr>@<head> --chat --question <id>` form, keys known from 0.21.0, user-scope hooks, `bosun merge` without CI.
+- Chat approval docs: `bosun adopt --ci none --policy autonomous --owner <login>`, chat records and `chat_signed` trust model, keys known from 0.21.0, `bosun merge` without CI.
