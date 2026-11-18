@@ -31,9 +31,11 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 5. `bosun pr <issue>` — right after the push it opens or reuses the PR as a draft (no CI runs
    on a draft) and moves the task to review.
 6. Review locally: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
-   every chunk number of the pack in `chunks_reviewed` (a missing one is refused); post it
-   with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
-   `bosun verdict comment --from -`). Fix request-changes findings, then review again.
+   every chunk number of the pack in `chunks_reviewed` (a missing one is refused). Before it
+   returns, the reviewer writes the verdict JSON to a file in the scratchpad (it survives a
+   restart). Post it with `bosun verdict post --from -` (JSON on stdin; in a cloud session, which
+   cannot write statuses: `bosun verdict comment --from -`). Fix request-changes findings, then
+   review again.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
 8. `bosun pr <issue> --ready` once the gates are green locally on the pushed head and the

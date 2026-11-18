@@ -214,3 +214,11 @@ fn carries_or_passes(fake: &FakeGithub) -> bool { let (code, _, _) = go(fake); c
     fake.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-ci-review\"\nwhy = \"r\"\napproval = \"two-verdicts\"\npaths = [\"channel/**\"]\n[[rule]]\nid = \"R-o\"\nwhy = \"o\"\npaths = [\"src/gates/**\"]\n");
     assert!(!carries(&fake)); // two verdicts do not meet an owner rule beside the class
 }
+#[test] fn a_carried_owner_approval_does_not_clear_an_escalated_verdict() {
+    let fake = world(); fake.review(1, "ada", "APPROVED", H);
+    fake.status(H2, "review-verdict", "failure", "escalated to the owner (approvable): approve 0.95 (approves at 0.85), 0 blocker, 0 major");
+    let (code, v, _) = go(&fake);
+    assert_eq!((code, &v["data"]["approval_carried_from"]), (0, &json!(H)), "{v}");
+    assert!(v["data"].get("verdict_cleared_by").is_none(), "{v}");
+    assert_eq!(fake.statuses_of(H2).into_iter().rev().find(|s| s["context"] == "review-verdict").unwrap()["state"], "failure");
+}

@@ -13,7 +13,7 @@ use crate::core::carry::{
     self, CarryFacts, Entry, FileChange, Hop, Kind, LockTexts, RawTree, Refusal,
 };
 use crate::core::records::{Record, parse_record};
-use crate::core::risk::{VERDICT_AUTHOR, apply_record};
+use crate::core::risk::{VERDICT_AUTHOR, apply_record, is_bot_session};
 use crate::github::{Comment, Compare, GitCommit, Github, PrFile, Pull, Review, Status};
 
 /// Seven hex characters of a sha taken from GitHub data, else `?`.
@@ -260,7 +260,7 @@ fn approved_by_independent(
         .filter_map(|c| Some((c, on_h(c)?)))
         .next_back();
     let (c, (session, approved)) = newest?;
-    let known = !session.is_empty() && session != "unknown";
+    let known = !session.is_empty() && session != "unknown" && !is_bot_session(&session);
     (approved && known && c.unedited() && !excluded.contains(&session)).then_some(c.id)
 }
 

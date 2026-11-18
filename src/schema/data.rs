@@ -15,12 +15,13 @@ keygen = {id: str, role: str, path: str, public_key: str, enrolled: bool, toml: 
 test-integrity = {base: str, files_checked: int, integrity: str, integrity_reason?: str,
     findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool}], allow?: [str],
     task?: int};
-review-pack = {pr: int, title: str, head_sha: str, base_sha: str, since_sha: str | null,
+review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, since_sha: str | null,
     changed_files: int, chunks: [[str]], delta_fallback: str | null, delta_not_in_pr: [str],
     delta_not_in_pr_count: int, drift: {actual: int, planned: int} | null, files: [{filename: str,
     status: str, additions: int, deletions: int, patch: str | null}], instructions: str,
     review_md: str | null, lessons: [str], ucs: [str], untrusted: [str], task: {..} | null,
-    bundle_tasks: [{..}], note?: str};
+    bundle_tasks: [{..}], note?: str, required_checks: [{context: str, state: str}] | null,
+    gate_stamps: {tree: str, present: [str], missing: [str]} | null};
 ci-log = {pr: int, head_sha: str, jobs: [{name: str, conclusion: str, url: str, log: str}]};
 ask = {issue: int, comment_id: int, owners: [str], drafted: [int], pr_draft_error: str | null};
 hold = {issue: int, id: str, checklist: {number: int, url: str}, released: bool, drafted: [int],
@@ -167,11 +168,14 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
-    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool};
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
+    verdict_cleared_by?: str};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
-verdict apply = verdict post;
+verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
+    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}}
+    | {comment_id: int, author: str, refused: str, status: null};
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     task_state: str | null, ready?: bool | "pending", merged?: bool, epic_closed?: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,

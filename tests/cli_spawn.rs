@@ -368,6 +368,7 @@ fn losing_the_epic_lease_race_ends_the_lease_and_exits_3() {
             via_app: None,
             no_app_field: false,
             association: "MEMBER".into(),
+            user_type: None,
         });
     });
     let (code, v) = spawn(&fake, &[]);

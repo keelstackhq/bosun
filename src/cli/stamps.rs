@@ -26,6 +26,17 @@ pub fn head_tree(dir: &Path) -> Option<String> {
     git_out(dir, &["rev-parse", "HEAD^{tree}"])
 }
 
+/// The tree of commit `sha`; `None` when the checkout does not have it.
+pub fn tree_of(dir: &Path, sha: &str) -> Option<String> {
+    let hex = !sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit());
+    hex.then(|| {
+        git_out(
+            dir,
+            &["rev-parse", "--verify", "-q", &format!("{sha}^{{tree}}")],
+        )
+    })?
+}
+
 /// The full sha of `HEAD`.
 pub fn head_sha(dir: &Path) -> Option<String> {
     git_out(dir, &["rev-parse", "HEAD"])

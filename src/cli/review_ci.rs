@@ -278,7 +278,7 @@ fn parse(text: &str, pr: u64, head_sha: &str) -> Result<Verdict, String> {
 }
 
 /// One line of model text: no line breaks, no backticks (they could close the fence), cut.
-fn flat(s: &str, max: usize) -> String {
+pub(crate) fn flat(s: &str, max: usize) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
