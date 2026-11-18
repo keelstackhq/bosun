@@ -65,6 +65,26 @@ fn parse_changes(text: &str) -> Vec<Change> {
     out
 }
 
+/// The untracked files git does not ignore, as `--name-status -z` additions, so the working
+/// tree a stamp names has every file judged.
+fn untracked(root: &Path) -> Result<String, BosunError> {
+    let list = git(
+        root,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--exclude-standard",
+            "--full-name",
+        ],
+    )?;
+    Ok(list
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .map(|f| format!("A\0{f}\0"))
+        .collect())
+}
+
 /// The text of `path` at `base`, or none when it did not exist there.
 fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
     let out = Command::new("git")
@@ -233,9 +253,10 @@ fn finding(
 
 pub fn run(req: &Request) -> CmdResult {
     // Compare with the merge base: a branch behind its base must not look like it lost tests.
-    // Three views are judged, and any finding refuses: the commits (merge base to HEAD), the
-    // index (merge base to what is staged) and the working tree (merge base to the files on
-    // disk). Restoring a file in a later view must not hide a weakening in an earlier one.
+    // Four views are judged, and any finding refuses: the commits (merge base to HEAD), the
+    // index (merge base to what is staged), the working tree (merge base to the files on disk)
+    // and the untracked, non-ignored files as added files. Restoring a file in a later view must
+    // not hide a weakening in an earlier one.
     let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?
         .trim()
         .to_string();
@@ -250,6 +271,7 @@ pub fn run(req: &Request) -> CmdResult {
         (name_status(&[&merge_base, "HEAD"])?, Some("HEAD")),
         (name_status(&["--cached", &merge_base])?, Some("")),
         (name_status(&[&merge_base])?, None),
+        (untracked(req.root)?, None),
     ];
     let kits = kits(req.root, req.stacks)?;
     // Each side is read with the kit of the innermost stack holding its own path.
