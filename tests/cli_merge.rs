@@ -348,3 +348,22 @@ fn merge_forbidden_is_needs_human() {
         "{v}"
     );
 }
+
+#[test]
+fn merge_spawned_origin_refused_even_as_orchestrator() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", ORCH)
+        .env("BOSUN_ORIGIN", "spawned")
+        .env("BOSUN_NOW", NOW)
+        .arg("-C")
+        .arg(dir.path())
+        .args(["merge", "20"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 5);
+    assert!(merge_puts(&fake).is_empty());
+}

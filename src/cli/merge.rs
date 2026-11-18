@@ -13,6 +13,7 @@ use crate::cli::MergeArgs;
 use crate::config::CiProvider;
 use crate::core::approve::{is_orchestrator, parse_ready_summary};
 use crate::core::meta::linked_issues_in;
+use crate::ctx::Origin;
 use crate::gates::main_open::judge_local;
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -26,7 +27,7 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
     let members = crate::registry::load(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
-    if !is_orchestrator(&members, session) {
+    if app.ctx.origin == Origin::Spawned || !is_orchestrator(&members, session) {
         return Err(BosunError::needs_human(
             format!(
                 "session {session} is not an orchestrator in the registry; only an orchestrator merges (spec D13)"
@@ -128,6 +129,8 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             )
         });
     }
+    // The gate stamps live in the author's checkout: the writer's ready summary for this exact
+    // head (found above) lists the ones `pr --ready` verified.
     super::risk_check::evaluate_local(app, pull)?;
     if super::pr_no_ci::clean_by_other(app, pull)?.is_empty() {
         return Err(BosunError::needs_human(
