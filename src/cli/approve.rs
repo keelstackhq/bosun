@@ -273,7 +273,7 @@ fn exec(
         // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
         let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
             .into_iter()
-            .partition(|r| answers::held(&ctx.dir, r.pr, &r.head_sha));
+            .partition(|r| answers::held(&ctx.dir, &ctx.repo.to_string(), r.pr, &r.head_sha));
         b.ready = ready;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();

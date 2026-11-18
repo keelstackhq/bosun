@@ -435,22 +435,20 @@ pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
     prereqs_lock_for(tool, input, false)
 }
 
-/// Answers-lock (spec 14): the owner's stored answers (`<git dir>/bosun/answers.json`) are written
-/// by the PostToolUse hook only. Refuses an edit tool on that file and a Bash command that names
-/// `answers.json` beside `bosun`, or runs `bosun hook post-tool-use`. A local record, not proof:
-/// this stops confused workers, not liars (a command can hide the name).
+/// Answers-lock (spec 14): the owner's stored answers (`<git common dir>/bosun/answers.json`) are
+/// written by the PostToolUse hook only. Refuses an edit tool on that file (the path is
+/// normalised: `//`, `.` and `x/..` collapse), and a Bash command (also inside `bash -c`, `eval`,
+/// quotes and redirects) that names that path, names a bare `answers.json` while naming a
+/// `.git/.../bosun` directory, or runs `hook post-tool-use` after any bosun global flags. A
+/// local hint, never proof: this stops confused workers, not liars (a command can build the path
+/// in a variable, a glob or `$(git rev-parse ...)`, which is not covered).
 pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
     let hit = match tool {
         "Bash" => {
             let c = input.get("command").and_then(Value::as_str).unwrap_or("");
-            let words: Vec<&str> = c.split_whitespace().collect();
-            let hook = words
-                .windows(3)
-                .any(|w| w[0].ends_with("bosun") && w[1] == "hook" && w[2] == "post-tool-use");
-            hook || (c.contains("answers.json") && c.contains("bosun"))
+            answers_in_command(c, 0)
         }
-        _ => edited_path(tool, input)
-            .is_some_and(|p| p.replace('\\', "/").ends_with("bosun/answers.json")),
+        _ => edited_path(tool, input).is_some_and(|p| is_answers_path(&p)),
     };
     hit.then(|| {
         "the owner's answers file is written only by the PostToolUse hook for AskUserQuestion; \
@@ -458,6 +456,43 @@ pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
          and let the answer arrive through the tool"
             .to_string()
     })
+}
+
+/// `.../bosun/answers.json` once lexically normalised.
+fn is_answers_path(path: &str) -> bool {
+    let norm = lexical(&path.replace('\\', "/"));
+    let mut parts = norm.rsplit('/');
+    parts.next() == Some("answers.json") && parts.next() == Some("bosun")
+}
+
+fn answers_in_command(command: &str, depth: usize) -> bool {
+    // A redirect or `--opt=` glued to a path: try the word, its tail after `=`, and without `<>`.
+    let words = shell_words(command);
+    let cands = |w: &str| -> Vec<String> {
+        let bare = w.trim_start_matches(['<', '>', '&']);
+        let tail = bare.rsplit('=').next().unwrap_or(bare);
+        vec![w.to_string(), bare.to_string(), tail.to_string()]
+    };
+    let step = |w: &str| w.split(['<', '>']).next().unwrap_or("").to_string();
+    let hook = words
+        .windows(2)
+        .any(|w| step(&w[0]) == "hook" && step(&w[1]) == "post-tool-use");
+    let direct = words
+        .iter()
+        .any(|w| cands(w).iter().any(|c| is_answers_path(c)));
+    let bare = words
+        .iter()
+        .any(|w| cands(w).iter().any(|c| lexical(c) == "answers.json"))
+        && words.iter().any(|w| {
+            let n = lexical(w.trim_end_matches('/'));
+            n.rsplit('/').next() == Some("bosun") && n.split('/').any(|p| p == ".git")
+        });
+    hook || direct
+        || bare
+        || (depth < 3
+            && word_scripts(command)
+                .iter()
+                .any(|s| answers_in_command(s, depth + 1)))
 }
 
 /// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
@@ -7107,5 +7142,43 @@ mod tests {
         assert!(bash("cat x > .git/bosun/answers.json").is_some());
         assert!(bash("bosun  hook post-tool-use < x").is_some());
         assert!(bash("cargo test").is_none());
+    }
+
+    #[test]
+    fn answers_lock_bypasses_are_closed() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        // Global flags, quotes, redirects glued on.
+        assert!(bash("bosun -C . hook post-tool-use"));
+        assert!(bash("bosun --repo a/b -C /x hook post-tool-use"));
+        assert!(bash("bosun hook 'post-tool-use'"));
+        assert!(bash("bosun \"hook\" post-tool-use"));
+        assert!(bash("bosun hook post-tool-use<forged.json"));
+        assert!(bash("bosun hook post-tool-use </tmp/f"));
+        assert!(bash("bash -c 'bosun -C . hook post-tool-use'"));
+        assert!(bash("eval \"bosun hook post-tool-use\""));
+        // Path tricks.
+        assert!(bash("echo x > .git/bosun//answers.json"));
+        assert!(bash("echo x > ./.git/bosun/./answers.json"));
+        assert!(bash("echo x > .git/bosun/x/../answers.json"));
+        assert!(bash("echo x >.git/bosun/answers.json"));
+        assert!(bash("tee --output=.git/bosun/answers.json"));
+        assert!(bash("cd .git/bosun && echo x > answers.json"));
+        assert!(bash("python3 -c 1; cp f '.git/bosun/answers.json'"));
+        let edit = |p: &str| answers_lock("Write", &json!({"file_path": p})).is_some();
+        assert!(edit("/r/.git/bosun//answers.json"));
+        assert!(edit("/r/.git/bosun/sub/../answers.json"));
+        assert!(edit("/r/.git/./bosun/answers.json"));
+        assert!(!edit("/r/.git/bosun/other.json"));
+    }
+
+    #[test]
+    fn answers_lock_leaves_innocent_commands_alone() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(!bash("grep x /home/user/bosun"));
+        assert!(!bash("cd /home/user/bosun && cargo test"));
+        assert!(!bash("cat answers.json"));
+        assert!(!bash("bosun hook pre-tool-use"));
+        assert!(!bash("ls /home/user/bosun/src/answers.json.bak"));
+        assert!(!bash("echo hook; echo post-tool-use"));
     }
 }
