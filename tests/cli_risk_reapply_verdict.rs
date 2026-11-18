@@ -79,19 +79,85 @@ fn an_existing_verdict_status_is_left_alone() {
 }
 
 #[test]
-fn a_refused_comment_is_skipped_and_never_an_error() {
+fn a_refused_newest_comment_means_nothing_and_never_an_error() {
     let fake = pr();
     verdict_comment(&fake, HEAD, "mallory", "session_m");
     fake.permission("mallory", "read");
     let v = check(&fake);
     assert_eq!(v["data"]["verdict_reapplied"], Value::Null, "{v}");
     assert!(verdicts(&fake).is_empty());
-    // An older valid one still applies under a newer refused one.
+    // An older valid one never applies under a newer refused one.
     let fake = pr();
-    let id = verdict_comment(&fake, HEAD, "rev", "session_r");
+    verdict_comment(&fake, HEAD, "rev", "session_r");
     verdict_comment(&fake, HEAD, "mallory", "session_m");
     fake.permission("mallory", "read");
-    assert_eq!(check(&fake)["data"]["verdict_reapplied"], json!(id));
+    assert_eq!(check(&fake)["data"]["verdict_reapplied"], Value::Null);
+    assert!(verdicts(&fake).is_empty());
+}
+
+fn changes_body(session: &str) -> String {
+    let text =
+        format!(r#"{{"pr":1,"head_sha":"{HEAD}","verdict":"request-changes","confidence":0.9}}"#);
+    comment_body(&Verdict::parse(&text).unwrap(), session, None)
+}
+
+#[test]
+fn an_erroring_newest_comment_never_lets_an_older_approve_post_green() {
+    let fake = pr();
+    verdict_comment(&fake, HEAD, "rev", "session_q");
+    fake.comment_by(1, "rob", &changes_body("session_r"));
+    // The newest apply errors before it posts any status.
+    fake.fail_path("/collaborators/rob/permission", 500);
+    let v = check(&fake);
+    assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+    let st = verdicts(&fake);
+    assert!(st.iter().all(|s| s["state"] != "success"), "{st:?}");
+}
+
+/// A request-changes comment by `user` lands right after our apply posted its status.
+fn race(user: &'static str) -> FakeGithub {
+    let fake = pr();
+    verdict_comment(&fake, HEAD, "rev", "session_q");
+    let body = changes_body("session_s");
+    fake.after_requests(&format!("/statuses/{HEAD}"), 2, move |s| {
+        let id = common::fake::add_comment(s, 1, &body);
+        s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
+    });
+    fake
+}
+
+fn newer_id(fake: &FakeGithub) -> u64 {
+    let all = fake.comments_of(1);
+    all.iter()
+        .find(|c| c.body.contains("session_s"))
+        .unwrap()
+        .id
+}
+
+#[test]
+fn a_newer_verdict_that_raced_the_apply_stands_instead() {
+    let fake = race("rev");
+    let v = check(&fake);
+    assert_eq!(
+        v["data"]["verdict_reapplied"],
+        json!(newer_id(&fake)),
+        "{v}"
+    );
+    let st = verdicts(&fake);
+    assert_eq!(st.last().unwrap()["state"], "failure", "{st:?}");
+}
+
+#[test]
+fn a_raced_apply_is_withdrawn_when_the_newer_verdict_cannot_stand() {
+    let fake = race("mallory");
+    fake.permission("mallory", "read");
+    let v = check(&fake);
+    assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+    let st = verdicts(&fake);
+    let last = st.last().unwrap();
+    assert_eq!(last["state"], "failure", "{st:?}");
+    let text = last["description"].as_str().unwrap();
+    assert!(text.contains("withdrawn"), "{st:?}");
 }
 
 #[test]

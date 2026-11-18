@@ -1226,38 +1226,53 @@ fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) ->
     settle(gh, w, head, &text).then_some(h)
 }
 
-/// The newest verdict comment for exactly the head that `bosun verdict apply` accepts, applied
-/// when the head has no `review-verdict` (a doubt counts as having one), checked again before
-/// each try. Never an error.
+/// Only the newest verdict comment for exactly the head (any session) is applied, when the head
+/// has no `review-verdict` (a doubt counts as having one, checked again right before). A refused
+/// or failed apply means nothing: never an older comment. A newer one that raced the apply is
+/// applied instead; if it cannot be, the verdict is withdrawn. Never an error.
 fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
     let gh = app.gh.as_ref();
     let head = pull.head_sha.as_str();
     if w.is_dry() || has_verdict(gh, head) {
         return None;
     }
-    let mut comments = gh.list_comments(pull.number).ok()?;
-    comments.sort_by_key(|c| std::cmp::Reverse(c.id));
-    for c in comments {
-        let v = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok());
-        if !v.is_some_and(|v| v.head_sha == head && v.pr == pull.number) {
-            continue;
+    let newest = |after: u64| {
+        let comments = gh.list_comments(pull.number).ok()?;
+        let ours = |b: &str| {
+            let v = comment_json(b).and_then(|t| Verdict::parse(t).ok());
+            v.is_some_and(|v| v.head_sha == head && v.pr == pull.number)
+        };
+        let ids = comments
+            .into_iter()
+            .filter(|c| c.id > after && ours(&c.body));
+        Some(ids.map(|c| c.id).max())
+    };
+    let applied = |id: u64| match apply_verdict(app, id) {
+        Ok(o) => !o.data["status"].is_null(),
+        Err(e) => {
+            eprintln!(
+                "bosun: risk-check: verdict comment {id} not re-applied: {}",
+                e.message
+            );
+            false
         }
-        // An apply that failed after posting its status (a later write failed) left a verdict:
-        // an older comment must never replace it.
-        if has_verdict(gh, head) {
-            return None;
-        }
-        match apply_verdict(app, c.id) {
-            Ok(o) if !o.data["status"].is_null() => return Some(c.id),
-            Ok(_) => {}
-            Err(e) => eprintln!(
-                "bosun: risk-check: verdict comment {} not re-applied: {}",
-                c.id, e.message
-            ),
+    };
+    let id = newest(0).flatten()?;
+    if has_verdict(gh, head) || !applied(id) {
+        return None;
+    }
+    match newest(id) {
+        Some(None) => Some(id),
+        Some(Some(n)) if applied(n) => Some(n),
+        _ => {
+            eprintln!("bosun: risk-check: a newer verdict raced the re-apply; it was withdrawn");
+            _ = w.post(head, VERDICT, "failure", REAPPLY_RACED);
+            None
         }
     }
-    None
 }
+
+const REAPPLY_RACED: &str = "re-apply withdrawn: a newer verdict raced it";
 
 const CARRIED: &str = "carried from ";
 const UNSURE: &str = "carry withdrawn: could not confirm no verdict raced it";
