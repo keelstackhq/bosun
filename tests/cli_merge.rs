@@ -480,7 +480,7 @@ fn ready_reads_the_required_gates_from_the_default_branch() {
     assert_eq!(v["data"]["missing_gates"], json!(["lint"]), "{v}");
 }
 
-/// Merge refuses an unsigned verdict carrying a forged session tag, and takes the App's record.
+/// Merge refuses an unsigned verdict with a forged session tag, and an App record too.
 #[test]
 fn merge_counts_only_app_or_signed_verdicts() {
     let (fake, dir) = setup(false, Some(NO_CI));
