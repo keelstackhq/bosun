@@ -992,3 +992,41 @@ fn removing_or_moving_the_bosun_dir_is_denied() {
     }
     assert!(!bash("mv notes.md .bosun/notes.md").stdout.contains("deny"));
 }
+
+#[test]
+fn dropping_the_origin_remote_or_its_refs_is_denied() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let bash = |c: &str| {
+        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "git update-ref -d refs/remotes/origin/HEAD",
+        "git update-ref -d refs/remotes/origin/main",
+        "git remote remove origin",
+        "git remote rm origin",
+        "git remote rename origin gone",
+        "git rm --cached .bosun/version",
+    ] {
+        assert!(bash(c).stdout.contains("deny"), "{c}");
+    }
+    assert!(!bash("git remote -v").stdout.contains("deny"));
+    assert!(!bash("git remote rename up other").stdout.contains("deny"));
+}
+
+#[test]
+fn no_origin_remote_with_a_bosun_dir_is_adopted() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    git(tmp.path(), &["remote", "remove", "origin"]);
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert!(!o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+    // Without a `.bosun/` directory it is still not set up.
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    git(tmp.path(), &["remote", "remove", "origin"]);
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert!(o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+}
