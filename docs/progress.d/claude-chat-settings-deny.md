@@ -1,0 +1,1 @@
+- 2026-11-18 · chat settings-deny · PreToolUse guard denies edits of .claude/settings*.json, ~/.claude and disableAllHooks · this PR

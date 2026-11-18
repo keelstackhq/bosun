@@ -1,0 +1,1 @@
+- The PreToolUse guard denies agent edits of `.claude/settings*.json`, `~/.claude/**` and any write that sets `disableAllHooks`, for file tools and Bash writes.

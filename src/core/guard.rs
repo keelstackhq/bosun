@@ -14,6 +14,7 @@ use crate::core::meta::OPEN;
 mod interp;
 mod literals;
 mod prose;
+mod settings;
 pub use interp::{Script, script_rules};
 mod writes;
 pub use writes::bash_writes;
@@ -179,6 +180,9 @@ pub fn tool_rules(
     branch_at: BranchAt,
     default_branch: &str,
 ) -> Option<String> {
+    if let Some(why) = settings::settings_rule(tool, input) {
+        return Some(why);
+    }
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
         return bash_rules(command, branch_at, default_branch);
