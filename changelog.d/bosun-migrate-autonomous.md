@@ -1,0 +1,1 @@
+- bosun runs on itself in `[mode] name = "autonomous"`; the explicit `[approvals] policy` is dropped so the preset fills `autonomous`.
