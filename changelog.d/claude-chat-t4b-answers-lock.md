@@ -1,0 +1,1 @@
+- The PostToolUse hook stores an AskUserQuestion answer only when the session transcript shows that question and its result (a symlink or forged input stores nothing); writes to `bosun/answers.json` are denied, reads allowed; `answers.json` is a hint, `chat_signed` is the strong path.
