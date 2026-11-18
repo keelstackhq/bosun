@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.20.0 (2026-11-18)
+
 - `bosun pr --auto-merge` on an already clean PR hands it to the parent as `ready_to_merge` (`next`); `bosun metrics` gets `--max-prs`, stderr progress and a timeout (bad `BOSUN_METRICS_TIMEOUT_SECS` is exit 2); global `--full`; `bosun doctor` notes the notify fallback and the merge identity (step 18).
 - Push gates carry stamps over a docs-only diff (local pre-push only: *.md under docs/ or changelog.d/, not the spec or READMEs; CI still runs every gate); R-weaken ignores lone `dead_code` allows in test code and prints ASCII `->`; `bosun risk-check --local` judges `origin/main...HEAD` before a push.
 - One governance path list (`GOVERNANCE_PATHS`, R-gov's) for `bosun pr --pr N` and risk-check; `[approvals] oneoff_allow` lets task-less PRs and `--one-off` reach more paths (risk-check still asks the owner); `bosun owners set` opens an owner PR for `governance/owners.toml` with team entries; `migrate` fills the intake template's owner and visibility from the repo.
