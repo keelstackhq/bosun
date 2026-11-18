@@ -48,7 +48,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     let app = App::load(dir)?;
     let (pr, head) = match (target, short) {
         (Some(t), _) => t,
-        (None, Some(short)) => resolve_short(&app, short)?,
+        (None, Some(short)) => {
+            resolve_short(&app, short, args.question.as_deref().unwrap_or_default())?
+        }
         (None, None) => unreachable!("checked above"),
     };
     Ok(Outcome::data(approve_chat(&app, pr, &head, args)?))
@@ -60,22 +62,40 @@ fn is_short(t: &str) -> bool {
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-/// The one open PR whose current head starts with `short`: zero or several matches refuse
-/// (exit 3), so a short head typed in Slack never picks a PR by guess.
-fn resolve_short(app: &App, short: &str) -> Result<(u64, String)> {
-    let open = app.gh.list_pulls(None, crate::github::IssueState::Open)?;
-    let mut hit = open.iter().filter(|p| p.head_sha.starts_with(short));
-    match (hit.next(), hit.next()) {
-        (Some(p), None) => Ok((p.number, p.head_sha.clone())),
-        (None, _) => Err(BosunError::conflict(
-            format!("no open PR has a head starting with {short}; nothing was recorded"),
+/// The one PR in the current ready list (`approve --list`) whose head starts with `short`:
+/// zero or several matches refuse (exit 3), so a short head typed in Slack never picks a PR by
+/// guess. The PR named by `--question` must be that PR.
+fn resolve_short(app: &App, short: &str, question: &str) -> Result<(u64, String)> {
+    let board = crate::cli::approve::board(app.gh.as_ref(), true)?;
+    let mut hit = board.ready.iter().filter(|r| r.head_sha.starts_with(short));
+    let (pr, head) = match (hit.next(), hit.next()) {
+        (Some(r), None) => (r.pr, r.head_sha.clone()),
+        (None, _) => {
+            return Err(BosunError::conflict(
+                format!(
+                    "no PR in the ready list has a head starting with {short}; nothing was recorded"
+                ),
+                ASK_AGAIN,
+            ));
+        }
+        _ => {
+            return Err(BosunError::conflict(
+                format!(
+                    "several PRs in the ready list have a head starting with {short}; nothing was recorded"
+                ),
+                "ask again naming one PR: `bosun approve <pr>@<head> --chat --slack-user U... --question <id>`",
+            ));
+        }
+    };
+    if !question.starts_with(&format!("{pr}-")) {
+        return Err(BosunError::conflict(
+            format!(
+                "question {question:?} names another PR than #{pr} (head {short}); nothing was recorded"
+            ),
             ASK_AGAIN,
-        )),
-        _ => Err(BosunError::conflict(
-            format!("several open PRs have a head starting with {short}; nothing was recorded"),
-            "ask again naming one PR: `bosun approve <pr>@<head> --chat --slack-user U... --question <id>`",
-        )),
+        ));
     }
+    Ok((pr, head))
 }
 
 fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<serde_json::Value> {
@@ -152,11 +172,15 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
             }
             // A Slack answer is not stored; the id still names this PR and head, and a hold wins.
             let q = args.question.as_deref().unwrap_or_default();
+            let repo = app.ctx.repo.to_string();
             let named = q.starts_with(&format!("{pr}-{}-", &head[..7]));
-            if !named || answers::held(&app.ctx.dir, &app.ctx.repo.to_string(), pr, head) {
+            // The id must be an ask `approve --list` issued as a Slack post for this PR and head.
+            let issued = answers::asked(&app.ctx.dir, &repo, q)
+                .is_some_and(|a| a.pr == pr && a.head == head);
+            if !named || !issued || answers::held(&app.ctx.dir, &repo, pr, head) {
                 return Err(BosunError::needs_human(
                     format!(
-                        "question {q:?} does not name #{pr} at {head}, or the owner held it; nothing was recorded"
+                        "question {q:?} does not name #{pr} at {head}, was not issued by `approve --list` as a Claude Tag ask, or the owner held it; nothing was recorded"
                     ),
                     ASK_AGAIN,
                 ));
@@ -193,8 +217,8 @@ fn stored_approve(ctx: &crate::ctx::Ctx, q: &str, pr: u64, head: &str) -> Result
         a.answer == "approve"
             && a.pr == pr
             && a.head == head
-            && !a.session_id.is_empty()
-            && a.session_id == *session
+            && !a.session.is_empty()
+            && a.session == *session
     };
     let ok = q.starts_with(&prefix)
         && answers::current(dir, &repo, pr, head).is_some_and(|a| mine(&a))

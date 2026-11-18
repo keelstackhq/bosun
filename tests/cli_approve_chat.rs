@@ -43,7 +43,7 @@ fn answer(dir: &Path, id: &str, answer: &str, pr: u64, head: &str) {
         .join("bosun/answers.json");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     let v = json!({id: {"answer": answer, "repo": "acme/widget", "pr": pr, "head": head, "at": NOW,
-        "session_id": "session_orch", "tool_use_id": "tu"}});
+        "session": "session_orch", "cli_session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d", "tool_use_id": "tu"}});
     std::fs::write(file, v.to_string()).unwrap();
 }
 
@@ -259,6 +259,16 @@ fn chat_slack_owner_ok() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
     let env = [("BOSUN_ORIGIN", "slack")];
+    // An id `approve --list` never issued as a Claude Tag ask is refused.
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_tag",
+        &["--question", Q, "--slack-user", "U0ADA1"],
+        &env,
+    );
+    refused(&fake, r, 5);
+    answer_at(tmp.path(), Q, "asked", NOW);
     let (code, v) = chat(
         &fake,
         tmp.path(),
@@ -465,7 +475,7 @@ fn answer_at(dir: &Path, id: &str, answer: &str, at: &str) {
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| json!({}));
     map[id] = json!({"answer": answer, "repo": "acme/widget", "pr": 1, "head": HEAD, "at": at,
-        "session_id": "session_orch", "tool_use_id": "tu"});
+        "session": "session_orch", "cli_session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d", "tool_use_id": "tu"});
     std::fs::write(file, map.to_string()).unwrap();
 }
 
@@ -504,7 +514,23 @@ fn chat_refused_when_the_child_flag_is_set_whatever_the_origin_says() {
     refused(&fake, r, 5);
 }
 
-fn slack_short(fake: &FakeGithub, dir: &Path, short: &str) -> (i32, Value) {
+/// PR `n` at `head` in the ready list: its risk-check waits for an owner, a clean verdict, green CI.
+fn ready(fake: &FakeGithub, n: u64, head: &str) {
+    fake.pull(n, "change", &format!("b{n}"), "");
+    fake.pull_as_issue(n, "change");
+    fake.pull_set(n, "head", json!({"sha": head, "ref": format!("b{n}")}));
+    fake.status(
+        head,
+        "risk-check",
+        "failure",
+        "high risk, owner approval needed: R-gov",
+    );
+    fake.status(head, "review-verdict", "success", "approved by session_rev");
+    fake.check_run(head, "ci-ok", "completed", Some("success"));
+    fake.compare_file("base0000", head, &format!("governance/f{n}.toml"), "@@");
+}
+
+fn slack_short(fake: &FakeGithub, dir: &Path, short: &str, q: &str) -> (i32, Value) {
     let out = bosun()
         .current_dir(dir)
         .env("BOSUN_GITHUB_API", fake.url())
@@ -516,7 +542,7 @@ fn slack_short(fake: &FakeGithub, dir: &Path, short: &str) -> (i32, Value) {
             short,
             "--chat",
             "--question",
-            Q,
+            q,
             "--slack-user",
             "U0ADA1",
         ])
@@ -526,18 +552,18 @@ fn slack_short(fake: &FakeGithub, dir: &Path, short: &str) -> (i32, Value) {
 }
 
 #[test]
-fn chat_slack_short_head_must_name_exactly_one_open_pr() {
+fn chat_slack_short_head_must_name_exactly_one_ready_pr() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
-    // No PR has this head.
-    let (code, v) = slack_short(&fake, tmp.path(), "fffffff");
+    answer_at(tmp.path(), Q, "asked", NOW);
+    // Nothing is ready: zero matches.
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], Q);
     assert_eq!(code, 3, "{v}");
-    // Two open PRs share the short head.
-    fake.pull(2, "other", "feature2", "");
-    fake.pull_as_issue(2, "other");
+    // Two ready PRs share the short head.
+    ready(&fake, 1, HEAD);
     let twin = format!("{}{}", &HEAD[..7], &OTHER[7..]);
-    fake.pull_set(2, "head", json!({"sha": twin, "ref": "feature2"}));
-    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7]);
+    ready(&fake, 2, &twin);
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], Q);
     assert_eq!(code, 3, "{v}");
     assert!(chat_comments(&fake).is_empty());
 }
@@ -546,8 +572,58 @@ fn chat_slack_short_head_must_name_exactly_one_open_pr() {
 fn chat_slack_short_head_with_one_match_records() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
-    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7]);
+    ready(&fake, 1, HEAD);
+    answer_at(tmp.path(), Q, "asked", NOW);
+    // The question names another PR than the one the short head maps to.
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], "2-0123456-1762768800");
+    assert_eq!(code, 3, "{v}");
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], Q);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["head_sha"], HEAD);
+    assert_eq!(chat_comments(&fake).len(), 1);
+}
+
+/// The hook stores the answer under the bosun identity (the same env as the CLI), not the CLI's
+/// UUID: the whole path from a real-shaped hook input to `--chat`.
+#[test]
+fn chat_end_to_end_from_the_hook_input() {
+    let (fake, tmp) = (setup(), repo());
+    git(
+        tmp.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    let text = format!(
+        "Approve acme/widget#1 `change` (risk R-gov; verdict: ok; head 0123456 = {HEAD})? [bosun:{Q}]"
+    );
+    let q = json!({"question": text, "header": "Approve", "multiSelect": false,
+        "options": [{"label": "Approve #1 0123456", "description": "x"},
+                    {"label": "Hold", "description": "x"}]});
+    let input = json!({"session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d",
+        "tool_use_id": "toolu_1", "hook_event_name": "PostToolUse",
+        "tool_name": "AskUserQuestion", "tool_input": {"questions": [q.clone()]},
+        "tool_response": {"questions": [q], "answers": {text: "Approve #1 0123456"}}});
+    let hook = |session: &str| {
+        let out = bosun()
+            .current_dir(tmp.path())
+            .env("BOSUN_NOW", NOW)
+            .env("BOSUN_SESSION", session)
+            .args(["hook", "post-tool-use"])
+            .write_stdin(input.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+    };
+    hook("session_orch");
+    // Another bosun session cannot use the orchestrator's answer.
+    join(&fake, "session_other", "local", None, 1);
+    let r = chat(&fake, tmp.path(), "session_other", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+    let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    assert_eq!(code, 0, "{v}");
     assert_eq!(chat_comments(&fake).len(), 1);
 }

@@ -228,3 +228,29 @@ fn list_title_with_owner_token_is_not_printed() {
     let v = list(&fake, None);
     assert!(v["next"].as_array().is_some(), "{v}");
 }
+
+#[test]
+fn list_slack_origin_remembers_the_asks_it_posts() {
+    let fake = FakeGithub::start();
+    let h = head("abc1234");
+    ready(&fake, 12, "gov change", &h);
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+    git(&["init", "-q", "-b", "main"]);
+    list_in(&fake, Some("slack"), Some(dir.path()));
+    let file = dir.path().join(".git/bosun/answers.json");
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let a = &stored[format!("12-abc1234-{UNIX}")];
+    assert_eq!(a["answer"], json!("asked"), "{stored}");
+    assert_eq!(a["pr"], json!(12));
+    assert_eq!(a["head"], json!(h));
+    assert_eq!(a["repo"], json!("acme/widget"));
+}

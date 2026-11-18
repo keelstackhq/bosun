@@ -423,6 +423,20 @@ fn ask_next(ctx: &Ctx, ready: &[Ready], mut data: Value) -> Outcome {
         return Outcome::data(data);
     }
     let out = if ctx.origin == Origin::Slack {
+        // The asks this post issues are remembered: `--chat --slack-user` needs one of them.
+        let asks: Vec<(String, u64, String)> = (items.iter())
+            .map(|i| {
+                (
+                    crate::core::approve::question_id(i.pr, i.head, unix),
+                    i.pr,
+                    i.head.to_string(),
+                )
+            })
+            .collect();
+        if !asks.is_empty() {
+            let now = ctx.now.to_string();
+            answers::record_asks(&ctx.dir, &repo, &ctx.session, &now, &asks);
+        }
         ask::slack_text(&repo, &items, unix).map(|text| {
             let mut a = json!({"text": text});
             let channel = ctx.config.slack.as_ref().map(|s| s.channel.trim());
