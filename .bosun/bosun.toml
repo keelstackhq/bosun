@@ -27,3 +27,6 @@ environment_id = "env_014hvpWkGQxciwPhBBysjvGr"
 mode = "dual"
 app_id = 5696830
 app_slug = "keelstackhq-bosun-gate"
+
+[mode]
+name = "autonomous"
