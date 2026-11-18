@@ -1704,6 +1704,11 @@ pub(crate) fn chat_signed(gh: &dyn Github) -> Result<bool> {
 /// How far (seconds) a signing time may be from the time GitHub created the comment.
 const CHAT_SIG_SKEW: i64 = 600;
 
+/// Whether a signing time `at` is within [`CHAT_SIG_SKEW`] of `posted` and not before `since`.
+pub(crate) fn sig_fresh(at: i64, posted: Timestamp, since: Option<Timestamp>) -> bool {
+    (posted.0 - at).abs() <= CHAT_SIG_SKEW && since.is_none_or(|s| at >= s.0)
+}
+
 /// Whether the record carries a valid signature of an enrolled owner key over repo, PR, head,
 /// question id, session and signing time (`bosun-chat v2 ...`), made no earlier than `since`
 /// and within [`CHAT_SIG_SKEW`] of `posted`: a copy of an old signed record never counts again.
@@ -1716,7 +1721,7 @@ fn chat_signature_ok(
     let (Some(q), Some(at)) = (&r.question, r.at) else {
         return false;
     };
-    if (posted.0 - at).abs() > CHAT_SIG_SKEW || since.is_some_and(|s| at < s.0) {
+    if !sig_fresh(at, posted, since) {
         return false;
     }
     let msg =

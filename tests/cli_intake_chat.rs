@@ -5,6 +5,7 @@ mod common;
 use bosun::core::approve::signed_message_chat_intake;
 use bosun::core::intake::intake_sha256;
 use bosun::github::b64;
+use bosun::time::parse_rfc3339;
 use common::fake::FakeGithub;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
@@ -44,14 +45,24 @@ fn unsigned_mode(sha: &str, session: &str, mode: &str) -> String {
     )
 }
 
-/// A record signed by key `seed` under the id `k1` (the key enrolled by `setup` is seed 1).
-fn signed_by(seed: u8, sha: &str, session: &str, mode: &str) -> String {
-    let msg = signed_message_chat_intake(("acme", "widget", ISSUE), sha, mode, Q);
+/// A record signed by key `seed` under the id `k1` (the key enrolled by `setup` is seed 1),
+/// signing time `at` (RFC 3339).
+fn signed_at(seed: u8, (sha, session, mode): (&str, &str, &str), at: &str) -> String {
+    let t = parse_rfc3339(at).unwrap().0;
+    let msg = signed_message_chat_intake(("acme", "widget", ISSUE), sha, mode, (Q, session, t));
     let sig = b64::encode(key(seed).sign(msg.as_bytes()).as_ref());
     format!(
-        "{}\n<!-- bosun:chat-sig v1 key=k1 sig={sig} -->",
+        "{}\n<!-- bosun:chat-sig v1 key=k1 at={t} sig={sig} -->",
         unsigned_mode(sha, session, mode)
     )
+}
+
+fn signed_by(seed: u8, sha: &str, session: &str, mode: &str) -> String {
+    signed_at(seed, (sha, session, mode), NOW)
+}
+
+fn record_at(sha: &str, session: &str, at: &str) -> String {
+    signed_at(1, (sha, session, "new"), at)
 }
 
 fn record_mode(sha: &str, session: &str, mode: &str) -> String {
@@ -117,7 +128,7 @@ fn chat_record_verifies_the_intake() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:30:00Z"),
         "2026-11-10T09:30:00Z",
     );
     let (code, v) = verify(&fake, OK, &[]);
@@ -180,7 +191,7 @@ fn old_or_future_record_refused() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T08:59:59Z"),
         "2026-11-10T08:59:59Z",
     );
     refused(&fake, "expired");
@@ -188,7 +199,7 @@ fn old_or_future_record_refused() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T10:01:01Z"),
         "2026-11-10T10:01:01Z",
     );
     refused(&fake, "issued_in_future");
@@ -197,7 +208,7 @@ fn old_or_future_record_refused() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:00:00Z"),
         "2026-11-10T09:00:00Z",
     );
     assert_eq!(verify(&fake, OK, &[]).0, 0);
@@ -209,13 +220,13 @@ fn newest_counting_record_wins_over_a_bad_one() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:50:00Z"),
         "2026-11-10T09:50:00Z",
     );
     post(
         &fake,
         "bob",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:55:00Z"),
         "2026-11-10T09:55:00Z",
     );
     let (code, v) = verify(&fake, OK, &[]);
@@ -273,7 +284,7 @@ fn join_expired_at_comment_time_refused() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T11:30:00Z"),
         "2026-11-10T11:30:00Z",
     );
     let dir = tempfile::tempdir().unwrap();
@@ -453,7 +464,7 @@ fn a_later_owner_hold_revokes_and_a_later_record_restores() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:30:00Z"),
         "2026-11-10T09:30:00Z",
     );
     // A non-owner's hold changes nothing.
@@ -464,7 +475,7 @@ fn a_later_owner_hold_revokes_and_a_later_record_restores() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:33:00Z"),
         "2026-11-10T09:33:00Z",
     );
     assert_eq!(verify(&fake, OK, &[]).0, 0);
@@ -475,9 +486,113 @@ fn a_later_owner_hold_revokes_and_a_later_record_restores() {
     post(
         &fake,
         "ada",
-        &record(&sha(), "session_orch"),
+        &record_at(&sha(), "session_orch", "2026-11-10T09:30:00Z"),
         "2026-11-10T09:30:00Z",
     );
     post(&fake, "ada", "/bosun nothing", "2026-11-10T09:31:00Z");
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
+}
+
+#[test]
+fn the_signing_time_is_bound_and_fresh() {
+    let sha = sha();
+    // Signed 20 minutes before it was posted (a replayed old signature), or with no time at all.
+    let fake = setup(true);
+    post(
+        &fake,
+        "ada",
+        &signed_at(1, (&sha, "session_orch", "new"), "2026-11-10T09:30:00Z"),
+        "2026-11-10T09:50:00Z",
+    );
+    refused(&fake, "chat_unsigned");
+    let fake = setup(true);
+    let body = record_at(&sha, "session_orch", NOW).replace(&format!(" at={}", unix(NOW)), "");
+    post(&fake, "ada", &body, NOW);
+    refused(&fake, "chat_unsigned");
+    // The session is signed: another session name in the marker does not verify.
+    let fake = setup(true);
+    let body =
+        record_at(&sha, "session_kid", NOW).replace("session=session_kid", "session=session_orch");
+    post(&fake, "ada", &body, NOW);
+    refused(&fake, "chat_unsigned");
+    // Signed before the newest owner hold: dead, though close to its posting time.
+    let fake = setup(true);
+    post(&fake, "ada", "/bosun hold", "2026-11-10T09:40:00Z");
+    post(
+        &fake,
+        "ada",
+        &record_at(&sha, "session_orch", "2026-11-10T09:35:00Z"),
+        "2026-11-10T09:44:00Z",
+    );
+    refused(&fake, "chat_unsigned");
+}
+
+fn unix(at: &str) -> i64 {
+    parse_rfc3339(at).unwrap().0
+}
+
+#[test]
+fn hold_matching_is_forgiving() {
+    for hold in [
+        "/BOSUN HOLD",
+        "  /bosun   hold  ",
+        "**/bosun hold**",
+        "> /bosun no",
+        "`/bosun hold`",
+        "/bosun hold.",
+        "/bosun no!",
+        "\n\n/Bosun No, not yet",
+    ] {
+        let fake = setup(true);
+        post(
+            &fake,
+            "ada",
+            &record_at(&sha(), "session_orch", "2026-11-10T09:30:00Z"),
+            "2026-11-10T09:30:00Z",
+        );
+        post(&fake, "ada", hold, "2026-11-10T09:31:00Z");
+        refused(&fake, "chat_held");
+    }
+    for other in [
+        "/bosun nothing",
+        "/bosun holdup",
+        "/bosunhold",
+        "bosun hold",
+    ] {
+        let fake = setup(true);
+        post(
+            &fake,
+            "ada",
+            &record_at(&sha(), "session_orch", "2026-11-10T09:30:00Z"),
+            "2026-11-10T09:30:00Z",
+        );
+        post(&fake, "ada", other, "2026-11-10T09:31:00Z");
+        assert_eq!(verify(&fake, OK, &[]).0, 0, "{other}");
+    }
+}
+
+#[test]
+fn an_edited_hold_counts_by_its_current_text_and_time() {
+    let at = "2026-11-10T09:30:00Z";
+    let rec = || record_at(&sha(), "session_orch", at);
+    // A hold edited away to something else no longer holds.
+    let fake = setup(true);
+    post(&fake, "ada", &rec(), at);
+    post(&fake, "ada", "/bosun hold", "2026-11-10T09:31:00Z");
+    fake.last_comment(|c| c.body = "never mind".into());
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
+    // A comment written before the record and edited into a hold after it holds.
+    let fake = setup(true);
+    post(&fake, "ada", "thinking", "2026-11-10T09:20:00Z");
+    fake.last_comment(|c| {
+        c.body = "/bosun hold".into();
+        c.updated_at = "2026-11-10T09:32:00Z".into();
+    });
+    post(&fake, "ada", &rec(), at);
+    refused(&fake, "chat_held");
+    // The same hold, never edited, before the record: the record stands.
+    let fake = setup(true);
+    post(&fake, "ada", "/bosun hold", "2026-11-10T09:20:00Z");
+    post(&fake, "ada", &rec(), at);
     assert_eq!(verify(&fake, OK, &[]).0, 0);
 }

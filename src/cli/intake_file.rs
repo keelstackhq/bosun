@@ -13,6 +13,7 @@ use crate::app::{App, default_ref};
 use crate::cli::approve::read_key;
 use crate::cli::risk_check::{
     OWNERS_PATH, chat_enabled, chat_sig_valid, enrolled_keys, fallback_owners, owner_logins,
+    sig_fresh,
 };
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, is_orchestrator, parse_approvers, parse_intake_chat_record,
@@ -364,6 +365,12 @@ fn verify_chat(
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
     let now = Timestamp::now();
+    // A signing time may not precede the newest owner hold (current text, edit time counts).
+    let since = comments
+        .iter()
+        .filter(|h| is_hold(&h.body) && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user)))
+        .filter_map(|h| parse_rfc3339(&h.updated_at).max(parse_rfc3339(&h.created_at)))
+        .max();
     let mut why = None;
     for (c, r) in found {
         let made = parse_rfc3339(&c.created_at);
@@ -381,16 +388,17 @@ fn verify_chat(
                 "chat_wrong_mode",
                 "it approves the other mode (new or adopt)",
             )
-        } else if !r.question.as_deref().is_some_and(|q| {
-            let m = signed_message_chat_intake((&repo.owner, &repo.name, issue), &sha, mode, q);
-            chat_sig_valid(&r, &keys, &m)
+        } else if held(&comments, &owners, c) {
+            ("chat_held", "was held or declined by an owner after it")
+        } else if !(r.question.as_deref().zip(r.at).zip(made)).is_some_and(|((q, at), t)| {
+            let m = (q, r.session.as_str(), at);
+            let m = signed_message_chat_intake((&repo.owner, &repo.name, issue), &sha, mode, m);
+            sig_fresh(at, t, since) && chat_sig_valid(&r, &keys, &m)
         }) {
             (
                 "chat_unsigned",
                 "carries no valid signature of an enrolled owner key over its question",
             )
-        } else if held(&comments, &owners, c.id) {
-            ("chat_held", "was held or declined by an owner after it")
         } else if made.is_none_or(|t| t > now.plus_secs(MAX_SKEW_SECS)) {
             ("issued_in_future", "it was written in the future")
         } else if made.is_some_and(|t| now.0 - t.0 > MAX_EXPIRES_SECS as i64) {
@@ -409,17 +417,36 @@ fn verify_chat(
     Err(refuse(reason, &format!("the chat record {text}"), fix))
 }
 
-/// Whether an owner commented after record `id` with a first line `/bosun hold` or `/bosun no`.
-fn held(comments: &[crate::github::Comment], owners: &[String], id: u64) -> bool {
+/// Whether `body` (its current text) opens with `/bosun hold` or `/bosun no`: any case, extra
+/// spaces, a leading quote, emphasis or backticks, trailing punctuation; not `/bosun nothing`.
+fn is_hold(body: &str) -> bool {
+    let line = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let line = line.to_lowercase();
+    let line = line.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#".contains(c));
+    let Some(rest) = line
+        .strip_prefix("/bosun")
+        .filter(|r| r.starts_with(char::is_whitespace))
+    else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    ["hold", "no"].iter().any(|w| {
+        (rest.strip_prefix(w)).is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
+    })
+}
+
+/// Whether an owner's hold counts against record `rec`: written, or edited into a hold, after
+/// it (a deleted comment is gone from the list, an edited-away hold no longer matches).
+fn held(
+    comments: &[crate::github::Comment],
+    owners: &[String],
+    rec: &crate::github::Comment,
+) -> bool {
+    let when =
+        |c: &crate::github::Comment| parse_rfc3339(&c.updated_at).max(parse_rfc3339(&c.created_at));
     comments.iter().any(|h| {
-        let first = h.body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        let first = first.trim();
-        h.id > id
+        is_hold(&h.body)
             && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
-            && ["/bosun hold", "/bosun no"].iter().any(|w| {
-                first
-                    .strip_prefix(w)
-                    .is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
-            })
+            && (h.id > rec.id || when(h) > parse_rfc3339(&rec.created_at))
     })
 }
