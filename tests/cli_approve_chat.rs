@@ -245,6 +245,43 @@ fn chat_slack_owner_ok() {
 }
 
 #[test]
+fn chat_slack_head_moved_refused() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    fake.pull_set(1, "head", json!({"sha": OTHER, "ref": "feature"}));
+    let env = [("BOSUN_ORIGIN", "slack")];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_tag",
+        &["--slack-user", "U0ADA1"],
+        &env,
+    );
+    refused(&fake, r, 3);
+}
+
+#[test]
+fn chat_short_head_is_usage_error() {
+    let (fake, tmp) = (setup(), repo());
+    let out = bosun()
+        .current_dir(tmp.path())
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_orch")
+        .env("BOSUN_NOW", NOW)
+        .args([
+            "approve",
+            &format!("1@{}", &HEAD[..7]),
+            "--chat",
+            "--question",
+            Q,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(chat_comments(&fake).is_empty());
+}
+
+#[test]
 fn chat_slack_non_owner_refused() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);

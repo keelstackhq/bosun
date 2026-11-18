@@ -1,6 +1,6 @@
 //! `bosun approve`: lists the PRs that wait for an owner. The default approval (D-012): the
-//! session asks the owner with a form in the Claude Code chat and the orchestrator posts the
-//! signed comment (`--sign-key`). The fallback: the owner, on their own machine, posts the
+//! session asks the owner with a form in the Claude Code chat and the orchestrator records the
+//! answer with `--chat` (D-018; a signature with `--sign-key` stays optional). The fallback: the owner, on their own machine, posts the
 //! comment `/bosun approve <head>` (spec section 8).
 //! Every GitHub call uses `BOSUN_OWNER_TOKEN`, never `GITHUB_TOKEN`: the comment must come from
 //! a plain user token, which agent sessions do not have. `--list` only reads: without the owner
@@ -78,12 +78,12 @@ fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<Option<(&'static str, bool)>> 
 }
 
 /// What to do instead in a Claude cloud session.
-const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs `bosun approve` on their own machine, or comments `/bosun approve <sha>` in the GitHub web or mobile app";
+const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on approve the orchestrator records it with `bosun approve <pr>@<full head> --chat --question <id>` (from Claude Tag `--slack-user U...`; no signing key needed, D-018); fallback: the owner runs `bosun approve` on their own machine, or comments `/bosun approve <sha>` in the GitHub web or mobile app";
 
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; only the orchestrator asks, a child session hands the question to the orchestrator; approve or hold; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const LIST_HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; only the orchestrator asks, a child session hands the question to the orchestrator; approve or hold; on approve the orchestrator records it with `bosun approve <pr>@<full head> --chat --question <id>` (from Claude Tag `--slack-user U...`; no signing key needed, D-018); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 #[derive(Default)]
 pub(crate) struct Board {
@@ -416,7 +416,7 @@ fn ask_next(ctx: &Ctx, ready: &[Ready], mut data: Value) -> Outcome {
         data["ready"][i]["ask"] = ask::ask(&repo, item, unix);
     }
     let out = if ctx.origin == Origin::Slack {
-        ask::slack_text(&repo, &items).map(|text| {
+        ask::slack_text(&repo, &items, unix).map(|text| {
             let mut a = json!({"text": text});
             let channel = ctx.config.slack.as_ref().map(|s| s.channel.trim());
             if let Some(c) = channel.filter(|c| !c.is_empty()) {

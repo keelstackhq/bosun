@@ -60,7 +60,10 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         ));
     }
     let session = &app.ctx.session;
-    let members = crate::registry::load(gh)?
+    // Every comment, not only writers': in a cloud session the permission lookup is hidden, so
+    // the session's own join would not count as trusted. Only risk-check's trusted read counts a
+    // record; this check guards a confused worker.
+    let members = crate::registry::load_own(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
     if !is_orchestrator(&members, session) {

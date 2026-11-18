@@ -166,7 +166,7 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     main_open?: {head_sha: str, pr: int}, bodies?: [{after_review: int | null, body: str}],
     body?: str, bootstrap_until?: str | null, head_sha?: str, key_id?: str, policy?: str | null,
     policy_source?: str | null, pr?: int, role?: str, requested?: bool, workflow?: str,
-    ref?: str, ci_ok?: str};
+    ref?: str, ci_ok?: str, comment_id?: int, question_id?: str | null};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,

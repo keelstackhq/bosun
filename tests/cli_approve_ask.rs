@@ -152,7 +152,16 @@ fn list_slack_origin_next_is_slack_post() {
     assert_eq!(next[0]["tool"], json!("slack_post"));
     let text = next[0]["args"]["text"].as_str().unwrap();
     assert!(text.contains("acme/widget#12"), "{text}");
-    assert!(text.ends_with("answer \"approve abc1234\""), "{text}");
+    assert!(text.contains("answer \"approve abc1234\""), "{text}");
+    // The text names the question id and the full head the orchestrator records.
+    let id = v["data"]["ready"][0]["ask"]["question_id"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains(&format!("(question {id})")), "{text}");
+    assert!(
+        text.contains(&format!("abc1234 = {}", head("abc1234"))),
+        "{text}"
+    );
 }
 
 #[test]

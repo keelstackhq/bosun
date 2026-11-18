@@ -95,17 +95,21 @@ pub fn ask_user_question(repo: &str, items: &[Item], unix: i64) -> Option<Value>
 }
 
 /// The Claude Tag thread post for the same PRs: it ends with the answer to give.
-pub fn slack_text(repo: &str, items: &[Item]) -> Option<String> {
+pub fn slack_text(repo: &str, items: &[Item], unix: i64) -> Option<String> {
     if items.is_empty() {
         return None;
     }
     let lines: Vec<String> = items
         .iter()
-        .map(|i| format!("- {}", line(repo, i)))
+        .map(|i| {
+            let id = question_id(i.pr, i.head, unix);
+            format!("- {} (question {id})", line(repo, i))
+        })
         .collect();
     let shorts: Vec<String> = items.iter().map(|i| short(i.head)).collect();
+    // The short head is only what the owner types; each line names the full head to record.
     Some(format!(
-        "Waiting for your approval:\n{}\nTo approve, answer \"approve {}\"",
+        "Waiting for your approval:\n{}\nTo approve, answer \"approve {}\" (the 7-character head of a line above); the orchestrator records that line's full head",
         lines.join("\n"),
         shorts.join(" ")
     ))
@@ -130,7 +134,7 @@ mod tests {
     #[test]
     fn header_fits_and_none_when_empty() {
         assert!(ask_user_question("a/b", &[], 1).is_none());
-        assert!(slack_text("a/b", &[]).is_none());
+        assert!(slack_text("a/b", &[], 1).is_none());
         let r = vec!["R-gov".to_string()];
         let v = ask_user_question("a/b", &[item(1, &r)], 1).unwrap();
         assert!(

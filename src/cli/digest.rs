@@ -53,6 +53,9 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
         bootstrap: false,
         via_signer: false,
         requester: None,
+        chat: false,
+        question: None,
+        slack_user: None,
     };
     let data = super::approve::run(dir, &list)?.data;
     let strs = |v: &Value| -> Vec<String> {
