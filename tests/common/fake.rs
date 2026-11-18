@@ -702,6 +702,15 @@ impl FakeGithub {
         s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
+    /// A comment by `user` that was edited after it was written.
+    pub fn comment_edited(&self, issue: u64, user: &str, body: &str) {
+        let mut s = self.state.lock().unwrap();
+        let id = add_comment(&mut s, issue, body);
+        let c = s.comments.iter_mut().find(|c| c.id == id).unwrap();
+        c.user = user.into();
+        c.updated_at = "2099-01-01T00:00:00Z".into();
+    }
+
     /// A comment written by `user` at `at` (RFC 3339); the issue's `updated_at` moves up to it.
     pub fn comment_at(&self, issue: u64, user: &str, body: &str, at: &str) -> u64 {
         let mut s = self.state.lock().unwrap();

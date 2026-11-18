@@ -130,6 +130,12 @@ fn mode_findings(b: &Value, h: &Value, add: &mut impl FnMut(&str, &str, &str)) {
         )+};
     }
     looser!(push_gates, brake, budget_feature);
+    // More review rounds before the owner must answer is looser, whichever way it got there (an
+    // override, or a ladder move whose preset is higher).
+    let (ov, nv) = (o.knobs.review_rounds.value, n.knobs.review_rounds.value);
+    if nv > ov {
+        add("mode.review_rounds", &ov.to_string(), &nv.to_string());
+    }
 }
 
 /// Findings from a gate file's text at base and head. A missing side (an added or deleted file)

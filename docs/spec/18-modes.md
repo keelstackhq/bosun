@@ -45,6 +45,8 @@ push_gates = "push"
 | `brake` | `off` | `on` | `on` | `on` |
 | `curator_loosen` | `off` | `off` | `propose` | `propose` |
 
+`review_rounds` (an integer of at least 1, set as `review_rounds = 3`; preset 5 in every mode, so a ladder move never changes it): the review rounds of one PR before the owner must answer (`bosun review-loop`, §7). A higher effective value is a weaken finding (R-weaken, `mode.review_rounds`), by an override or by any move that ends higher; the file is R-gov too.
+
 `budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5); a task the plan marks `mainfix` and the epic's bind lists is exempt.
 
 ### Brake
@@ -79,7 +81,7 @@ exact-inverse check.
 
 ### Commands
 
-- `bosun mode`: the effective mode and knobs with their sources; no GitHub call.
+- `bosun mode`: the effective mode and knobs (`review_rounds` included) with their sources; no GitHub call.
 - `bosun migrate --to <mode> [--direct] [--dry-run]`: survey (pinned version, mode, registry,
   epics without a marker, hull lock, a 30-day metrics baseline with a timeout that never blocks:
   `BOSUN_MIGRATE_METRICS_TIMEOUT`, default 20 s), then one draft governance PR on

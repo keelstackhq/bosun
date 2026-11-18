@@ -150,3 +150,31 @@ fn knob_order_is_looser_first() {
     assert!(PushGates::Ready < PushGates::Push);
     assert!(Brake::Off < Brake::On);
 }
+
+#[test]
+fn raising_review_rounds_is_a_weaken_finding_and_lowering_is_not() {
+    let up = text_findings(
+        C,
+        Some("[mode]\nreview_rounds = 3\n"),
+        Some("[mode]\nreview_rounds = 8\n"),
+    );
+    assert!(
+        up.iter().any(|f| f.contains("mode.review_rounds")),
+        "{up:?}"
+    );
+    let ladder = text_findings(
+        C,
+        Some("[mode]\nname = \"autonomous\"\n"),
+        Some("[mode]\nname = \"gatekeeper\"\n"),
+    );
+    assert!(
+        ladder.is_empty(),
+        "a ladder move keeps the preset: {ladder:?}"
+    );
+    let down = text_findings(
+        C,
+        Some("[mode]\nreview_rounds = 8\n"),
+        Some("[mode]\nreview_rounds = 3\n"),
+    );
+    assert!(down.is_empty(), "{down:?}");
+}

@@ -172,6 +172,9 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
     delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
     verdict_cleared_by?: str};
+review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, findings: [{..}], reasons: [str],
+    reason: str | null}]}
+    | {pr: int, head_sha: str, step: str, rounds: int, max: int, findings: [{..}], reasons: [str], reason: str | null};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
@@ -196,7 +199,7 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     budget_feature?: [{epic: int, spent_usd: num, budget_usd: num, level: str,
     raise_room_usd?: int}], budget_skipped?: [{epic: int | null, error: str}],
     archive_error?: str};
-mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
+mode = {mode: str, mode_source: str, knobs: {[str]: {value: str | int, source: str}}, brake: any,
     brake_note: str};
 rules = {file: str, changed: bool, written: bool, block: str};
 heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, head_sha: str,

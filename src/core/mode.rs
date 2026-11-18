@@ -56,10 +56,10 @@ pub struct Effective {
 macro_rules! knobs {
     ($($f:ident: $t:ident = [$g:ident, $s:ident, $b:ident, $a:ident]),+ $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub struct Knobs { $(pub $f: $t),+ }
+        pub struct Knobs { $(pub $f: $t,)+ pub review_rounds: u32 }
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-        pub struct EffKnobs { $(pub $f: Set<$t>),+ }
+        pub struct EffKnobs { $(pub $f: Set<$t>,)+ pub review_rounds: Set<u32> }
 
         /// `[mode]`: `name` fills the knobs left unset; `policy` is parsed only to refuse it.
         #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
@@ -69,13 +69,16 @@ macro_rules! knobs {
             pub name: Option<ModeName>,
             $(#[serde(skip_serializing_if = "Option::is_none")]
             pub $f: Option<$t>,)+
+            /// Review rounds before the owner must answer (`bosun review-loop`, spec §7).
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub review_rounds: Option<u32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             pub policy: Option<toml::Value>,
         }
 
         /// The mode x knob table of the design.
         pub fn preset(m: ModeName) -> Knobs {
-            Knobs { $($f: [$t::$g, $t::$s, $t::$b, $t::$a][m as usize]),+ }
+            Knobs { $($f: [$t::$g, $t::$s, $t::$b, $t::$a][m as usize],)+ review_rounds: [5, 5, 5, 5][m as usize] }
         }
 
         impl ModeConfig {
@@ -97,7 +100,10 @@ macro_rules! knobs {
                 knobs: EffKnobs { $($f: match c.$f {
                     Some(value) => Set { value, source: Source::Explicit },
                     None => Set { value: base.$f, source: from },
-                }),+ },
+                },)+ review_rounds: match c.review_rounds {
+                    Some(value) => Set { value, source: Source::Explicit },
+                    None => Set { value: base.review_rounds, source: from },
+                } },
             }
         }
     };

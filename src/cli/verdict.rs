@@ -225,7 +225,10 @@ fn apply(app: &App, id: u64) -> CmdResult {
 /// `.bosun/bosun.toml` on the default branch (as signed keys and owners), and whether the PR the
 /// comment sits on targets it. Defaults when missing or unparsable (fail closed: no bots, no
 /// autonomous mode).
-fn trusted_config(gh: &dyn Github, issue_url: &str) -> Result<(Config, bool), BosunError> {
+pub(crate) fn trusted_config(
+    gh: &dyn Github,
+    issue_url: &str,
+) -> Result<(Config, bool), BosunError> {
     let branch = default_branch(gh)?;
     let pr = issue_url.rsplit('/').next().and_then(|n| n.parse().ok());
     let pull = pr.map(|n| gh.get_pull(n)).transpose()?.flatten();
@@ -282,7 +285,11 @@ fn fix_task(gh: &dyn Github, v: &Verdict) -> Result<u64, BosunError> {
 /// A review of a PR with several chunks must list every chunk (1-based, as in the pack).
 /// Only an approval needs it: a request-changes verdict never turns green, and may stop at the
 /// first blocker.
-fn require_all_chunks(gh: &dyn Github, repo: &str, verdict: &Verdict) -> Result<(), BosunError> {
+pub(crate) fn require_all_chunks(
+    gh: &dyn Github,
+    repo: &str,
+    verdict: &Verdict,
+) -> Result<(), BosunError> {
     if verdict.verdict != "approve" {
         return Ok(());
     }
