@@ -25,7 +25,7 @@ use crate::core::risk::{
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
-use crate::core::verdict::{Verdict, comment_json, effective};
+use crate::core::verdict::{Verdict, bot_verdict_json, comment_json, effective};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -1249,7 +1249,13 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
     let newer = |after: u64| {
         let mut comments = gh.list_comments(pull.number).ok()?;
         comments.retain(|c| {
-            let v = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok());
+            // As `verdict apply` reads it: a Bot's marker-less ```json verdict counts too.
+            let text = comment_json(&c.body).or_else(|| {
+                (c.user_type == "Bot")
+                    .then(|| bot_verdict_json(&c.body))
+                    .flatten()
+            });
+            let v = text.and_then(|t| Verdict::parse(t).ok());
             c.id > after && v.is_some_and(|v| v.head_sha == head && v.pr == pull.number)
         });
         comments.sort_unstable_by_key(|c| std::cmp::Reverse(c.id));
@@ -1279,11 +1285,10 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
         if rounds == REAPPLY_ROUNDS {
             return withdraw("newer verdicts kept racing it");
         }
-        let text = comment_json(&c.body).unwrap_or_default();
-        let applied = match neutral_refusal(gh, c, text) {
+        let applied = match neutral_refusal(gh, c) {
             Ok((Some(_), ..)) => None,
-            Ok((None, ..)) => {
-                let v = Verdict::parse(text).ok();
+            Ok((None, text, ..)) => {
+                let v = text.and_then(|t| Verdict::parse(t).ok());
                 if !v.is_some_and(|v| effective(&v).approve && !v.escalate_risk) {
                     if rounds == 0 {
                         return None; // verdict.yml owns red statuses and task moves
