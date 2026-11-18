@@ -65,7 +65,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let gh = app.gh.as_ref();
     let (pr, head) = (pull.number, pull.head_sha.clone());
     let rerun = format!("bosun pr {n} --ready");
-    let gates = super::pr::check_local_gates(app, &rerun, &pull).map_err(|mut e| {
+    super::pr::check_local_gates(app, &rerun, &pull).map_err(|mut e| {
         if e.data
             .as_ref()
             .is_some_and(|d| d.get("missing_gates").is_some())
@@ -74,6 +74,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
         }
         e
     })?;
+    let gates = super::stamps::ready_gates(&app.ctx.dir)?;
     let mut data = json!({"pr": pr, "head_sha": head, "created": false, "auto_merge": false, "draft": pull.draft, "stamps": gates});
     let with = |e: BosunError, data: &Value| {
         let mut d = data.clone();

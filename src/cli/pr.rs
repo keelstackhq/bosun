@@ -299,11 +299,7 @@ fn touch_check(
 
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
-pub(crate) fn check_local_gates(
-    app: &App,
-    rerun: &str,
-    pull: &Pull,
-) -> Result<Vec<String>, BosunError> {
+pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(), BosunError> {
     let (n, dir) = (pull.number, app.ctx.dir.as_path());
     let local = stamps::head_sha(dir).ok_or_else(|| {
         BosunError::error(
@@ -331,13 +327,12 @@ pub(crate) fn check_local_gates(
             "run bosun inside the repo checkout",
         )
     })?;
-    let all = stamps::ready_gates(dir)?;
-    let missing: Vec<String> = (all.iter())
+    let missing: Vec<String> = stamps::ready_gates(dir)?
+        .into_iter()
         .filter(|g| !stamps::has(dir, &tree, g))
-        .cloned()
         .collect();
     if missing.is_empty() {
-        return Ok(all);
+        return Ok(());
     }
     Err(BosunError::error(
         format!(

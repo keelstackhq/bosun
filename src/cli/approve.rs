@@ -197,13 +197,22 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
             Readiness::Ready(_) if hold(gh, &p, &mut board)? => {}
-            Readiness::Ready(risk) => {
-                let verdict = (statuses.iter())
+            Readiness::Ready(risk) => board.ready.push(Ready {
+                verdict: (statuses.iter())
                     .find(|s| s.context == "review-verdict" && s.creator == TRUSTED_CREATOR)
                     .map(|s| s.description.clone())
-                    .unwrap_or_default();
-                board.ready.push(ready_of(gh, p, risk, verdict)?);
-            }
+                    .unwrap_or_default(),
+                pr: p.number,
+                title: p.title.clone(),
+                files: gh
+                    .compare_files(&p.base_sha, &p.head_sha)?
+                    .into_iter()
+                    .map(|f| f.filename)
+                    .collect(),
+                head_sha: p.head_sha,
+                base_sha: p.base_sha,
+                risk,
+            }),
         }
     }
     Ok(board)
