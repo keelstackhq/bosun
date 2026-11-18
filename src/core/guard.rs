@@ -563,12 +563,13 @@ fn merge_words(command: &str) -> Vec<String> {
         .collect()
 }
 
-/// D-019: `bosun merge` judges the caller from its own environment, so a command that runs bosun
-/// to merge and also exports, unsets, declares or assigns `BOSUN_*` or `CLAUDE_CODE_CHILD_SESSION`
-/// anywhere in it (a subshell, an earlier statement, `set -a`) is refused. The bosun word may be
-/// hidden in a variable or substitution (`b=bosun; $b merge 1`, `$(which bosun) merge 1`).
-/// `${!name}` indirect expansion counts as tamper too. Best effort: a file that is sourced, or a
-/// name built at run time by other means, is missed.
+/// D-019: `bosun merge` judges the caller from its own environment (`BOSUN_*`,
+/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command that runs bosun to
+/// merge may not touch the environment at all, whatever names it uses (they can be built from
+/// pieces): no export, unset, declare, typeset, readonly, env, eval, source, `.`, local,
+/// `set -a`, and no `NAME=` assignment. The bosun word may be hidden in a variable or
+/// substitution (`b=bosun; $b merge 1`). `${!name}` indirect expansion counts too. Best effort
+/// against a confused worker, not a liar: a file that is run by other means is missed.
 fn merge_env_tamper(command: &str) -> Option<String> {
     let words = merge_words(command);
     let runs_bosun = words
@@ -577,17 +578,20 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     if !runs_bosun || !words.iter().any(|w| w == "merge") {
         return None;
     }
-    let names_identity =
-        |w: &str| w.starts_with("BOSUN_") || w.contains("CLAUDE_CODE_CHILD_SESSION");
     let verbs = [
-        "export", "unset", "declare", "typeset", "env", "set", "readonly",
+        "export", "unset", "declare", "typeset", "env", "readonly", "eval", "source", ".", "local",
     ];
-    let assigns = words.iter().any(|w| names_identity(w) && w.contains('='));
-    let verb_names = words.iter().any(|w| verbs.contains(&w.as_str()))
-        && words.iter().any(|w| names_identity(w));
-    let set_a = words
-        .windows(2)
-        .any(|p| p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"));
+    let touches_env = words.iter().any(|w| {
+        verbs.contains(&w.as_str())
+            || w.split_once('=').is_some_and(|(n, _)| {
+                n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+    });
+    let set_a = words.windows(2).any(|p| {
+        (p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"))
+            || (p[0] == "printf" && p[1] == "-v")
+    });
     // The command word is a variable or substitution: it may be bosun in disguise.
     let indirect = shell_words(command).split(|w| w == SEP).any(|seg| {
         seg.iter().any(|w| w == "merge")
@@ -599,10 +603,10 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     // `${!name}` expands the variable `name` points to: the identity variable can be named at
     // run time (`n=BOSUN_SESSION; export ${!n}=x`).
     let by_name = command.contains("${!");
-    (assigns || verb_names || set_a || indirect || by_name).then(|| {
-        "a command that runs `bosun merge` may not set, export or unset BOSUN_* or \
-         CLAUDE_CODE_CHILD_SESSION: the merge checks the caller's own identity (D-019); run \
-         `bosun merge <pr>` bare"
+    (touches_env || set_a || indirect || by_name).then(|| {
+        "a command that runs `bosun merge` may not change the environment (export, unset, \
+         declare, env, eval, source, NAME=...): the merge checks the caller's own identity \
+         (D-019); run `bosun merge <pr>` bare"
             .to_string()
     })
 }
@@ -7324,6 +7328,19 @@ mod tests {
             "set -a; bosun merge 1",
             "n=BOSUN_SESSION; export ${!n}=x; bosun merge 1",
             "echo ${!n}; bosun merge 1",
+            "x=CLAUDE_CODE; unset ${x}_CHILD_SESSION; bosun merge 1",
+            "x=BOSUN; export ${x}_SESSION=o; bosun merge 1",
+            "printf -v ${x}_SESSION_ID o; bosun merge 1",
+            "declare -x CLAUDE_CODE_REMOTE_SESSION_ID=o; bosun merge 1",
+            "readonly BOSUN_SESSION=o; bosun merge 1",
+            "local BOSUN_SESSION=o; bosun merge 1",
+            "env -u CLAUDE_CODE_CHILD_SESSION bosun merge 1",
+            "eval 'unset CLAUDE_CODE_CHILD_SESSION'; bosun merge 1",
+            "source ./e.sh; bosun merge 1",
+            ". ./e.sh; bosun merge 1",
+            "CLAUDE_CODE_REMOTE_SESSION_ID=o bosun merge 1",
+            "n=1 bosun merge 1",
+            "bash -c 'x=1; bosun merge 1'",
         ] {
             assert!(hit(c), "{c}");
         }
