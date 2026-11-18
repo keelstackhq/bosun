@@ -568,7 +568,7 @@ fn merge_words(command: &str) -> Vec<String> {
 /// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command that runs bosun to
 /// merge may not touch the environment at all, whatever names it uses (they can be built from
 /// pieces): no export, unset, declare, typeset, readonly, env, eval, source, `.`, local,
-/// `set -a`, and no `NAME=` assignment. The bosun word may be hidden in a variable or
+/// read, mapfile, readarray, getopts, let, arithmetic commands, `set -a`, and no `NAME=` assignment. The bosun word may be hidden in a variable or
 /// substitution (`b=bosun; $b merge 1`). `${!name}` indirect expansion counts too. Best effort
 /// against a confused worker, not a liar: a file that is run by other means is missed.
 fn merge_env_tamper(command: &str) -> Option<String> {
@@ -580,7 +580,20 @@ fn merge_env_tamper(command: &str) -> Option<String> {
         return None;
     }
     let verbs = [
-        "export", "unset", "declare", "typeset", "env", "readonly", "eval", "source", "local",
+        "export",
+        "unset",
+        "declare",
+        "typeset",
+        "env",
+        "readonly",
+        "eval",
+        "source",
+        "local",
+        "read",
+        "mapfile",
+        "readarray",
+        "getopts",
+        "let",
     ];
     let touches_env = words.iter().any(|w| {
         verbs.contains(&w.as_str())
@@ -608,7 +621,8 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     // `${!name}` expands the variable `name` points to: the identity variable can be named at
     // run time (`n=BOSUN_SESSION; export ${!n}=x`).
     let by_name = command.contains("${!");
-    (touches_env || set_a || indirect || by_name).then(|| {
+    // an arithmetic command assigns too
+    (touches_env || set_a || indirect || by_name || command.contains("((")).then(|| {
         "a command that runs `bosun merge` may not change the environment (export, unset, \
          declare, env, eval, source, NAME=...): the merge checks the caller's own identity \
          (D-019); run `bosun merge <pr>` bare"
@@ -7331,6 +7345,12 @@ mod tests {
             "CLAUDE_CODE_REMOTE_SESSION_ID=o bosun merge 1",
             "n=1 bosun merge 1",
             "bash -c 'x=1; bosun merge 1'",
+            "read CLAUDE_CODE_CHILD_SESSION <<< 0; bosun merge 1",
+            "mapfile BOSUN_SESSION <<< x; bosun merge 1",
+            "readarray -t BOSUN_SESSION < f; bosun merge 1",
+            "getopts a BOSUN_SESSION; bosun merge 1",
+            "let x++; bosun merge 1",
+            "(( x = 1 )); bosun merge 1",
         ] {
             assert!(hit(c), "{c}");
         }
