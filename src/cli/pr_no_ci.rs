@@ -24,6 +24,12 @@ pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
         .unwrap_or_default())
 }
 
+/// The CI provider of the repo: its config on the default branch, never the PR's base or head
+/// (a PR cannot pick its own provider, and a retargeted base cannot either).
+pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
+    provider_at(gh, &crate::app::default_ref(gh)?)
+}
+
 /// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
@@ -39,7 +45,7 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let models = review_models(gh, &pull.base_sha)?;
     let head = &pull.head_sha;
     let found = autonomous_clean(&comments, head, &excluded, models.as_deref());
-    if !found.is_empty() || provider_at(gh, &pull.base_sha)? != CiProvider::None {
+    if !found.is_empty() || provider_default(gh)? != CiProvider::None {
         return Ok(found);
     }
     let mut kept = Vec::new();
