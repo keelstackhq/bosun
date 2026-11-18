@@ -1,0 +1,1 @@
+- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults, spec sections match the ported behaviour (D-018, D-019).

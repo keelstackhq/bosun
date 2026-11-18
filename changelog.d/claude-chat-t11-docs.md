@@ -1,0 +1,1 @@
+- Chat approval docs: full `approve <pr>@<head> --chat --question <id>` form, keys known from 0.21.0, user-scope hooks, `bosun merge` without CI.

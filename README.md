@@ -57,7 +57,7 @@ No CI, no key, no approvers file. The owner answers one chat form per gated PR (
    gate on the exact head). With CI, auto-merge does it.
 
 Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. The key is known
-from release 0.12.0: pin that release first (the setup PR that moves `.bosun/version`), then set
+from release 0.21.0: pin that release first (the setup PR that moves `.bosun/version`), then set
 the key in a later PR; an older pin rejects it.
 
 ## For agents

@@ -1,1 +1,0 @@
-- Chat approval T11 docs landed (README, adopt guide, AGENTS.md, defaults, spec §4/§8).
