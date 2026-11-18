@@ -70,11 +70,10 @@ than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post
 a child session hands `next` to it.
 The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
 `.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
-`<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at}`; head read from
-`head <short> = <full>` before the marker). Only a line's trailing `[bosun:<id>]` counts, matched exactly (case-sensitive): a look-alike in a title, or anything after the marker, is no marker and stores nothing. A picked `Approve #<pr> <short>` stores
+`<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at, session_id, tool_use_id}`, the last two from the hook input; head read from the `head <short> = <full>)` that ends the line before the marker, as `approve --list` writes it, so no title or verdict text can swap it; the PR number is plain digits, no sign or leading zero). Answers come from `tool_response.answers` only: `tool_input.answers` is written by the model and never read. A write drops entries older than 14 days and entries for another head of a stored PR (tmp file + rename). The file is a local record, not proof (trust option A: it stops confused workers, not liars): the pre-tool-use hook denies edit tools on it and Bash commands that name `answers.json` beside `bosun` or run `bosun hook post-tool-use`; `approve --chat` (T5) must also see the same session as the answer's `session_id`. Only a line's trailing `[bosun:<id>]` counts, matched exactly (case-sensitive): a look-alike in a title, or anything after the marker, is no marker and stores nothing. A picked `Approve #<pr> <short>` stores
 `approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
 wins; multi-select with Hold and Approve stores a hold and approves nothing); an unpicked or unknown label (matched exactly) stores nothing. It never denies and prints nothing. `--list` moves a PR
-held at its current head to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
+whose newest answer (by `at`; a hold wins a tie) at its current head is a hold to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
 head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head.
 This is the per-PR form; the daily digest below is the batch form
 and reads only `data`.

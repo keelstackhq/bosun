@@ -40,19 +40,20 @@ pub fn ask(repo: &str, item: &Item, unix: i64) -> Value {
     })
 }
 
-/// `acme/widget#12 `title` (risk R-gov; head abc1234 = <full>; verdict: approved)`.
+/// `acme/widget#12 `title` (risk R-gov; verdict: approved; head abc1234 = <full>)`. The head ends the
+/// line so the PostToolUse hook reads it from a place no title or verdict can reach.
 fn line(repo: &str, item: &Item) -> String {
     let risk = match item.risk {
         [] => "none named".to_string(),
         r => shown(&r.join(", "), TITLE_MAX),
     };
     format!(
-        "{repo}#{} {} (risk {risk}; head {} = {}; verdict: {})",
+        "{repo}#{} {} (risk {risk}; verdict: {}; head {} = {})",
         item.pr,
         shown(item.title, TITLE_MAX),
+        shown(item.verdict, VERDICT_MAX),
         short(item.head),
         item.head,
-        shown(item.verdict, VERDICT_MAX),
     )
 }
 

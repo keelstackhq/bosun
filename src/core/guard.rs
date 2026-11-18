@@ -435,6 +435,31 @@ pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
     prereqs_lock_for(tool, input, false)
 }
 
+/// Answers-lock (spec 14): the owner's stored answers (`<git dir>/bosun/answers.json`) are written
+/// by the PostToolUse hook only. Refuses an edit tool on that file and a Bash command that names
+/// `answers.json` beside `bosun`, or runs `bosun hook post-tool-use`. A local record, not proof:
+/// this stops confused workers, not liars (a command can hide the name).
+pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
+    let hit = match tool {
+        "Bash" => {
+            let c = input.get("command").and_then(Value::as_str).unwrap_or("");
+            let words: Vec<&str> = c.split_whitespace().collect();
+            let hook = words
+                .windows(3)
+                .any(|w| w[0].ends_with("bosun") && w[1] == "hook" && w[2] == "post-tool-use");
+            hook || (c.contains("answers.json") && c.contains("bosun"))
+        }
+        _ => edited_path(tool, input)
+            .is_some_and(|p| p.replace('\\', "/").ends_with("bosun/answers.json")),
+    };
+    hit.then(|| {
+        "the owner's answers file is written only by the PostToolUse hook for AskUserQuestion; \
+         do not edit it or run the hook by hand. Ask the owner with `bosun approve --list` \
+         and let the answer arrive through the tool"
+            .to_string()
+    })
+}
+
 /// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
 /// session, spec §4): the checklist and epic markers stay refused.
 pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<String> {
@@ -7071,5 +7096,16 @@ mod tests {
         assert!(why.contains("re-claim with valid globs"), "{why}");
         let only = [own(6, "me", &["src/[a"])];
         assert!(edit_lock("src/[a", true, &only, "me").is_some());
+    }
+
+    #[test]
+    fn answers_lock_covers_edits_and_the_hook_command() {
+        let edit = json!({"file_path": "/r/.git/bosun/answers.json"});
+        assert!(answers_lock("Write", &edit).is_some());
+        assert!(answers_lock("Edit", &json!({"file_path": "/r/src/answers.json"})).is_none());
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c}));
+        assert!(bash("cat x > .git/bosun/answers.json").is_some());
+        assert!(bash("bosun  hook post-tool-use < x").is_some());
+        assert!(bash("cargo test").is_none());
     }
 }

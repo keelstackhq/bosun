@@ -36,7 +36,8 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
 
 /// The marked PRs of `text`: `(question_id, pr, short, full head)`, one per line. Only a line's
 /// trailing marker counts, matched exactly (case-sensitive), so a look-alike inside a title is
-/// no marker. The full head is read from the last `head <short> = <full>` before the marker.
+/// no marker. The full head is the one that ends the line before the marker, as bosun writes it
+/// (`...; head <short> = <full>)? [bosun:<id>]`), so text earlier in the line cannot swap it.
 fn markers(text: &str) -> Vec<(String, u64, String, String)> {
     text.lines()
         .filter_map(|line| {
@@ -60,19 +61,23 @@ fn marker(before: &str, id: &str) -> Option<(String, u64, String, String)> {
     if !ok {
         return None;
     }
+    if pr.starts_with('0') || !pr.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
     let pr: u64 = pr.parse().ok()?;
-    let key = format!("head {short} = ");
-    let at = before.rfind(&key)? + key.len();
-    let full = before.get(at..at + 40)?;
-    (hex(full) && full.starts_with(short))
+    let b = before.trim_end();
+    let b = b.strip_suffix('?').unwrap_or(b).strip_suffix(')')?;
+    let (rest, full) = b.split_at(b.len().checked_sub(40)?);
+    (rest.ends_with(&format!("head {short} = ")) && hex(full) && full.starts_with(short))
         .then(|| (id.to_string(), pr, short.to_string(), full.to_string()))
 }
 
-/// The labels picked for `question`: `tool_response.answers`, else `tool_input.answers`. A
-/// multi-select answer is one `, `-joined string (or an array).
+/// The labels picked for `question`: `tool_response.answers` only (the tool's result; the model
+/// writes `tool_input`, so its `answers` are never read). A multi-select answer is one
+/// `, `-joined string (or an array).
 fn picked(input: &Value, question: &str) -> Vec<String> {
-    let from = |root: &str| input.get(root)?.get("answers")?.get(question).cloned();
-    match from("tool_response").or_else(|| from("tool_input")) {
+    let answers = input.get("tool_response").and_then(|r| r.get("answers"));
+    match answers.and_then(|a| a.get(question)).cloned() {
         Some(Value::String(s)) => s.split(", ").map(|l| l.trim().to_string()).collect(),
         Some(Value::Array(a)) => (a.iter().filter_map(Value::as_str))
             .map(|l| l.trim().to_string())
@@ -86,6 +91,13 @@ pub fn parse(input: &Value, at: &str) -> Vec<(String, Answer)> {
     let questions = (input.get("tool_input"))
         .and_then(|t| t.get("questions"))
         .and_then(Value::as_array);
+    let field = |k: &str| {
+        input
+            .get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
     let mut out = Vec::new();
     for q in questions.into_iter().flatten() {
         let Some(text) = q.get("question").and_then(Value::as_str) else {
@@ -111,6 +123,8 @@ pub fn parse(input: &Value, at: &str) -> Vec<(String, Answer)> {
                 pr,
                 head,
                 at: at.into(),
+                session_id: field("session_id"),
+                tool_use_id: field("tool_use_id"),
             };
             out.push((id, a));
         }
@@ -126,19 +140,19 @@ mod tests {
 
     #[test]
     fn marker_needs_matching_full_head() {
-        let ok = format!("x (head abcdef1 = {H}; v) [bosun:12-abcdef1-9]");
+        let ok = format!("x (v; head abcdef1 = {H}) [bosun:12-abcdef1-9]");
         assert_eq!(markers(&ok).len(), 1);
-        let wrong = format!("x (head 1111111 = {H}; v) [bosun:12-1111111-9]");
+        let wrong = format!("x (v; head 1111111 = {H}) [bosun:12-1111111-9]");
         assert!(markers(&wrong).is_empty());
         assert!(markers("x [bosun:12-abcdef1-9]").is_empty());
-        assert!(markers(&format!("head abcdef1 = {H} [bosun:x-abcdef1-9]")).is_empty());
-        assert!(markers(&format!("head abcdef1 = {H} [bosun:1-abcdef1-9-2]")).is_empty());
+        assert!(markers(&format!("(head abcdef1 = {H}) [bosun:x-abcdef1-9]")).is_empty());
+        assert!(markers(&format!("(head abcdef1 = {H}) [bosun:1-abcdef1-9-2]")).is_empty());
     }
 
     #[test]
     fn only_the_exact_trailing_marker_counts() {
         let m = "[bosun:12-abcdef1-9]";
-        let pre = format!("head abcdef1 = {H}");
+        let pre = format!("(head abcdef1 = {H})");
         assert!(markers(&format!("{pre} [BOSUN:12-abcdef1-9]")).is_empty());
         assert!(markers(&format!("{pre} \u{ff3b}bosun:12-abcdef1-9]")).is_empty());
         assert!(markers(&format!("{pre} {m} tail")).is_empty());
@@ -152,7 +166,7 @@ mod tests {
 
     #[test]
     fn hold_wins_over_approve_in_multi_select() {
-        let text = format!("Approve a/b#12 t (head abcdef1 = {H}; v)? [bosun:12-abcdef1-9]");
+        let text = format!("Approve a/b#12 t (v; head abcdef1 = {H})? [bosun:12-abcdef1-9]");
         let input = serde_json::json!({"tool_input": {"questions": [{"question": text}]},
             "tool_response": {"answers": {text.clone(): "Approve #12 abcdef1, Hold"}}});
         let got = parse(&input, "t");
@@ -168,7 +182,7 @@ mod tests {
 
     #[test]
     fn other_answer_stores_nothing() {
-        let text = format!("Approve a/b#12 t (head abcdef1 = {H}; v)? [bosun:12-abcdef1-9]");
+        let text = format!("Approve a/b#12 t (v; head abcdef1 = {H})? [bosun:12-abcdef1-9]");
         let input = serde_json::json!({"tool_input": {"questions": [{"question": text}]},
             "tool_response": {"answers": {text.clone(): "maybe later"}}});
         assert!(parse(&input, "t").is_empty());
