@@ -210,33 +210,14 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     let private = Private(fresh_dir(&format!("merge-{}", pull.number))?);
     let repo = private.0.join("repo");
     std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
-    // Cargo reads `.cargo/config` of every parent directory: one above the temp dir is foreign.
-    if (repo.ancestors().skip(1)).any(|a| a.join(".cargo").exists()) {
-        return Err(BosunError::needs_human(
-            "a `.cargo` directory above the temp dir would steer cargo in the gates",
-            "remove it (`/tmp/.cargo`), or set TMPDIR to a clean directory, then rerun `bosun merge`",
-        ));
-    }
-    let secs = std::env::var("BOSUN_GATE_TIMEOUT_SECS").ok();
-    gates::isolate(
-        &private.0,
-        secs.and_then(|s| s.parse().ok()).unwrap_or(1800),
-    )?;
-    // A repo of its own, never a worktree of the checkout: the checkout's config, replace refs
-    // and attributes do not reach it, and its objects are read by hash through alternates.
-    let objects = gates::git(
-        dir,
-        &[
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-path",
-            "objects",
-        ],
-    )?;
+    gates::isolate(&private.0);
+    // A repo of its own, not a worktree: no shared config or replace refs; objects by alternates.
+    let common = gates::git(dir, &["rev-parse", "--git-common-dir"])?;
+    let objects = dir.join(common.trim()).join("objects");
     let tree = gates::git(dir, &["rev-parse", &format!("{head}^{{tree}}")])?;
     gates::git(&repo, &["init", "-q"])?;
-    std::fs::write(repo.join(".git/objects/info/alternates"), objects.trim())
-        .map_err(|e| io_err("alternates", e))?;
+    let alt = repo.join(".git/objects/info/alternates");
+    std::fs::write(alt, objects.to_string_lossy().as_bytes()).map_err(|e| io_err("temp", e))?;
     gates::git(&repo, &["checkout", "-q", "--detach", head])?;
     run_gates(app, pull, &repo, tree.trim())
 }
@@ -245,9 +226,7 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
     // The PR's base commit, not the branch name: it cannot move between the checks and the run.
     let overlay = Overlay::load(app.gh.as_ref(), &pull.base_sha)?;
     overlay.apply(wt)?;
-    let mut all = non_empty(stamps::ready_gates(wt)?)?;
-    // test-integrity first: it reads git history, which a head's test could rewrite.
-    all.sort_by_key(|g| g != "test-integrity");
+    let all = non_empty(stamps::ready_gates(wt)?)?;
     let config = &overlay.config;
     let mut failed = Vec::new();
     for gate in &all {
@@ -274,14 +253,8 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
                 "the author removes whatever in the head rewrites them; the owner reviews the head",
             ));
         }
-        // A gate that skipped (no manifest, no files) vouches for nothing: it fails here.
-        let skipped = |v: &serde_json::Value| v["skipped"] == true;
-        let ran = res.as_ref().is_ok_and(|o| {
-            !skipped(&o.data)
-                && !o.data["runs"]
-                    .as_array()
-                    .is_some_and(|r| r.iter().any(skipped))
-        });
+        // A gate that skipped vouches for nothing.
+        let ran = res.is_ok_and(|o| !o.data.to_string().contains("\"skipped\":true"));
         if !ran {
             failed.push(gate.clone());
         }

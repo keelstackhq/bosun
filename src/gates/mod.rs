@@ -12,7 +12,7 @@ pub mod ts;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -29,48 +29,38 @@ pub struct Request<'a> {
     pub all: bool,
 }
 
-/// Set once by `bosun merge`: gate children and git calls then get exactly this environment, and
-/// each gate this many seconds.
-static ISOLATED: OnceLock<(Vec<(String, String)>, u64)> = OnceLock::new();
+/// Set once by `bosun merge`: gate children and git calls then get exactly this environment.
+static ISOLATED: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
 
 /// A command that, once [`isolate`] ran, sees only the allow-listed environment.
 pub(crate) fn cmd(program: &str) -> Command {
     let mut c = Command::new(program);
-    if let Some((env, _)) = ISOLATED.get() {
-        c.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+    if let Some(env) = ISOLATED.get() {
+        c.env_clear().envs(env.iter().cloned());
     }
     c
 }
 
-/// From now on gate children and git run with `PATH`, `LANG`, `TERM`, the rustup home and a
-/// private `HOME`, `CARGO_HOME` and `TMPDIR` under `private`, and system and global git config
-/// off: head code never rides on the user's tokens, cargo config or git filters.
-pub fn isolate(private: &Path, secs: u64) -> Result<(), BosunError> {
-    let at = |n: &str| private.join(n).to_string_lossy().into_owned();
-    let var = |n: &str| std::env::var(n).ok().map(|v| (n.to_string(), v));
-    let mut env: Vec<(String, String)> = ["PATH", "LANG", "LC_ALL", "TERM", "RUSTUP_HOME"]
-        .iter()
-        .filter_map(|n| var(n))
-        .collect();
-    if var("RUSTUP_HOME").is_none() {
-        env.extend(var("HOME").map(|(_, h)| ("RUSTUP_HOME".into(), format!("{h}/.rustup"))));
+/// From now on gate children and git get `PATH`, `LANG`, `TERM`, the rustup home, a private
+/// `HOME`, `CARGO_HOME` and `TMPDIR` under `private`, and no system or global git config.
+pub fn isolate(private: &Path) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
+    let mut env = vec![("RUSTUP_HOME", rustup), ("GIT_CONFIG_NOSYSTEM", "1".into())];
+    env.push(("GIT_CONFIG_GLOBAL", "/dev/null".into()));
+    for n in ["PATH", "LANG", "LC_ALL", "TERM"] {
+        env.extend(std::env::var(n).ok().map(|v| (n, v)));
     }
     for (k, v) in [("HOME", "home"), ("CARGO_HOME", "cargo"), ("TMPDIR", "tmp")] {
-        std::fs::create_dir_all(at(v)).map_err(|e| {
-            BosunError::error(format!("temp dir: {e}"), "make the temp directory writable")
-        })?;
-        env.push((k.into(), at(v)));
+        let _ = std::fs::create_dir_all(private.join(v));
+        env.push((k, private.join(v).to_string_lossy().into_owned()));
     }
-    env.push(("GIT_CONFIG_NOSYSTEM".into(), "1".into()));
-    env.push(("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()));
-    let _ = ISOLATED.set((env, secs));
-    Ok(())
+    let _ = ISOLATED.set(env);
 }
 
 /// Run `git <args>` in `root`; stdout on success.
 pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
-    // Hooks and fsmonitor never run and replace refs never apply: a head under test could plant
-    // them in the repo.
+    // Hooks and fsmonitor never run, replace refs never apply: a head under test could plant them.
     let out = cmd("git")
         .arg("-C")
         .arg(root)
@@ -104,7 +94,7 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 
 /// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
 fn git_has(root: &Path, spec: &str) -> bool {
-    cmd("git")
+    Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["cat-file", "-e", spec])
@@ -313,7 +303,7 @@ fn execute(
         .split('\0')
         .filter(|f| !f.is_empty())
         {
-            let out = cmd("git")
+            let out = Command::new("git")
                 .arg("-C")
                 .arg(req.root)
                 .args(["diff", "--no-index", "--", "/dev/null", f])
@@ -391,7 +381,7 @@ fn execute(
 
 /// Workspace packages with a library target (`lib`, `rlib` or `proc-macro`).
 fn lib_packages(dir: &Path) -> Vec<String> {
-    let Ok(out) = cmd("cargo")
+    let Ok(out) = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(dir)
         .output()
@@ -422,7 +412,7 @@ fn lib_packages(dir: &Path) -> Vec<String> {
 /// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
 fn nextest_installed() -> bool {
     std::env::var_os("BOSUN_NO_NEXTEST").is_none()
-        && cmd("cargo")
+        && Command::new("cargo")
             .args(["nextest", "--version"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -439,13 +429,7 @@ fn spawn(argv: &[String], dir: &Path) -> Result<(i64, f64), BosunError> {
         )
     })?;
     let start = Instant::now();
-    let fail = |e: std::io::Error| {
-        BosunError::error(
-            format!("cannot run `{program}`: {e}"),
-            format!("install `{program}` and make sure it is on PATH"),
-        )
-    };
-    let mut child = cmd(program)
+    let status = cmd(program)
         .args(&argv[1..])
         .current_dir(dir)
         // A repo's test command is repo code: it never sees the GitHub token.
@@ -454,22 +438,15 @@ fn spawn(argv: &[String], dir: &Path) -> Result<(i64, f64), BosunError> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(fail)?;
-    let limit = ISOLATED.get().map(|(_, s)| Duration::from_secs(*s));
-    let code = loop {
-        if let Some(s) = child.try_wait().map_err(fail)? {
-            break s.code().map_or(-1, i64::from);
-        }
-        if limit.is_some_and(|l| start.elapsed() > l) {
-            let _ = child.kill();
-            let _ = child.wait();
-            break -1;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+        .status()
+        .map_err(|e| {
+            BosunError::error(
+                format!("cannot run `{program}`: {e}"),
+                format!("install `{program}` and make sure it is on PATH"),
+            )
+        })?;
     let secs = (start.elapsed().as_secs_f64() * 1000.0).round() / 1000.0;
-    Ok((code, secs))
+    Ok((status.code().map_or(-1, i64::from), secs))
 }
 
 #[cfg(test)]

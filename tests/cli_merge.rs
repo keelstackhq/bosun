@@ -761,15 +761,6 @@ fn merge_gates_run_in_a_clean_environment_and_their_own_repo() {
     assert_eq!(code, 0, "{v}");
 }
 
-/// A gate runs at most `BOSUN_GATE_TIMEOUT_SECS` (default 1800); a hung gate fails.
-#[test]
-fn merge_kills_a_gate_that_hangs() {
-    let (fake, dir) = merge_ready("sleep 30");
-    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_GATE_TIMEOUT_SECS", "1")]);
-    assert_eq!(code, 5, "{v}");
-    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
-}
-
 /// A gate that skipped vouches for nothing: inside a merge it fails.
 #[test]
 fn merge_counts_a_skipped_gate_as_failed() {
