@@ -183,6 +183,9 @@ pub fn tool_rules(
 ) -> Option<String> {
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        if let Some(why) = merge_env_tamper(command) {
+            return Some(why);
+        }
         return bash_rules(command, branch_at, default_branch);
     }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
@@ -519,6 +522,59 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
     hit.then(|| {
         "bosun's markers (owner checklist, task and epic metadata) are written by bosun only \
          (bosun prereqs --post writes the checklist); fix the plan instead"
+            .to_string()
+    })
+}
+
+/// The command with quotes and backslashes removed, split at whitespace and shell separators.
+fn merge_words(command: &str) -> Vec<String> {
+    let plain: String = command
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    plain
+        .split(|c: char| c.is_whitespace() || ";&|()`$<>".contains(c))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// D-019: `bosun merge` judges the caller from its own environment, so a command that runs bosun
+/// to merge and also exports, unsets, declares or assigns `BOSUN_*` or `CLAUDE_CODE_CHILD_SESSION`
+/// anywhere in it (a subshell, an earlier statement, `set -a`) is refused. The bosun word may be
+/// hidden in a variable or substitution (`b=bosun; $b merge 1`, `$(which bosun) merge 1`).
+/// Best effort: a file that is sourced, or a name built at run time, is missed.
+fn merge_env_tamper(command: &str) -> Option<String> {
+    let words = merge_words(command);
+    let runs_bosun = words
+        .iter()
+        .any(|w| base(w) == "bosun" || w.ends_with("=bosun") || w.starts_with("bosun"));
+    if !runs_bosun || !words.iter().any(|w| w == "merge") {
+        return None;
+    }
+    let names_identity =
+        |w: &str| w.starts_with("BOSUN_") || w.contains("CLAUDE_CODE_CHILD_SESSION");
+    let verbs = [
+        "export", "unset", "declare", "typeset", "env", "set", "readonly",
+    ];
+    let assigns = words.iter().any(|w| names_identity(w) && w.contains('='));
+    let verb_names = words.iter().any(|w| verbs.contains(&w.as_str()))
+        && words.iter().any(|w| names_identity(w));
+    let set_a = words
+        .windows(2)
+        .any(|p| p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"));
+    // The command word is a variable or substitution: it may be bosun in disguise.
+    let indirect = shell_words(command).split(|w| w == SEP).any(|seg| {
+        seg.iter().any(|w| w == "merge")
+            && seg
+                .iter()
+                .find(|w| !w.contains('=') || w.starts_with('$'))
+                .is_some_and(|w| w.starts_with('$') || w.starts_with('`'))
+    });
+    (assigns || verb_names || set_a || indirect).then(|| {
+        "a command that runs `bosun merge` may not set, export or unset BOSUN_* or \
+         CLAUDE_CODE_CHILD_SESSION: the merge checks the caller's own identity (D-019); run \
+         `bosun merge <pr>` bare"
             .to_string()
     })
 }
@@ -7194,8 +7250,16 @@ mod tests {
         assert!(bash("bosun hook post-tool-use </tmp/f"));
         assert!(bash("bash -c 'bosun -C . hook post-tool-use'"));
         assert!(bash("eval \"bosun hook post-tool-use\""));
+        // Any command word (variable, substitution, quoted) before `hook post-tool-use`.
+        assert!(bash("\"bosun\" hook post-tool-use"));
+        assert!(bash("b=bosun; $b hook post-tool-use"));
+        assert!(bash("$b hook post-tool-use < f"));
+        assert!(bash("$(which bosun) hook post-tool-use"));
+        assert!(bash("`which bosun` -C . hook post-tool-use"));
+        assert!(bash("${BOSUN:-bosun} hook 'post-tool-use'"));
         // Path tricks.
         assert!(bash("echo x > .git/bosun//answers.json"));
+        assert!(bash("echo x > /r/.git//bosun///answers.json"));
         assert!(bash("echo x > ./.git/bosun/./answers.json"));
         assert!(bash("echo x > .git/bosun/x/../answers.json"));
         assert!(bash("echo x >.git/bosun/answers.json"));
@@ -7207,6 +7271,35 @@ mod tests {
         assert!(edit("/r/.git/bosun/sub/../answers.json"));
         assert!(edit("/r/.git/./bosun/answers.json"));
         assert!(!edit("/r/.git/bosun/other.json"));
+    }
+
+    #[test]
+    fn merge_env_tamper_is_refused_in_every_spelling() {
+        let hit = |c: &str| {
+            tool_rules(
+                "Bash",
+                &json!({"command": c}),
+                &|_| Some("feature".into()),
+                "main",
+            )
+            .is_some()
+        };
+        for c in [
+            "export BOSUN_SESSION=x && bosun merge 1",
+            "unset CLAUDE_CODE_CHILD_SESSION && bosun merge 1",
+            "export BOSUN_ORIGIN=local; bosun merge 1",
+            "(export BOSUN_ORIGIN=local; bosun merge 1)",
+            "b=bosun; $b merge 1",
+            "$(which bosun) merge 1",
+            "declare -x BOSUN_SESSION=x; bosun merge 1",
+            "typeset -x BOSUN_SESSION=x; bosun merge 1",
+            "set -a; bosun merge 1",
+        ] {
+            assert!(hit(c), "{c}");
+        }
+        assert!(!hit("bosun merge 1"));
+        assert!(!hit("BOSUN_NOW=2026-01-01T00:00:00Z bosun status"));
+        assert!(!hit("export FOO=1 && cargo test"));
     }
 
     #[test]

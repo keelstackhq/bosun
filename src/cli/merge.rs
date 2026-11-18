@@ -71,7 +71,7 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
             "reopen it, or name an open PR",
         ));
     }
-    let provider = super::pr_no_ci::provider_at(gh, &pull.base_sha)?;
+    let provider = super::pr_no_ci::provider_default(gh)?;
     let head = pull.head_sha.clone();
     if provider == CiProvider::None {
         check_no_ci(&app, &pull)?;

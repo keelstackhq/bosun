@@ -663,6 +663,7 @@ fn setup_comment_only(ci: Option<&str>) -> FakeGithub {
     join(&fake, "session_orch", "spawned", None, 1);
     if let Some(c) = ci {
         fake.content(".bosun/bosun.toml", "base0000", c);
+        fake.content(".bosun/bosun.toml", "refs/heads/main", c);
     }
     verdict_comment(&fake);
     fake
