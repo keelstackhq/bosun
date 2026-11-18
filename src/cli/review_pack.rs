@@ -46,7 +46,8 @@ it is posted with `bosun verdict comment --from -` (the JSON on stdin) or `--fro
 
 /// Added to the instructions by `bosun review-pack` only (review-ci's pack has no skeleton).
 const SKELETON_NOTE: &str = " Start from `verdict_skeleton`: pr, head_sha and every chunk number \
-are filled in, and its fail-safe values (request-changes, confidence 0) never approve.";
+are filled in; drop from `chunks_reviewed` any chunk you did not review. Its fail-safe values \
+(request-changes, confidence 0) never approve.";
 
 /// Pack fields whose text comes from people or agents (never from the base branch).
 const UNTRUSTED: [&str; 15] = [

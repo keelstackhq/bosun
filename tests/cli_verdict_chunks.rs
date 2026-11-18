@@ -55,7 +55,7 @@ fn a_missing_chunk_refuses_post_and_comment_and_writes_nothing() {
         );
         assert_eq!(
             v["error"]["fix"],
-            "add them to \"chunks_reviewed\": [1, 2, 3] (every chunk of `bosun review-pack 42`; its verdict_skeleton lists them), then post again"
+            "review chunks [2] of `bosun review-pack 42` (its `chunks`), then list every chunk in \"chunks_reviewed\": [1, 2, 3] (its verdict_skeleton has the list) and post again"
         );
         nothing_written(&fake);
     }
