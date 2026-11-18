@@ -3,7 +3,7 @@
 //! HEAD is the PR head, every ready gate is stamped, the ruleset requires the gates. No task state
 //! moves and no queue comment is written. `risk-check` stays a required check, so auto-merge waits
 //! for the owner on R-gov and R-weaken paths. bosun never merges (D13). The paths it may change
-//! are R-gov's (`GOVERNANCE_PATHS`) plus the base's `[approvals] oneoff_allow`.
+//! are R-gov's (`governance_globs`) plus the base's `[approvals] oneoff_allow`.
 
 use std::path::Path;
 
@@ -13,7 +13,7 @@ use super::pr::{check_local_gates, enforced_checks, merge_gates, not_green, upda
 use crate::app::{App, default_branch, is_writer, kill_switch};
 use crate::core::glob::Glob;
 use crate::core::meta::linked_issues_in;
-use crate::core::risk::{Approval, GOVERNANCE_PATHS, matches_globs};
+use crate::core::risk::{Approval, governance_globs, matches_globs};
 use crate::core::touch::plan_tick_file;
 use crate::github::{Pull, enable_auto_merge_any, is_already_clean, is_ccr_refusal, is_unstable};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -86,9 +86,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
     // owner's approval: risk-check judges by the base rules, so a path they miss would merge with
     // no owner (fail closed). Plus the owner's `[approvals] oneoff_allow` on the base; risk-check
     // still asks the owner for any gated one.
-    let builtin: Vec<Glob> = (GOVERNANCE_PATHS.iter())
-        .map(|g| Glob::parse(g).expect("static glob"))
-        .collect();
+    let builtin = governance_globs();
     let rules = super::risk_check::base_rules(gh, &base)?;
     let gov: Vec<Glob> = (rules.rules.iter())
         .filter(|r| r.id == "R-gov" && r.approval == Approval::Owner)

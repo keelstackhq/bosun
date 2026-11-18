@@ -823,32 +823,15 @@ pub fn requirement(matches: &[Match]) -> Approval {
     }
 }
 
-/// The governance paths: R-gov of the built-in rules (a test keeps `risk_default.toml` equal) and
-/// what a task-less PR (`bosun pr --pr N`) may change, so the two never disagree.
-pub const GOVERNANCE_PATHS: [&str; 22] = [
-    ".bosun/**",
-    "governance/**",
-    "CODEOWNERS",
-    "docs/CODEOWNERS",
-    ".github/CODEOWNERS",
-    "**/codeowners",
-    ".claude/**",
-    ".splice/**",
-    "**/hoist.toml",
-    "docs/setup-script.sh",
-    "REVIEW.md",
-    "docs/lessons.toml",
-    "src/core/session_rules.rs",
-    "src/core/session_rules/**",
-    "src/hooks/session_rules.rs",
-    "src/hooks/session_rules/**",
-    ".claude-plugin/**",
-    "docs/agents/**",
-    "**/agents.md",
-    "**/claude.md",
-    "**/claude.local.md",
-    "**/plans/**",
-];
+/// The governance paths: R-gov of the built-in rules, read from them, so `bosun pr --pr N`
+/// and R-gov never disagree.
+pub fn governance_globs() -> Vec<Glob> {
+    let r = Rules::defaults();
+    (r.rules.into_iter())
+        .filter(|r| r.id == "R-gov")
+        .flat_map(|r| r.paths)
+        .collect()
+}
 
 /// Whether `path` matches one of `globs` as a risk rule matches it (any case).
 pub fn matches_globs(globs: &[Glob], path: &str) -> bool {
@@ -2319,14 +2302,6 @@ catalogs:\n  legacy:\n    \"@scope/x\": 1.0.0 # pinned\n";
         let other = "[[owner]]\ngithub = \"a\"\n[[owner]]\nteam = \"else/core\"";
         assert!(parse_owners_in(other, "acme").is_err());
         assert!(parse_owners_in(&other.replace("else", "ACME"), "acme").is_ok());
-    }
-
-    #[test]
-    fn governance_paths_are_the_r_gov_paths_of_the_defaults() {
-        let r = Rules::defaults();
-        let gov = r.rules.iter().find(|r| r.id == "R-gov").unwrap();
-        let got: Vec<&str> = gov.paths.iter().map(Glob::as_str).collect();
-        assert_eq!(got, GOVERNANCE_PATHS);
     }
 
     #[test]
