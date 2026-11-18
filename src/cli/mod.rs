@@ -51,6 +51,7 @@ pub mod release;
 pub mod result;
 pub mod resume;
 pub mod revert;
+pub mod review_loop;
 pub mod review_pack;
 pub mod risk_check;
 pub mod rules;
@@ -131,6 +132,8 @@ pub enum Command {
     TestIntegrity(IntegrityArgs),
     /// Build the input of a review: diff, task, UCs, lessons, REVIEW.md.
     ReviewPack(PrArg),
+    /// The review loop of a PR: rounds counted from verdict comments, and the one next step.
+    ReviewLoop(ReviewLoopArgs),
     /// Verdict commands.
     #[command(subcommand)]
     Verdict(VerdictCmd),
@@ -235,6 +238,7 @@ pub const COMMANDS: &[&str] = &[
     "risk-check",
     "test-integrity",
     "review-pack",
+    "review-loop",
     "verdict",
     "pr",
     "ci-log",
@@ -295,6 +299,7 @@ impl Command {
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
+            Command::ReviewLoop(_) => "review-loop",
             Command::Verdict(VerdictCmd::Post(_)) => "verdict post",
             Command::Verdict(VerdictCmd::Comment(_)) => "verdict comment",
             Command::Verdict(VerdictCmd::Apply(_)) => "verdict apply",
@@ -571,6 +576,19 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct ReviewLoopArgs {
+    /// The PR number.
+    #[arg(required_unless_present = "report")]
+    pub pr: Option<u64>,
+    /// Review rounds before the owner must answer (default: `[mode] review_rounds`, else 5).
+    #[arg(long)]
+    pub max: Option<u32>,
+    /// Report only: the open PRs with a missing, stale, request-changes or escalated verdict.
+    #[arg(long, conflicts_with = "pr")]
+    pub report: bool,
 }
 
 #[derive(Debug, Args)]

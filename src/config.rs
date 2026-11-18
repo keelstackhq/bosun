@@ -531,6 +531,12 @@ impl Config {
                 format!("edit {file}: set [approvals] policy, or remove mode.policy"),
             ));
         }
+        if c.mode.review_rounds == Some(0) {
+            return Err(BosunError::error(
+                format!("{file}: mode.review_rounds must be at least 1"),
+                format!("edit {file}: set review_rounds to 1 or more, or remove it"),
+            ));
+        }
         // The preset fills the policy only when `[approvals]` leaves it unset.
         if c.approvals.policy.is_none() {
             c.approvals.policy = c.mode.name.and_then(crate::core::mode::preset_policy);

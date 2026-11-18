@@ -39,6 +39,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::RiskCheck(a) => cli::risk_check::run(dir, a),
         Command::TestIntegrity(a) => cli::test_integrity::run(dir, a),
         Command::ReviewPack(a) => cli::review_pack::run(dir, a),
+        Command::ReviewLoop(a) => cli::review_loop::run(dir, a),
         Command::Verdict(a) => cli::verdict::run(dir, a),
         Command::Pr(a) => cli::pr::run(dir, a),
         Command::CiLog(a) => cli::ci_log::run(dir, a),
