@@ -113,11 +113,21 @@ key goes only to the token step, the token only to the bosun step. main-health's
   write is one stderr line, never an error (the statuses are the authority); in `checks` it is
   exit 1. `bosun approve --main-open` stays on statuses until T5.
 - Reading the gate's own state: in `checks` mode the newest check run of that name whose `app_id`
-  is `[checks] app_id`, statuses ignored; in `statuses` and `dual` the statuses, as today, since
-  they are the authority until the switch. Readers: risk-check (pending repair, carry), `bosun
+  is `[checks] app_id`, statuses ignored; in `statuses` the statuses. In `dual` the statuses,
+  checked against the poster (a status names no App, so any workflow can post one): each context
+  the App also posted takes the worse of the newest status and the App's newest run (error >
+  failure > pending > success); a context only the App posted counts; other Apps' runs never
+  count. So a forged green status can never outvote the App's red, and a red status still
+  blocks (the ruleset requires the statuses until step 6). `gate_history` puts these judged
+  entries first. Fail closed: when a later run skips the App write (no token) its green status
+  cannot clear an older red or pending App run on the same head; re-run the gate workflow with
+  the token (a status carries no proof of who posted it, so a newer one is never trusted over
+  the App). A token that cannot read check runs (a private repo whose workflow grants no
+  `checks: read`, a 403 that is not a rate limit) reads statuses only, one stderr line; any other error fails the reader. Readers: risk-check (pending repair, carry), `bosun
   approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
   context counts only as a check run of the App and `ci-ok` only from github-actions; in
-  `statuses` and `dual` a status or check run, as today). `Ctx::load` records the trusted App
+  `statuses` a status or check run, as today; the gate contexts of `pr --ready`'s
+  `pending_checks` are read by the same rule: in `dual` the worse of status and App run). `Ctx::load` records the trusted App
   once per process; `gate_statuses` and `gate_history` (`src/github/gate.rs`) give the App's runs
   as statuses (title as the description, an `error:` title as `error`, an open run as `pending`),
   so the readers keep their logic. `bosun pr --auto-merge` reports the gates from them.

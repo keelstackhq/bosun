@@ -1,0 +1,1 @@
+- 2026-11-18 · Verify the gate poster in dual mode · src/github/gate.rs, spec §15 · this PR
