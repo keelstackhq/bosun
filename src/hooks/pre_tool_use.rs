@@ -10,9 +10,8 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, answers_lock, answers_script_lock, bash_writes, child_task_create,
-    config_fetch_risk, edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for,
-    pushes, script_rules, tool_rules,
+    ChildTask, Script, bash_writes, child_task_create, config_fetch_risk, edit_lock, edited_path,
+    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -101,9 +100,6 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
-    if let Some(why) = answers_lock(tool, &tool_input) {
-        return Some(deny(&why));
-    }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
         // A registered child may create a new issue with a task marker for its own epic, and
         // nothing else: not edits, comments, other markers, other repos or the allow and
@@ -131,9 +127,6 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
         let repeat = repeat_lock(&dir, input, &tool_input);
         let read = |p: &str| read_script(&dir, p);
-        if let Some(why) = answers_script_lock(command, &read) {
-            return Some(deny(&why));
-        }
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
         }
