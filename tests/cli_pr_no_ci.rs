@@ -193,11 +193,15 @@ fn ready_no_ci_unsigned_verdict_with_a_forged_session_tag_not_counted() {
 
 /// The gate App's applied verdict record counts without any signature.
 #[test]
-fn ready_no_ci_app_verdict_counted() {
+fn ready_no_ci_app_record_never_counts() {
+    // `github-actions[bot]` is any writer's push workflow; no App record is a verdict without CI.
     let (fake, dir) = setup(false, Some(NO_CI));
     noci::app_verdict(&fake, "session_rev");
     let (code, v) = ready(&fake, dir.path());
-    assert_eq!(code, 0, "{v}");
+    assert_eq!(code, 5, "{v}");
+    // A signed approval still counts beside it.
+    verdict(&fake, "session_rev", "approve");
+    assert_eq!(ready(&fake, dir.path()).0, 0);
 }
 
 /// A signature for another PR or head does not count; the signed text is bound to this PR.

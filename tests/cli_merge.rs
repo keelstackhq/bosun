@@ -502,8 +502,7 @@ fn merge_counts_only_app_or_signed_verdicts() {
     assert_eq!(code, 5, "{v}");
     assert!(merge_puts(&fake).is_empty());
     noci::app_verdict(&fake, "session_rev");
-    let (code, v) = merge(&fake, dir.path());
-    assert_eq!(code, 0, "{v}");
+    assert_eq!(merge(&fake, dir.path()).0, 5);
 }
 
 #[test]

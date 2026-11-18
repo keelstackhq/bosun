@@ -913,7 +913,7 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
     };
     let fix = if autonomous {
         format!(
-            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
+            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`; without CI add `--sign-key <reviewer.pem>`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
             risk::VERDICT_MIN_CONFIDENCE
         )
     } else if unlinked {
@@ -1787,6 +1787,10 @@ pub(crate) fn autonomous_inputs(
     pull: &Pull,
     repo: &str,
 ) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
+    // Without CI a `github-actions[bot]` record is any writer's push workflow (spec section 8).
+    if super::pr_no_ci::provider_default(gh)? == crate::config::CiProvider::None {
+        return Ok(None);
+    }
     let mut task = false;
     for i in closing_issues_in(&pull.body, Some(repo)) {
         let open = |x: &Issue| x.state == "open" && !x.pull_request && task_meta(x).is_some();

@@ -168,7 +168,10 @@ fn summary_hint(gh: &dyn Github, p: &Pull) -> Result<Option<String>> {
 fn no_ci_readiness(gh: &dyn Github, ctx: &Ctx, p: &Pull) -> Result<Readiness> {
     Ok(match crate::cli::risk_check::evaluate_with(gh, ctx, p) {
         Ok(_) => Readiness::NotWaiting,
-        Err(e) if e.exit == crate::output::Exit::NeedsHuman => {
+        Err(e)
+            if e.exit == crate::output::Exit::NeedsHuman
+                && e.data.as_ref().is_some_and(|d| d["level"] == "high") =>
+        {
             let d = e.data.unwrap_or_default();
             let ids = d["matches"].as_array().into_iter().flatten();
             Readiness::Ready(
@@ -1105,7 +1108,7 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
                 "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session, and an open linked task (`Closes #N`) with a lease record by the PR author",
                 pull.head_sha
             ),
-            "get one independent clean verdict (approve, confidence >= min, no major finding) with `bosun verdict comment --from -` in a reviewer session, then sign again",
+            "get one independent clean verdict (approve, confidence >= min, no major finding) with `bosun verdict comment --from -` in a reviewer session (without CI add `--sign-key <reviewer.pem>`), then sign again",
         ));
     }
     Ok(())
