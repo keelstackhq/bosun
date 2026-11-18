@@ -74,7 +74,8 @@ pub fn run(dir: Option<&Path>, pr: Option<u64>) -> CmdResult {
         )
     })?;
     let head = &pull.head_sha;
-    let statuses = gh.statuses(head)?;
+    // The status history (newest first) names each poster; the combined status does not.
+    let statuses = gh.status_history(head)?;
     let runs = gh.check_runs_all(head)?;
     let mut gates = Vec::new();
     let mut bad = Vec::new();

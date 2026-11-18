@@ -158,3 +158,10 @@ fn a_missing_pr_is_an_error() {
     let (code, v) = run(&fake, &repo("dual"), &["gate", "sources", "--pr", "7"]);
     assert_eq!(code, 1, "{v}");
 }
+
+#[test]
+fn no_pr_number_is_a_usage_error() {
+    let fake = FakeGithub::start();
+    let (code, v) = run(&fake, &repo("dual"), &["gate", "sources"]);
+    assert_eq!(code, 2, "{v}");
+}
