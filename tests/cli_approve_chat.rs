@@ -74,7 +74,7 @@ fn setup() -> FakeGithub {
     fake.comment(7, &lease_note("session_w", LIVE, "src/**"));
     fake.content("governance/owners.toml", "main", OWNERS);
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     fake.comment_by(1, BOT, &verdict("session_rev", HEAD));
     fake
 }
@@ -142,6 +142,60 @@ fn chat_works_in_cloud() {
     let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &env);
     assert_eq!(code, 0, "{v}");
     assert_eq!(chat_comments(&fake).len(), 1);
+}
+
+/// The cloud probe: `CLAUDE_CODE_REMOTE_SESSION_ID` alone (no `BOSUN_SESSION`) names the session
+/// for the PostToolUse hook that stores the answer and for `approve --chat` that reads it.
+#[test]
+fn chat_end_to_end_with_the_hook_stored_answer_in_cloud() {
+    let (fake, tmp) = (setup(), repo());
+    git(
+        tmp.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    let line = format!(
+        "acme/widget#1 `change` (risk R-gov; verdict: ok; head {s} = {HEAD})",
+        s = &HEAD[..7]
+    );
+    let text = format!("Approve {line}? [bosun:{Q}]");
+    let options = json!([{"label": format!("Approve #1 {}", &HEAD[..7]), "description": "x"},
+        {"label": "Hold", "description": "x"}]);
+    let q =
+        json!({"question": text, "header": "Approve", "multiSelect": false, "options": options});
+    let input = json!({"session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d", "tool_use_id": "tu",
+        "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [q]},
+        "tool_response": {"questions": [q], "answers": {text: format!("Approve #1 {}", &HEAD[..7])}}});
+    let cloud = |mut cmd: assert_cmd::Command| {
+        cmd.current_dir(tmp.path())
+            .env("BOSUN_NOW", NOW)
+            .env("CLAUDE_CODE_REMOTE", "true")
+            .env_remove("BOSUN_SESSION")
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_orch")
+            .env("BOSUN_GITHUB_API", fake.url());
+        cmd
+    };
+    let mut hook = cloud(bosun());
+    let out = hook
+        .args(["hook", "post-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let mut approve = cloud(bosun());
+    let out = approve
+        .args(["approve", &format!("1@{HEAD}"), "--chat", "--question", Q])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q));
+    assert_eq!(chat_comments(&fake), vec![body]);
 }
 
 #[test]
