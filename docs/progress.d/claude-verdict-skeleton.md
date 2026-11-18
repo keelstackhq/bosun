@@ -1,1 +1,0 @@
-- 2026-11-18 · review-pack verdict_skeleton; chunks refusal says how to add them · src/cli/review_pack.rs, src/cli/verdict.rs, src/schema/data.rs, spec §7 · this PR

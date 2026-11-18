@@ -1,1 +1,0 @@
-- bosun.yml (and the CircleCI job) key the ts-pnpm steps (pnpm setup, install, hoard) off the ts-pnpm `[[stack]]` paths of the base's `.bosun/bosun.toml`, not the render's `ts_path`, so a stack in a subdirectory (`action/`) gets pnpm on push to main; the `{}` package.json stand-in for a new stack's audit is scoped to those stacks and removed right after deps.

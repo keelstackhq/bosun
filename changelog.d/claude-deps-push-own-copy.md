@@ -1,1 +1,0 @@
-- ts-pnpm `deps` in bosun-trusted reads the pushed commit's own `package.json` and `pnpm-workspace.yaml` on a push to the default branch, so a merged `auditConfig` change (an approved `ignoreGhsas` entry) applies on its own push run instead of leaving main red; pull requests and the merge queue still use the base's copies.
