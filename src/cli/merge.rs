@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::app::{App, default_branch, kill_switch, main_red, sync_merged};
 use crate::cli::MergeArgs;
+use crate::cli::stamps;
 use crate::config::CiProvider;
 use crate::core::approve::{is_orchestrator, parse_ready_summary};
 use crate::core::meta::linked_issues_in;
@@ -27,7 +28,8 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
     let members = crate::registry::load(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
-    if app.ctx.origin == Origin::Spawned || !is_orchestrator(&members, session) {
+    let child = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
+    if app.ctx.origin == Origin::Spawned || child || !is_orchestrator(&members, session) {
         return Err(BosunError::needs_human(
             format!(
                 "session {session} is not an orchestrator in the registry; only an orchestrator merges (spec D13)"
@@ -129,8 +131,33 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             )
         });
     }
-    // The gate stamps live in the author's checkout: the writer's ready summary for this exact
-    // head (found above) lists the ones `pr --ready` verified.
+    // The summary only shows the head did not move; the gates are re-checked from the stamps
+    // in this checkout, on the head's own tree (a summary is a comment any session can post).
+    let dir = app.ctx.dir.as_path();
+    let tree = stamps::tree_of(dir, head).ok_or_else(|| {
+        BosunError::needs_human(
+            format!(
+                "PR #{pr} head {head} is not in this checkout, so its gate stamps cannot be read"
+            ),
+            format!("`git fetch origin pull/{pr}/head`, then rerun `bosun merge {pr}`"),
+        )
+    })?;
+    let all = stamps::ready_gates(dir)?;
+    let missing: Vec<String> = all
+        .iter()
+        .filter(|g| !stamps::has(dir, &tree, g))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return Err(BosunError::needs_human(
+            format!("PR #{pr} head {head} has no local stamp for: {}", missing.join(", ")),
+            format!(
+                "`git worktree add --detach ../pr-{pr} {head} && cd ../pr-{pr} && {}`; rerun `bosun merge {pr}`",
+                crate::core::stamps::gate_loop(&missing)
+            ),
+        )
+        .with_data(json!({"pr": pr, "head_sha": head, "missing_gates": missing})));
+    }
     super::risk_check::evaluate_local(app, pull)?;
     if super::pr_no_ci::clean_by_other(app, pull)?.is_empty() {
         return Err(BosunError::needs_human(

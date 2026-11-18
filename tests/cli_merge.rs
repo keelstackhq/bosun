@@ -367,3 +367,73 @@ fn merge_spawned_origin_refused_even_as_orchestrator() {
     assert_eq!(out.status.code().unwrap(), 5);
     assert!(merge_puts(&fake).is_empty());
 }
+
+/// The orchestrator's checkout has no stamp for the head: a summary alone does not merge.
+#[test]
+fn merge_summary_without_local_stamps_is_exit5() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    std::fs::remove_file(stamps::stamp_dir(dir.path()).join("lint")).unwrap();
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["missing_gates"], json!(["lint"]), "{v}");
+    assert!(merge_puts(&fake).is_empty());
+}
+
+#[test]
+fn merge_child_session_env_is_refused_whatever_the_origin() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", ORCH)
+        .env("BOSUN_ORIGIN", "local")
+        .env("CLAUDE_CODE_CHILD_SESSION", "1")
+        .env("BOSUN_NOW", NOW)
+        .arg("-C")
+        .arg(dir.path())
+        .args(["merge", "20"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 5);
+    assert!(merge_puts(&fake).is_empty());
+}
+
+#[test]
+fn merge_summary_from_a_non_writer_is_ignored() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let all = fake.comments_of(20);
+    let c = all
+        .iter()
+        .find(|c| c.body.starts_with("/bosun ready "))
+        .unwrap();
+    fake.permission(&c.user, "read");
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(merge_puts(&fake).is_empty());
+}
+
+#[test]
+fn merge_405_is_conflict_and_a_merge_already_done_is_ok() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    fake.fail_path("/pulls/20/merge", 405);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 3, "{v}");
+    assert!(!fake.merged(20));
+    // The same 405, but the PR is merged at this head when it is re-read.
+    fake.after_requests("/pulls/20", 1, move |s| {
+        for p in s.pulls.iter_mut().filter(|p| p["number"] == 20) {
+            p["merged"] = json!(true);
+            p["state"] = json!("closed");
+            p["merge_commit_sha"] = json!("m1");
+        }
+    });
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}

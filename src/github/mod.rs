@@ -1030,6 +1030,14 @@ impl Github for LiveGithub {
                 if crate::cli::merge::http_status(&e.message, 405)
                     || crate::cli::merge::http_status(&e.message, 409) =>
             {
+                // A retried request (after a 5xx) can find its own merge done: that is success.
+                if let Ok(Some(p)) = self.get_pull(number)
+                    && p.merged
+                    && p.merge_commit_sha.is_some()
+                    && p.head_sha == sha
+                {
+                    return Ok(());
+                }
                 Err(BosunError::conflict(
                     e.message,
                     format!(

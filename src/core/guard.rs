@@ -22,6 +22,8 @@ const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open 
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates \
     (a PR with no task: `bosun pr --pr <n> --auto-merge`)";
 
+const BOSUN_MERGE_PREFIX: &str = "run `bosun merge <pr>` bare: a prefix (assignment, wrapper) could set the identity it checks (D-019)";
+
 /// Whether a refusal reason is about a merge, tag or push, so that the "never merge, tag or
 /// force-push" advice fits it. Reasons that carry their own fix, or are about something else,
 /// do not get it.
@@ -1575,6 +1577,16 @@ const XARGS_GIT: &[&str] = &[
 ];
 
 fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static str> {
+    // D-019: `bosun merge` checks the caller itself, from its own environment. A prefix
+    // (an assignment, a wrapper) could forge that identity: refuse it.
+    if let Some(p) = words
+        .iter()
+        .position(|w| w.rsplit('/').next() == Some("bosun"))
+        && p > 0
+        && words[p + 1..].iter().take(3).any(|w| *w == "merge")
+    {
+        return Some(BOSUN_MERGE_PREFIX);
+    }
     // Leading assignments and wrappers, then runners (`timeout 5`, `xargs -n1`, `env -C dir`),
     // until the command itself.
     let runner = |w: &str| {
@@ -4620,6 +4632,10 @@ mod tests {
             "gh api -X PUT repos/o/r/pulls/12/merge -f sha=abc",
             "curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge",
             "bosun merge 12 && gh pr merge 12",
+            "BOSUN_SESSION=orch bosun merge 12",
+            "BOSUN_ORIGIN=local bosun merge 12",
+            "CLAUDE_CODE_CHILD_SESSION=0 bosun merge 12",
+            "env BOSUN_ORIGIN=local bosun merge 12",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
