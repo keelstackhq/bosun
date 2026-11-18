@@ -96,13 +96,29 @@ fn env_model() -> Option<String> {
 }
 
 fn parse(text: &str) -> Result<Verdict, BosunError> {
-    Verdict::parse(text).map_err(|m| {
+    let v = Verdict::parse(text).map_err(|m| {
         BosunError::usage(
             format!("invalid verdict: {m}"),
             "return the JSON shape in spec §7 (see `bosun review-pack` instructions)",
         )
-    })
+    })?;
+    if counted_approval(&v, text) {
+        return Err(BosunError::usage(COUNTED, COUNTED_FIX));
+    }
+    Ok(v)
 }
+
+/// An approval whose `chunks_reviewed` is a count (`chunk_count`) claims every chunk unread:
+/// post, comment, apply and review-loop refuse it; it must list each chunk it reviewed.
+pub(crate) fn counted_approval(v: &Verdict, text: &str) -> bool {
+    let raw: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    v.verdict == "approve" && raw["chunks_reviewed"].is_number()
+}
+
+const COUNTED: &str =
+    "an approving verdict lists the chunks it reviewed: `chunks_reviewed` is a count";
+const COUNTED_FIX: &str =
+    "review each chunk of `bosun review-pack <pr>` and add its number to \"chunks_reviewed\"";
 
 /// The verdict's PR; exit 3 when the verdict is for another head than the current one.
 pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, BosunError> {
@@ -180,6 +196,9 @@ fn apply(app: &App, id: u64) -> CmdResult {
     }
     let text = text.ok_or_else(|| refuse(format!("no {COMMENT_MARKER}")))?;
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    if counted_approval(&verdict, text) {
+        return Err(BosunError::error(COUNTED, COUNTED_FIX));
+    }
     if verdict.chunks_reviewed.is_empty() {
         verdict.chunks_reviewed = comment_chunks(&c.body);
     }
@@ -319,11 +338,28 @@ pub(crate) fn require_all_chunks(
     if missing.is_empty() {
         return Ok(());
     }
+    const ADD: &str = "add each one you reviewed to \"chunks_reviewed\", then post again";
+    let n = verdict.pr;
+    if missing.len() == count {
+        // No list to paste: nothing was reviewed, so no chunk is named.
+        return Err(BosunError::error(
+            format!("verdict reviews no chunks ({count} chunks)"),
+            format!("review the {count} chunks of `bosun review-pack {n}` (its `chunks`), {ADD}"),
+        ));
+    }
+    // At most `SHOWN` missing chunks are named, then "and K more".
+    const SHOWN: usize = 5;
+    let mut names = format!("{:?}", &missing[..missing.len().min(SHOWN)]);
+    if missing.len() > SHOWN {
+        names.push_str(&format!(" and {} more", missing.len() - SHOWN));
+    }
     let mut listed = verdict.chunks_reviewed.clone();
     listed.sort_unstable();
     Err(BosunError::error(
-        format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
-        "review every chunk of `bosun review-pack <pr>` and list each number in `chunks_reviewed`",
+        format!("verdict lists chunks {listed:?} of {count}; missing {names}"),
+        format!(
+            "review chunks {names} of the {count} in `bosun review-pack {n}` (its `chunks`), {ADD}"
+        ),
     ))
 }
 

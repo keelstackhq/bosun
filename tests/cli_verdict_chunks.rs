@@ -55,7 +55,7 @@ fn a_missing_chunk_refuses_post_and_comment_and_writes_nothing() {
         );
         assert_eq!(
             v["error"]["fix"],
-            "review every chunk of `bosun review-pack <pr>` and list each number in `chunks_reviewed`"
+            "review chunks [2] of the 3 in `bosun review-pack 42` (its `chunks`), add each one you reviewed to \"chunks_reviewed\", then post again"
         );
         nothing_written(&fake);
     }
@@ -66,11 +66,32 @@ fn a_missing_chunk_refuses_post_and_comment_and_writes_nothing() {
         r#"{"pr":42,"head_sha":"sha42","verdict":"approve","confidence":0.95}"#,
     );
     assert_eq!(code, 1, "{v}");
+    // No list to paste: every chunk is missing, so none is named.
+    assert_eq!(
+        v["error"]["message"],
+        "verdict reviews no chunks (3 chunks)"
+    );
+    assert_eq!(
+        v["error"]["fix"],
+        "review the 3 chunks of `bosun review-pack 42` (its `chunks`), add each one you reviewed to \"chunks_reviewed\", then post again"
+    );
+}
+
+#[test]
+fn a_long_missing_list_is_cut() {
+    let fake = setup(9);
+    let (code, v) = call(&fake, "post", &verdict("[1]"));
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(
+        v["error"]["message"],
+        "verdict lists chunks [1] of 9; missing [2, 3, 4, 5, 6] and 3 more"
+    );
     assert!(
-        v["error"]["message"]
+        v["error"]["fix"]
             .as_str()
             .unwrap()
-            .contains("missing [1, 2, 3]")
+            .starts_with("review chunks [2, 3, 4, 5, 6] and 3 more of the 9"),
+        "{v}"
     );
 }
 
@@ -136,8 +157,47 @@ fn apply_refuses_a_comment_without_every_chunk() {
         v["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("missing [1, 2, 3]"),
+            .contains("reviews no chunks (3 chunks)"),
         "{v}"
     );
+    assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn an_approval_must_list_its_chunks_not_count_them() {
+    // `chunk_count` from the pack must not stand in for the chunks reviewed.
+    let fake = setup(3);
+    for sub in ["post", "comment"] {
+        let (code, v) = call(&fake, sub, &verdict("3"));
+        assert_eq!(code, 2, "{sub}: {v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("lists the chunks it reviewed"), "{v}");
+        nothing_written(&fake);
+    }
+}
+
+#[test]
+fn apply_refuses_an_approval_that_counts_its_chunks() {
+    // A hand-made writer comment whose JSON carries a count: no legacy expansion.
+    let fake = setup(3);
+    let one = setup(1);
+    let (code, v) = call(&one, "comment", &verdict("[]"));
+    assert_eq!(code, 0, "{v}");
+    let body = one.comments_of(42)[0].body.replace(
+        "\"confidence\":0.95",
+        "\"confidence\":0.95,\"chunks_reviewed\":3",
+    );
+    assert!(body.contains("\"chunks_reviewed\":3"), "{body}");
+    let id = fake.comment(42, &body);
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = run(
+        &fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    );
+    assert_eq!(code, 1, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("lists the chunks it reviewed"), "{v}");
     assert!(fake.statuses_of("sha42").is_empty());
 }
