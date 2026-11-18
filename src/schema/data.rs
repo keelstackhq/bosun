@@ -192,6 +192,7 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     archive_error?: str};
 mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
     brake_note: str};
+rules = {file: str, changed: bool, written: bool, block: str};
 heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, head_sha: str,
     task: int, action: str, why: str}], main?: any};
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,

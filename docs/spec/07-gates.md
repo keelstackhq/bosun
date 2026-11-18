@@ -109,7 +109,7 @@ switches off one of the last two rules for a file (bosun's release.yml never can
 `bosun doctor` reports the same findings as step 14 "CI minutes" (missing if any; ok without
 workflows). bosun's own ci.yml, the channel's bosun.yml and the local loop in AGENTS.md run it right after
 test-integrity (it runs no repo code; ts-pnpm keeps it in `bosun-trusted`). The channel skips it
-with a notice when the pinned bosun is older than 0.7.0, which has no such gate;
+with a notice when the pinned bosun is older than 0.7.0, which has no such gate; bosun's ci.yml also runs `gate ci-minutes --all` with the release a PR pins when the PR moves `.bosun/version` (main runs the gates with it right after the merge, so a newer gate cannot turn main red);
 `tests/cli_gate_ci_minutes.rs` and `tests/channel_render.rs` also run the check on bosun's own and
 on every rendered workflow. Later: a per-PR minutes report (jobs started and billed
 minutes per push, from the Actions API) as a `bosun` command or a comment; not built.
