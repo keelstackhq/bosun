@@ -34,6 +34,7 @@ pub mod migrate;
 pub mod mode;
 pub mod msg;
 pub mod notify;
+pub mod owners;
 pub mod pin;
 pub mod pin_pr;
 pub mod plan;
@@ -210,6 +211,8 @@ pub enum Command {
     Pin(PinArgs),
     /// Move [mode] one rung (or straight to the target) in one PR: survey, pins, registry; `--finish` after the merge.
     Migrate(MigrateArgs),
+    /// The repo owners: `set` opens an owner PR that rewrites governance/owners.toml.
+    Owners(OwnersArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
     SetupSnippet,
     /// The output contract as JSON Schema or TypeScript: the envelope and each command's `data`.
@@ -335,6 +338,9 @@ impl Command {
             Command::Uninstall(_) => "uninstall",
             Command::Pin(_) => "pin",
             Command::Migrate(_) => "migrate",
+            Command::Owners(a) => match a.cmd {
+                OwnersCmd::Set(_) => "owners set",
+            },
             Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
@@ -1050,6 +1056,25 @@ fn parse_source(s: &str) -> Result<String, String> {
         "" | "slack" | "lesson" | "flake" | "human" => Ok(s.to_string()),
         _ => Err("expected one of slack, lesson, flake, human".into()),
     }
+}
+
+#[derive(Debug, Args)]
+pub struct OwnersArgs {
+    #[command(subcommand)]
+    pub cmd: OwnersCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OwnersCmd {
+    /// Open an owner PR that sets governance/owners.toml to these logins and `<org>/<team>`s.
+    Set(OwnersSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct OwnersSetArgs {
+    /// GitHub logins and teams of the repo's org (`<org>/<slug>`); at least one login.
+    #[arg(required = true, value_name = "LOGIN|ORG/TEAM")]
+    pub entries: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]

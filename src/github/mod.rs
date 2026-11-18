@@ -186,6 +186,8 @@ pub trait Github {
     fn job_log(&self, job_id: u64, head: usize, tail: usize) -> Result<String>;
     /// The repository itself; `None` when it is not readable (404).
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
+    /// The owner (user or org) of the repository this client talks to.
+    fn repo_owner(&self) -> &str;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
@@ -296,6 +298,16 @@ pub struct RepoInfo {
     /// Present with an authenticated token: what the token may do.
     #[serde(default)]
     pub permissions: Option<Value>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub owner: Option<Login>,
+}
+
+/// A GitHub account as the API nests it (`{"login": ...}`).
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Login {
+    pub login: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -437,6 +449,10 @@ impl LiveGithub {
 }
 
 impl Github for LiveGithub {
+    fn repo_owner(&self) -> &str {
+        &self.owner
+    }
+
     fn repo_info(&self) -> Result<Option<RepoInfo>> {
         match self.http.get_json(&self.path(""))? {
             Some(v) => Ok(Some(self.parse("repository", v)?)),

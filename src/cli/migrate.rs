@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::{JoinArgs, MigrateArgs, PlanAmendArgs, PlanCmd};
 use crate::app::{App, default_branch, kill_switch};
 use crate::config::{CONFIG_FILE, Config};
+use crate::core::intake::{INTAKE_PATH, seed_repo};
 use crate::core::meta::parse_task_meta;
 use crate::core::migrate::{
     BodyIn, MODE_MIN, below_min, body, branch_step, is_lighter, owner_steps, parse_mode,
@@ -513,6 +514,12 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             )
         })?;
     }
+    // The intake template's empty owner and visibility come from GET /repos.
+    let new_intake = (gh.zip(read(&root, INTAKE_PATH))).and_then(|(gh, t)| {
+        let r = gh.repo_info().ok().flatten()?;
+        let owner = r.owner.map(|o| o.login).unwrap_or_default();
+        seed_repo(&t, &owner, r.visibility.as_deref().unwrap_or_default())
+    });
     if need_pin && s.bosun_channel {
         return Err(BosunError::conflict(
             format!(
@@ -531,6 +538,9 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
     }
     if new_toml.is_some() {
         planned.push(CONFIG_FILE.into());
+    }
+    if new_intake.is_some() {
+        planned.push(INTAKE_PATH.into());
     }
     let mut data = json!({
         "from": from.as_str(), "to": to.as_str(), "step": next.as_str(), "direct": a.direct,
@@ -644,6 +654,10 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
         if let Some(t) = &new_toml {
             write(CONFIG_FILE, t)?;
             files.push(CONFIG_FILE.to_string());
+        }
+        if let Some(t) = &new_intake {
+            write(INTAKE_PATH, t)?;
+            files.push(INTAKE_PATH.to_string());
         }
         let title = format!("chore: bosun mode {} -> {}", from.as_str(), next.as_str());
         let text = body(&BodyIn {

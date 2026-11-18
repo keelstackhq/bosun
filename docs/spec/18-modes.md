@@ -86,7 +86,9 @@ exact-inverse check.
   `bosun/migrate-<mode>` with every file step: the `.bosun/version` pin (through `bosun pin --latest
   --tool bosun` when the pin is older than 0.14.0; a bosun splice channel or an unpublished release
   exits 3 naming the pin step), the `.bosun/registry` pin (the live registry; two open and no pin
-  exits 3) and `[mode] name`. One rung per run, lighter; `--direct` goes to the target and the
+  exits 3), `[mode] name`, and in `.bosun/intake.toml` (when present) an empty `repo.owner` or
+  `repo.visibility` of the channel template set from `GET /repos` (`owner.login`; `private` or
+  `public` only). One rung per run, lighter; `--direct` goes to the target and the
   body records it as the owner's choice. A tighter target is one PR. It needs a clean tree on the default branch equal to
   origin's; any failure restores the tree. An open `bosun/migrate-<step>` PR for the same step is
   reused; one for another step exits 3. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only

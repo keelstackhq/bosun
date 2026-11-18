@@ -109,6 +109,8 @@ revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
     main_red: int | null, gate_missed: {created: bool, issue: int}, warning: str | null};
 trailers = {hook?: str, stamped?: bool, session?: str, revert?: str | null, commits?: [{sha: str,
     subject: str}]};
+owners set = {owners: [str], changed: bool, branch?: str, pr?: {number: int, head_sha: str},
+    then: [str]};
 intake = {issue: int, created: bool, plan: str, item: str | null, source: str};
 intake check = {goal: str, plan: str | null, repo: {owner: str, name: str, visibility: str},
     stack: [str], pieces: [str], bosun_pieces: [str], publish: [str], approvals: str, notify: str,

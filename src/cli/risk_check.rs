@@ -21,7 +21,7 @@ use crate::core::records::Record;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
-    new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
+    new_dependencies, parse_owners_in, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
@@ -44,13 +44,13 @@ pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
         )
     })?;
-    Ok(owners.into_iter().map(|o| o.github).collect())
+    Ok(owners.into_iter().filter_map(|o| o.github).collect())
 }
 
 /// Slack IDs of the owners in `governance/owners.toml` at `git_ref`; empty when none is set.
@@ -58,7 +58,7 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
@@ -1510,6 +1510,17 @@ pub(crate) fn autonomous_allow(gh: &dyn Github, base: &str) -> Result<Option<Vec
         },
         None => None,
     })
+}
+
+/// `[approvals] oneoff_allow` on `base`, parsed; a missing or bad config or glob allows nothing.
+pub(crate) fn oneoff_allow(gh: &dyn Github, base: &str) -> Result<Vec<crate::core::glob::Glob>> {
+    let c = gh.file_at(CONFIG_FILE, base)?;
+    let c = c.and_then(|t| Config::parse(&t, CONFIG_FILE).ok());
+    let globs = c.and_then(|c| c.approvals.oneoff_allow).unwrap_or_default();
+    Ok(globs
+        .iter()
+        .filter_map(|g| crate::core::glob::Glob::parse(g).ok())
+        .collect())
 }
 
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
