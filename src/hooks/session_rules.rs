@@ -70,6 +70,65 @@ pub fn block(rules: &Rules, role: Role) -> String {
     format!("Session rules ({name}): {text} {}", rules.all)
 }
 
+pub const START: &str = "<!-- bosun:session-rules:start -->";
+pub const END: &str = "<!-- bosun:session-rules:end -->";
+
+/// The marked Markdown block `bosun rules --write` keeps in CLAUDE.md or AGENTS.md, for
+/// sessions whose hooks do not load (Claude in Slack).
+pub fn markdown(r: &Rules) -> String {
+    format!(
+        "{START}\n## Session rules (bosun)\n\nRendered by `bosun rules --write` from \
+         `.bosun/session-rules.toml`; edit that file, not this block. Hooks do not load \
+         everywhere (Claude in Slack), so follow these here too.\n\n\
+         - Orchestrator (a session not spawned by another): {}\n\
+         - Worker (a spawned session): {}\n\
+         - Everyone: {}\n\
+         - No `bosun` on PATH: run `npx -y @keelstackhq/bosun@$(cat .bosun/version) <command>`.\n{END}\n",
+        r.orchestrator, r.worker, r.all
+    )
+}
+
+/// `text` with its marked block replaced by `block`, or `block` appended after a blank line.
+/// Markers count only as whole lines (CRLF too). `None` when they are not one start followed by
+/// one end (nothing to trust).
+pub fn splice_block(text: &str, block: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let at =
+        |m: &str| -> Vec<usize> { (0..lines.len()).filter(|i| lines[*i].trim() == m).collect() };
+    match (at(START).as_slice(), at(END).as_slice()) {
+        ([], []) if text.trim().is_empty() => Some(block.to_string()),
+        ([], []) => Some(format!("{}\n\n{block}", text.trim_end())),
+        ([a], [b]) if a < b => Some(format!(
+            "{}{block}{}",
+            lines[..*a].concat(),
+            lines[b + 1..].concat()
+        )),
+        _ => None,
+    }
+}
+
+/// The rules from `<root>/.bosun/session-rules.toml` (defaults when absent), with a note when
+/// the file is ignored.
+pub fn load(root: Option<&Path>) -> (Rules, String) {
+    let mut note = String::new();
+    let mut rules = Rules::default();
+    if let Some(file) = root.map(|r| r.join(".bosun/session-rules.toml"))
+        && file.is_file()
+    {
+        match std::fs::read_to_string(&file)
+            .map_err(|e| e.to_string())
+            .and_then(|t| parse(&t))
+        {
+            Ok(r) => rules = r,
+            Err(why) => {
+                eprintln!("bosun: warning: .bosun/session-rules.toml: {why}");
+                note = format!(" (.bosun/session-rules.toml ignored, defaults used: {why})");
+            }
+        }
+    }
+    (rules, note)
+}
+
 pub fn rules_context(dir: Option<&Path>) -> String {
     let origin = Origin::resolve(
         std::env::var("BOSUN_ORIGIN").ok().as_deref(),
@@ -88,22 +147,7 @@ pub fn rules_context(dir: Option<&Path>) -> String {
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
     let root = dir.map(|d| git_out(&d, &["rev-parse", "--show-toplevel"]).map_or(d, PathBuf::from));
-    let mut note = String::new();
-    let mut rules = Rules::default();
-    if let Some(file) = root.map(|r| r.join(".bosun/session-rules.toml"))
-        && file.is_file()
-    {
-        match std::fs::read_to_string(&file)
-            .map_err(|e| e.to_string())
-            .and_then(|t| parse(&t))
-        {
-            Ok(r) => rules = r,
-            Err(why) => {
-                eprintln!("bosun: warning: .bosun/session-rules.toml: {why}");
-                note = format!(" (.bosun/session-rules.toml ignored, defaults used: {why})");
-            }
-        }
-    }
+    let (rules, note) = load(root.as_deref());
     format!("{}{note}", block(&rules, role))
 }
 
@@ -132,6 +176,25 @@ mod tests {
     fn parse_rejects_unknown_keys_and_bad_toml() {
         assert!(parse("wrker = \"x\"").is_err());
         assert!(parse("worker = ").is_err());
+    }
+
+    #[test]
+    fn splice_replaces_or_appends_the_block() {
+        let b = format!("{START}\nnew\n{END}\n");
+        assert_eq!(splice_block("", &b).unwrap(), b);
+        assert_eq!(splice_block("a\n", &b).unwrap(), format!("a\n\n{b}"));
+        let old = format!("a\n{START}\nold\n{END}\nz\n");
+        assert_eq!(splice_block(&old, &b).unwrap(), format!("a\n{b}z\n"));
+        assert!(splice_block(&format!("{END}\n{START}\n"), &b).is_none());
+        assert!(splice_block(&format!("{START}\n{START}\n{END}"), &b).is_none());
+        // CRLF settles; a marker quoted inside prose is no marker.
+        let crlf = format!("a\r\n{START}\r\nold\r\n{END}\r\nz\r\n");
+        assert_eq!(splice_block(&crlf, &b).unwrap(), format!("a\r\n{b}z\r\n"));
+        let prose = format!("see `{START}`\n");
+        assert_eq!(
+            splice_block(&prose, &b).unwrap(),
+            format!("see `{START}`\n\n{b}")
+        );
     }
 
     #[test]

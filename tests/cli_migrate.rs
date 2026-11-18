@@ -1048,3 +1048,29 @@ fn finish_amends_no_plan_path_outside_the_repo() {
     let (code, v) = migrate(&e, &fake, &["--finish", "--plan", "../outside.md"]);
     assert_eq!(code, 2, "{v}");
 }
+
+#[test]
+fn the_intake_template_gets_owner_and_visibility_from_the_repo() {
+    let fake = FakeGithub::start();
+    fake.repo_set("owner", serde_json::json!({"login": "acme"}));
+    fake.repo_set("visibility", serde_json::json!("public"));
+    let intake =
+        "version = 1\nrepo = { name = \"widget\", owner = \"\", visibility = \"\" }\ngoal = \"\"\n";
+    let e = env(&[
+        (BOSUN_TOML, CONFIG),
+        VERSION,
+        (".bosun/intake.toml", intake),
+    ]);
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["files"]
+            .to_string()
+            .contains(".bosun/intake.toml"),
+        "{v}"
+    );
+    assert_eq!(
+        read(&e, ".bosun/intake.toml"),
+        "version = 1\nrepo = { name = \"widget\", owner = \"acme\", visibility = \"public\" }\ngoal = \"\"\n"
+    );
+}

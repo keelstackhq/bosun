@@ -384,3 +384,26 @@ fn one_public_key_under_two_ids_is_malformed() {
     fake.content(".bosun/approvers.toml", MAIN, &twice);
     assert_eq!(check(&fake).0, 5);
 }
+
+#[test]
+fn a_delegate_approval_does_not_clear_an_escalated_verdict() {
+    let fake = delegated("deny.toml");
+    fake.status(
+        HEAD,
+        "review-verdict",
+        "failure",
+        "escalated to the owner (approvable): approve 0.95 (approves at 0.85), 0 blocker, 0 major",
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved_by"], "delegate d1");
+    assert!(v["data"].get("verdict_cleared_by").is_none(), "{v}");
+    assert_eq!(
+        fake.statuses_of(HEAD)
+            .into_iter()
+            .rev()
+            .find(|s| s["context"] == "review-verdict")
+            .unwrap()["state"],
+        "failure"
+    );
+}

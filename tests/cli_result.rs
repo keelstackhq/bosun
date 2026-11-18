@@ -160,3 +160,40 @@ fn a_result_sets_blocked_or_needs_human_and_never_merged() {
         );
     }
 }
+
+#[test]
+fn session_json_records_the_spend_on_the_epic() {
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/claimed"], "");
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", CHILD)
+        .env("BOSUN_NOW", NOW)
+        .args(["result", "9", "--outcome", "blocked", "--session-json", "-"])
+        .write_stdin(r#"{"session_id":"session_child","usage":{"cost_usd":2.5}}"#)
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["data"]["budget"]["usd"], 2.5, "{v}");
+    let spends = fake
+        .comments_of(9)
+        .iter()
+        .filter(|c| c.body.contains(r#""bosun":"spend""#))
+        .count();
+    assert_eq!(spends, 1);
+    assert!(v["next"].as_array().unwrap().is_empty(), "{v}");
+}
+
+#[test]
+fn without_session_json_next_asks_for_the_budget_record() {
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/claimed"], "");
+    let (code, v) = run(&fake, CHILD, NOW, &["result", "9", "--outcome", "blocked"]);
+    assert_eq!(code, 0, "{v}");
+    let t = &v["next"][0];
+    assert_eq!(t["tool"], "mcp__claude-code-remote__get_session", "{v}");
+    assert_eq!(t["args"]["session_id"], CHILD);
+    let rec = v["data"]["budget"]["record"].as_str().unwrap();
+    assert!(rec.contains("bosun budget record 9"), "{v}");
+}

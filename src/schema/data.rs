@@ -15,12 +15,13 @@ keygen = {id: str, role: str, path: str, public_key: str, enrolled: bool, toml: 
 test-integrity = {base: str, files_checked: int, integrity: str, integrity_reason?: str,
     findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool}], allow?: [str],
     task?: int};
-review-pack = {pr: int, title: str, head_sha: str, base_sha: str, since_sha: str | null,
+review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, since_sha: str | null,
     changed_files: int, chunks: [[str]], delta_fallback: str | null, delta_not_in_pr: [str],
     delta_not_in_pr_count: int, drift: {actual: int, planned: int} | null, files: [{filename: str,
     status: str, additions: int, deletions: int, patch: str | null}], instructions: str,
     review_md: str | null, lessons: [str], ucs: [str], untrusted: [str], task: {..} | null,
-    bundle_tasks: [{..}], note?: str};
+    bundle_tasks: [{..}], note?: str, required_checks: [{context: str, state: str}] | null,
+    gate_stamps: {tree: str, present: [str], missing: [str]} | null};
 ci-log = {pr: int, head_sha: str, jobs: [{name: str, conclusion: str, url: str, log: str}]};
 ask = {issue: int, comment_id: int, owners: [str], drafted: [int], pr_draft_error: str | null};
 hold = {issue: int, id: str, checklist: {number: int, url: str}, released: bool, drafted: [int],
@@ -77,7 +78,8 @@ progress = {days?: int, since?: str, merged?: int, held?: int, reverted?: int, s
 result = {epic: int, outcome: str, pr: int | null, comment_id: int, task_state: str,
     tasks_merged: [int], lease_ended: bool, left: bool, epic_closed: bool,
     epic_already_closed: bool, partial_skipped: str | null, state_skipped: str | null,
-    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null};
+    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null,
+    budget: {recorded?: bool, record?: str, error?: str, fix?: str, ..}};
 main-triage = {good: str, bad: str, run: str, runs: int, candidates: int, first_bad: {pr: int,
     sha: str, subject: str} | null, note?: str};
 init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [str], risk: str,
@@ -107,6 +109,8 @@ revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
     main_red: int | null, gate_missed: {created: bool, issue: int}, warning: str | null};
 trailers = {hook?: str, stamped?: bool, session?: str, revert?: str | null, commits?: [{sha: str,
     subject: str}]};
+owners set = {owners: [str], changed: bool, branch?: str, pr?: {number: int, head_sha: str},
+    then: [str]};
 intake = {issue: int, created: bool, plan: str, item: str | null, source: str};
 intake check = {goal: str, plan: str | null, repo: {owner: str, name: str, visibility: str},
     stack: [str], pieces: [str], bosun_pieces: [str], publish: [str], approvals: str, notify: str,
@@ -166,11 +170,14 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
-    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool};
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
+    verdict_cleared_by?: str};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
-verdict apply = verdict post;
+verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
+    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}}
+    | {comment_id: int, author: str, refused: str, status: null};
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     task_state: str | null, ready?: bool | "pending", merged?: bool, epic_closed?: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
@@ -191,6 +198,7 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     archive_error?: str};
 mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
     brake_note: str};
+rules = {file: str, changed: bool, written: bool, block: str};
 heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, head_sha: str,
     task: int, action: str, why: str}], main?: any};
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,

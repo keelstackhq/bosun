@@ -823,6 +823,21 @@ pub fn requirement(matches: &[Match]) -> Approval {
     }
 }
 
+/// The governance paths: R-gov of the built-in rules, read from them, so `bosun pr --pr N`
+/// and R-gov never disagree.
+pub fn governance_globs() -> Vec<Glob> {
+    let r = Rules::defaults();
+    (r.rules.into_iter())
+        .filter(|r| r.id == "R-gov")
+        .flat_map(|r| r.paths)
+        .collect()
+}
+
+/// Whether `path` matches one of `globs` as a risk rule matches it (any case).
+pub fn matches_globs(globs: &[Glob], path: &str) -> bool {
+    globs.iter().any(|g| matches_any_case(g, path))
+}
+
 /// Rules that are critical whatever their `approval` says: a delegate never approves them.
 pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 
@@ -1185,6 +1200,15 @@ pub fn apply_floor(matches: &mut [Match], critical: &[String]) {
 pub const VERDICT_AUTHOR: &str = "github-actions[bot]";
 /// The confidence a verdict needs to count toward two verdicts.
 pub const VERDICT_MIN_CONFIDENCE: f64 = 0.9;
+/// The session prefix `verdict apply` records a `[approvals] verdict_bots` verdict under.
+pub const BOT_SESSION: &str = "bot:";
+
+/// A bot's verdict sets `review-verdict` only: it never counts toward any approval (it may be the
+/// author's own session writing through the app, so it is never independent).
+pub fn is_bot_session(session: &str) -> bool {
+    session.starts_with(BOT_SESSION)
+}
+
 /// How many verdicts of distinct sessions the two-verdicts class needs.
 pub const VERDICTS_NEEDED: usize = 2;
 
@@ -1273,6 +1297,7 @@ fn verdict_sessions<'a>(
             && head_sha == head
             && !session.is_empty()
             && session != "unknown"
+            && !is_bot_session(&session)
             && !excluded.contains(&session)
         {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
@@ -1546,11 +1571,16 @@ pub fn new_dependencies(manifests: &[(String, Option<String>, Option<String>)]) 
     out.into_iter().collect()
 }
 
-/// A repo owner from `governance/owners.toml`.
+/// A repo owner from `governance/owners.toml`: exactly one of a user (`github`) or a team
+/// (`team = "<org>/<slug>"`, spec §16). A team counts no member until expansion is built (fail
+/// closed), so `owner_logins` holds users only.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Owner {
-    pub github: String,
+    #[serde(default)]
+    pub github: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
     #[serde(default)]
     pub slack: Option<String>,
 }
@@ -1563,9 +1593,94 @@ struct RawOwners {
 }
 
 pub fn parse_owners(text: &str) -> Result<Vec<Owner>, String> {
-    toml::from_str::<RawOwners>(text)
+    let owners = toml::from_str::<RawOwners>(text)
         .map(|o| o.owner)
-        .map_err(|e| format!("governance/owners.toml: {e}"))
+        .map_err(|e| format!("governance/owners.toml: {e}"))?;
+    for (i, o) in owners.iter().enumerate() {
+        let team_ok = o.team.as_deref().is_some_and(|t| {
+            t.split_once('/')
+                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('/'))
+        });
+        match (&o.github, &o.team) {
+            (Some(_), None) => {}
+            (None, Some(_)) if team_ok && o.slack.is_none() => {}
+            _ => {
+                return Err(format!(
+                    "governance/owners.toml: [[owner]] {} needs exactly one of `github` or `team = \"<org>/<slug>\"` (`slack` only with `github`)",
+                    i + 1
+                ));
+            }
+        }
+    }
+    Ok(owners)
+}
+
+/// Why `entries` cannot be the owners of `repo_owner`'s repo: each is a login or a
+/// `<repo_owner>/<slug>` team, no duplicates, at least one login (a team is unreadable to
+/// sessions, spec §16).
+pub fn owner_entries_error(entries: &[String], repo_owner: &str) -> Option<String> {
+    let name = |s: &str, extra: &[char]| {
+        !s.is_empty()
+            && s.len() <= 39
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for e in entries {
+        let ok = match e.split_once('/') {
+            Some((org, slug)) => org.eq_ignore_ascii_case(repo_owner) && name(slug, &['-', '_']),
+            None => name(e, &['-']),
+        };
+        if !ok {
+            return Some(format!(
+                "`{e}` is neither a GitHub login nor a team `{repo_owner}/<slug>`"
+            ));
+        }
+        if !seen.insert(e.to_ascii_lowercase()) {
+            return Some(format!("`{e}` is listed twice"));
+        }
+    }
+    (!entries.iter().any(|e| !e.contains('/'))).then(|| {
+        "no login: a team alone may be unreadable, so list at least one owner by login".into()
+    })
+}
+
+/// [`parse_owners`] for the repo of `org`: a team of another org is a parse error too (spec §16).
+pub fn parse_owners_in(text: &str, org: &str) -> Result<Vec<Owner>, String> {
+    let owners = parse_owners(text)?;
+    let other = |t: &&str| {
+        !t.split('/')
+            .next()
+            .is_some_and(|o| o.eq_ignore_ascii_case(org))
+    };
+    match owners.iter().filter_map(|o| o.team.as_deref()).find(other) {
+        Some(t) => Err(format!(
+            "governance/owners.toml: team `{t}` is not of the repo's org {org}"
+        )),
+        None => Ok(owners),
+    }
+}
+
+/// `governance/owners.toml` for `entries` (logins, or `<org>/<slug>` teams), keeping the Slack ID
+/// a login has in `old` (compared case-insensitively).
+pub fn render_owners(entries: &[String], old: &[Owner]) -> String {
+    let mut s = String::from("# Repo owners (spec §16), written by `bosun owners set`.\n");
+    for e in entries {
+        if e.contains('/') {
+            s.push_str(&format!("\n[[owner]]\nteam = \"{e}\"\n"));
+            continue;
+        }
+        s.push_str(&format!("\n[[owner]]\ngithub = \"{e}\"\n"));
+        let slack = old.iter().find(|o| {
+            o.github
+                .as_deref()
+                .is_some_and(|g| g.eq_ignore_ascii_case(e))
+        });
+        if let Some(id) = slack.and_then(|o| o.slack.as_deref()) {
+            s.push_str(&format!("slack = \"{id}\"\n"));
+        }
+    }
+    s
 }
 
 const NOTE_OPEN: &str = "<!-- bosun:risk -->";
@@ -2183,6 +2298,20 @@ catalogs:\n  legacy:\n    \"@scope/x\": 1.0.0 # pinned\n";
         assert_eq!(o.len(), 2);
         assert_eq!(o[0].slack.as_deref(), Some("U1"));
         assert!(parse_owners("[[owner]]\nname = \"x\"").is_err());
+        let team = parse_owners("[[owner]]\nteam = \"acme/core\"").unwrap();
+        assert_eq!(team[0].team.as_deref(), Some("acme/core"));
+        for bad in [
+            "[[owner]]\ngithub = \"a\"\nteam = \"acme/core\"",
+            "[[owner]]\nslack = \"U1\"",
+            "[[owner]]\nteam = \"acme\"",
+            "[[owner]]\nteam = \"acme/a/b\"",
+            "[[owner]]\nteam = \"acme/core\"\nslack = \"U1\"",
+        ] {
+            assert!(parse_owners(bad).is_err(), "{bad}");
+        }
+        let other = "[[owner]]\ngithub = \"a\"\n[[owner]]\nteam = \"else/core\"";
+        assert!(parse_owners_in(other, "acme").is_err());
+        assert!(parse_owners_in(&other.replace("else", "ACME"), "acme").is_ok());
     }
 
     #[test]
@@ -2329,6 +2458,31 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
         }
         // Not written by the verdict workflow.
         assert!(count(&[("some-agent", rec("c", "h", true, Some(1.0)))], "h").is_empty());
+    }
+
+    #[test]
+    fn a_bot_session_never_counts_toward_an_approval() {
+        let clean = |session: &str| {
+            let r = Record::Verdict {
+                session: session.into(),
+                head_sha: "h".into(),
+                approved: true,
+                confidence: Some(0.99),
+                major: Some(0),
+                model: None,
+            };
+            format!("Review verdict: approve 0.99.\n\n{}", r.to_line())
+        };
+        let items = [clean("bot:claude[bot]"), clean("a")];
+        let it = || items.iter().map(|b| (VERDICT_AUTHOR, b.as_str()));
+        assert_eq!(two_verdicts(it(), "h", &[], None), ["a"]);
+        assert_eq!(clean_verdicts(it(), "h", &[], None), ["a"]);
+        let it3 = || items.iter().map(|b| (VERDICT_AUTHOR, b.as_str(), true));
+        assert_eq!(autonomous_verdicts(it3(), "h", &[], None), ["a"]);
+        let only_bot = [clean("bot:claude[bot]")];
+        let ob = only_bot.iter().map(|b| (VERDICT_AUTHOR, b.as_str(), true));
+        assert!(autonomous_verdicts(ob, "h", &[], None).is_empty());
+        assert!(is_bot_session("bot:x") && !is_bot_session("session_bot"));
     }
 
     #[test]

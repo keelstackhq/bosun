@@ -111,6 +111,37 @@ fn plain(s: &str, extra: &[char]) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
 }
 
+/// `text` with the empty `owner` and `visibility` of its `repo = { ... }` line (the channel
+/// template's) set from the repository; `None` when nothing changes. Only a plain login and
+/// `private` or `public` are written.
+pub fn seed_repo(text: &str, owner: &str, visibility: &str) -> Option<String> {
+    let mut changed = false;
+    let mut set = |l: &mut String, key: &str, v: &str, ok: bool| {
+        let empty = format!("{key} = \"\"");
+        if ok && l.contains(&empty) {
+            *l = l.replacen(&empty, &format!("{key} = \"{v}\""), 1);
+            changed = true;
+        }
+    };
+    let out: String = (text.split_inclusive('\n'))
+        .map(|l| {
+            let mut l = l.to_string();
+            if l.trim_start().starts_with("repo = {") {
+                let login = !owner.is_empty() && plain(owner, &['-']);
+                set(&mut l, "owner", owner, login);
+                set(
+                    &mut l,
+                    "visibility",
+                    visibility,
+                    matches!(visibility, "private" | "public"),
+                );
+            }
+            l
+        })
+        .collect();
+    changed.then_some(out)
+}
+
 fn plan_ok(p: &str) -> bool {
     p.starts_with("plans/")
         && p.ends_with(".md")
@@ -354,6 +385,18 @@ pub fn signed_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seed_repo_fills_only_empty_owner_and_visibility() {
+        let t = "version = 1\nrepo = { name = \"a\", owner = \"\", visibility = \"\" }\n";
+        let r = seed_repo(t, "acme", "private").unwrap();
+        assert!(
+            r.contains("owner = \"acme\", visibility = \"private\""),
+            "{r}"
+        );
+        assert_eq!(seed_repo(&r, "other", "public"), None);
+        assert_eq!(seed_repo(t, "a\"b", "internal"), None);
+    }
 
     const OK: &str = r#"version = 1
 repo = { name = "app", owner = "keelstackhq", visibility = "private" }

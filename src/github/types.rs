@@ -43,27 +43,67 @@ impl Issue {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "RawComment")]
 pub struct Comment {
     pub id: u64,
-    #[serde(default, deserialize_with = "text_or_empty")]
     pub body: String,
-    #[serde(default, deserialize_with = "login")]
     pub user: String,
+    /// `user.type`: `User`, `Bot` or `Organization`; empty when GitHub left it out.
+    pub user_type: String,
     pub created_at: String,
     pub updated_at: String,
     /// `performed_via_github_app`: `None` when GitHub left the field out, `Some(None)` when it
     /// is `null` (a plain user token), `Some(Some(slug))` when an app wrote the comment.
+    pub via_app: Option<Option<String>>,
+    pub author_association: String,
+    /// `.../issues/<n>`: the issue or PR the comment is on.
+    pub issue_url: String,
+}
+
+#[derive(Deserialize)]
+struct RawUser {
+    #[serde(default)]
+    login: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize)]
+struct RawComment {
+    id: u64,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    body: String,
+    #[serde(default)]
+    user: Option<RawUser>,
+    created_at: String,
+    updated_at: String,
     #[serde(
         default,
         rename = "performed_via_github_app",
         deserialize_with = "app_slug"
     )]
-    pub via_app: Option<Option<String>>,
+    via_app: Option<Option<String>>,
     #[serde(default)]
-    pub author_association: String,
-    /// `.../issues/<n>`: the issue or PR the comment is on.
+    author_association: String,
     #[serde(default)]
-    pub issue_url: String,
+    issue_url: String,
+}
+
+impl From<RawComment> for Comment {
+    fn from(r: RawComment) -> Comment {
+        let (user, user_type) = r.user.map_or_else(Default::default, |u| (u.login, u.kind));
+        Comment {
+            id: r.id,
+            body: r.body,
+            user,
+            user_type,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            via_app: r.via_app,
+            author_association: r.author_association,
+            issue_url: r.issue_url,
+        }
+    }
 }
 
 impl Comment {

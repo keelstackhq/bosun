@@ -391,6 +391,7 @@ fn rival_lease(s: &mut common::fake::State, issue: u64, session: &str, touch: &s
         via_app: None,
         no_app_field: false,
         association: "MEMBER".into(),
+        user_type: None,
     });
 }
 

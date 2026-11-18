@@ -1,0 +1,1 @@
+- `bosun rules --write` renders the session rules into a marked block of CLAUDE.md/AGENTS.md (hooks do not load in Claude in Slack), with an npx fallback line; `doctor` warns there when it is missing; CI runs ci-minutes with the release a pin PR moves to.

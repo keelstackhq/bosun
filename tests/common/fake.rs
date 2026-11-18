@@ -43,6 +43,8 @@ pub struct FakeComment {
     /// Leave `performed_via_github_app` out of the JSON.
     pub no_app_field: bool,
     pub association: String,
+    /// `user.type`; `None`: `Bot` for a `[bot]` login, else `User`.
+    pub user_type: Option<String>,
 }
 
 /// How the fake serves a job log.
@@ -870,6 +872,7 @@ pub fn add_comment(s: &mut State, issue: u64, body: &str) -> u64 {
         via_app: None,
         no_app_field: false,
         association: "MEMBER".into(),
+        user_type: None,
     });
     id
 }
@@ -951,7 +954,10 @@ fn pull_pos(s: &State, n: &str) -> Option<usize> {
 }
 
 fn comment_json(c: &FakeComment) -> Value {
-    let mut v = json!({"id": c.id, "body": c.body, "user": {"login": c.user},
+    let mut v = json!({"id": c.id, "body": c.body, "user": {"login": c.user,
+            "type": c.user_type.clone().unwrap_or_else(|| {
+                if c.user.ends_with("[bot]") { "Bot" } else { "User" }.to_string()
+            })},
         "created_at": c.created_at, "updated_at": c.updated_at,
         "author_association": c.association,
         "issue_url": format!("https://api.github.com/repos/o/r/issues/{}", c.issue),

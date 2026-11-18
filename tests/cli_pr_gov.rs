@@ -268,3 +268,66 @@ fn a_session_without_graphql_gets_the_update_call() {
     assert_eq!(v["next"][0]["args"]["pullNumber"], 30);
     assert_eq!(v["next"][0]["args"]["draft"], false);
 }
+
+#[test]
+fn every_r_gov_path_goes_this_way_and_deletions_count() {
+    let (fake, dir) = setup();
+    fake.pull_file(30, "docs/agents/project.md", "modified", 1, 1, None);
+    fake.pull_file(30, "docs/agents/task-board.md", "removed", 0, 9, None);
+    fake.pull_file(30, "docs/agents/index.md", "modified", 2, 2, None);
+    fake.pull_file(30, "AGENTS.md", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn oneoff_allow_on_the_base_extends_a_task_less_pr() {
+    let (fake, dir) = setup();
+    fake.pull_file(30, ".bosun/bosun.toml", "modified", 1, 1, None);
+    fake.pull_file(30, "README.md", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 3, "{v}");
+    let cfg =
+        "project = \"widget\"\n\n[approvals]\noneoff_allow = [\"README.md\", \".github/**\"]\n";
+    fake.content(".bosun/bosun.toml", "main", cfg);
+    fake.pull_file(30, ".github/workflows/ci.yml", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 0, "{v}");
+    fake.pull_file(30, "src/main.rs", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 3, "{v}");
+}
+
+#[test]
+fn a_tick_only_plan_file_is_refused_since_risk_check_skips_it() {
+    let (fake, dir) = setup();
+    let tick = "@@ -1,1 +1,1 @@\n-- [ ] Task 1\n+- [x] Task 1";
+    fake.pull_file(
+        30,
+        "docs/superpowers/plans/p.md",
+        "modified",
+        1,
+        1,
+        Some(tick),
+    );
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("tick"),
+        "{v}"
+    );
+}
+
+#[test]
+fn a_governance_path_the_base_r_gov_misses_or_does_not_gate_for_the_owner_is_refused() {
+    for rules in [
+        "[[rule]]\nid = \"R-gov\"\nwhy = \"old\"\npaths = [\".bosun/**\"]\n",
+        "[[rule]]\nid = \"R-gov\"\nwhy = \"weak\"\npaths = [\"docs/agents/**\"]\napproval = \"two-verdicts\"\n",
+    ] {
+        let (fake, dir) = setup();
+        fake.content(".bosun/risk.toml", "main", rules);
+        fake.pull_file(30, "docs/agents/project.md", "modified", 1, 1, None);
+        let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+        assert_eq!(code, 3, "{rules}: {v}");
+    }
+}

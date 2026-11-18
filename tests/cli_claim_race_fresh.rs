@@ -33,6 +33,7 @@ fn rival_claims_11(fake: &FakeGithub, created: &'static str) {
             via_app: None,
             no_app_field: false,
             association: "MEMBER".into(),
+            user_type: None,
         });
         let i = s.issues.iter_mut().find(|i| i.number == 11).unwrap();
         i.labels = vec!["bosun:state/claimed".into()];
@@ -61,6 +62,7 @@ fn rival_claims_11_in_full(fake: &FakeGithub, at: &str, created: &'static str) {
                 via_app: None,
                 no_app_field: false,
                 association: "MEMBER".into(),
+                user_type: None,
             };
             s.comments.push(mk(
                 60,
@@ -169,6 +171,7 @@ fn a_third_claimer_that_won_in_the_meantime_gets_its_claimed_state_back() {
                 via_app: None,
                 no_app_field: false,
                 association: "MEMBER".into(),
+                user_type: None,
             });
         }));
     });
