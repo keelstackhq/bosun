@@ -284,6 +284,9 @@ jobs:
           done < "$cfg"
           add
           paths="${paths# }"
+          if [ -z "$paths" ] && grep -q ts-pnpm "$cfg"; then
+            echo "::warning::.bosun/bosun.toml names ts-pnpm, but no [[stack]] table with plain path = \"...\" and profile = \"ts-pnpm\" lines was read (inline tables and quoted keys are not supported): the pnpm steps are skipped"
+          fi
           if [ -n "$first" ]; then lock=true; else lock=false; fi
           { echo "paths=$paths"; echo "path=$first"; echo "lock=$lock"; } >> "$GITHUB_OUTPUT"
 {% endraw %}{% endif %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
@@ -448,6 +451,7 @@ jobs:
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}
 {% endraw %}{% if "ts-pnpm" in pieces %}{% raw %}          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          TS_PATHS: ${{ steps.stack.outputs.paths }}
 {% endraw %}{% endif %}{% raw %}        run: |
           bosun="$RUNNER_TEMP/bin/bosun"
           GATES="${ONLY:-$GATES}"
@@ -469,8 +473,10 @@ jobs:
             # test-integrity has read the PR's manifests. From here pnpm reads only the base's
             # config: `pnpm audit` reads the PR's pnpm-lock.yaml as data, and every package.json
             # and pnpm-workspace.yaml (where a PR could name a pnpmfile, config dependencies or
-            # any pnpm setting) is the base's; one the base lacks is deleted (a stack whose
-            # package.json the base lacks, a PR that adds it, is skipped by the gate). No file is written
+            # any pnpm setting) is the base's; one the base lacks is deleted. A ts-pnpm stack
+            # (step `ts-pnpm stack paths`) with a lockfile but no package.json left (a PR that
+            # adds the stack) gets a `{}` stand-in for the audit only: it is removed right after
+            # deps, so no created file reaches a later gate. No file is written
             # through a directory link that leaves the checkout. Also when the PR has no
             # lockfile: what pnpm reads never depends on the PR. So a PR's change to these
             # (auditConfig too) applies after it merges.
@@ -492,12 +498,23 @@ jobs:
                 mkdir -p -- "$(dirname -- "$p")"
                 git show "$BASE:$p" > "$p"
               done
+              stand=""
+              for d in $TS_PATHS; do
+                if [ -f "$d/pnpm-lock.yaml" ] && [ ! -e "$d/package.json" ]; then
+                  case "$(realpath -m -- "$d")" in
+                    "$top"|"$top"/*) echo '{}' > "$d/package.json"; stand="$stand $d/package.json" ;;
+                    *) echo "::error::$d: links outside the checkout"; exit 1 ;;
+                  esac
+                fi
+              done
             fi
 {% endif %}{% raw %}            echo "::group::bosun gate $g"
             # Defence in depth: the pinned bosun, unchanged since step bin.
             echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "::error::$bosun changed"; exit 1; }
             "$bosun" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
-            echo "::endgroup::"
+{% endraw %}{% if "ts-pnpm" in pieces %}            for f in ${stand:-}; do rm -f -- "$f"; done
+            stand=""
+{% endif %}{% raw %}            echo "::endgroup::"
           done
 {% endraw %}{% if "ts-pnpm" in pieces %}          echo "pr_gates=${later# }" >> "$GITHUB_OUTPUT"
 {% endif %}{% if "ts-pnpm" in pieces %}{% raw %}

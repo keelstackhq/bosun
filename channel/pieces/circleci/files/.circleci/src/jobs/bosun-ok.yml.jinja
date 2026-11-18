@@ -107,6 +107,9 @@ environment:
         done < "$cfg"
         add
         paths="${paths# }"
+        if [ -z "$paths" ] && grep -q ts-pnpm "$cfg"; then
+          echo ".bosun/bosun.toml names ts-pnpm, but no [[stack]] table with plain path = \"...\" and profile = \"ts-pnpm\" lines was read (inline tables and quoted keys are not supported): the pnpm steps are skipped" >&2
+        fi
         echo "export BOSUN_TS_PATHS='$paths' BOSUN_TS_PATH='$first'" >> "$BASH_ENV"
 {% endif %}{% if "rust" in pieces %}  - run:
       name: rustup and the cargo tools
@@ -223,6 +226,17 @@ environment:
             mkdir -p -- "$(dirname -- "$p")"
             git show "$1:$p" > "$p"
           done || return 1
+          # A ts-pnpm stack with a lockfile but no package.json left (a PR that adds it) gets a
+          # `{}` stand-in for the audit only; it is removed right after deps.
+          stand=""
+          if [ "$1" != HEAD ]; then
+            for d in $BOSUN_TS_PATHS; do
+              if [ -f "$d/pnpm-lock.yaml" ] && [ ! -e "$d/package.json" ]; then
+                inside "$d/package.json" || return 1
+                echo '{}' > "$d/package.json"; stand="$stand $d/package.json"
+              fi
+            done
+          fi
         }
 {% endif %}        for g in $GATES; do
           # ci-minutes came with bosun 0.7.0: a repo that pins an older release skips it.
@@ -249,4 +263,6 @@ environment:
 {% endif %}          # Defence in depth: the pinned bosun, unchanged since it was installed.
           echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "$bosun changed"; exit 1; }
           "$bosun" gate "$g" $all || { echo "gate $g failed; later gates did not run"; exit 1; }
-        done
+{% if "ts-pnpm" in pieces %}          for f in ${stand:-}; do rm -f -- "$f"; done
+          stand=""
+{% endif %}        done
