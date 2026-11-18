@@ -579,7 +579,7 @@ fn merge_env_tamper(command: &str) -> Option<String> {
         return None;
     }
     let verbs = [
-        "export", "unset", "declare", "typeset", "env", "readonly", "eval", "source", ".", "local",
+        "export", "unset", "declare", "typeset", "env", "readonly", "eval", "source", "local",
     ];
     let touches_env = words.iter().any(|w| {
         verbs.contains(&w.as_str())
@@ -588,10 +588,14 @@ fn merge_env_tamper(command: &str) -> Option<String> {
                     && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             })
     });
-    let set_a = words.windows(2).any(|p| {
-        (p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"))
-            || (p[0] == "printf" && p[1] == "-v")
-    });
+    let dot = shell_words(command)
+        .split(|w| w == SEP)
+        .any(|seg| seg.first().is_some_and(|w| w == "."));
+    let set_a = dot
+        || words.windows(2).any(|p| {
+            (p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"))
+                || (p[0] == "printf" && p[1] == "-v")
+        });
     // The command word is a variable or substitution: it may be bosun in disguise.
     let indirect = shell_words(command).split(|w| w == SEP).any(|seg| {
         seg.iter().any(|w| w == "merge")
