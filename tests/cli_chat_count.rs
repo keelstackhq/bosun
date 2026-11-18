@@ -472,4 +472,67 @@ mod signed {
         app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
         refused(&fake);
     }
+
+    fn keys_file(entries: &[(&str, u8, &str)]) -> String {
+        (entries.iter())
+            .map(|(id, seed, role)| {
+                let k = b64::encode(kp(*seed).public_key().as_ref());
+                format!("[[key]]\nid = \"{id}\"\ned25519 = \"{k}\"\nrole = \"{role}\"\n")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn delegate_and_signer_keys_do_not_count() {
+        for role in ["delegate", "signer"] {
+            let fake = setup(ON);
+            fake.content(
+                ".bosun/approvers.toml",
+                MAIN,
+                &keys_file(&[("k1", 1, role)]),
+            );
+            app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+            refused(&fake);
+        }
+    }
+
+    #[test]
+    fn head_config_cannot_turn_chat_signed_off() {
+        let fake = setup(ON);
+        fake.content(
+            ".bosun/bosun.toml",
+            HEAD,
+            "[approvals]\nchat_signed = false\n",
+        );
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        refused(&fake);
+    }
+
+    #[test]
+    fn signed_record_without_question_is_refused() {
+        let fake = setup(ON);
+        let signed = record(1, "k1", "acme/widget", 1, HEAD);
+        app_comment(&fake, "ada", &signed.replace(" question=1-0123456-1", ""));
+        refused(&fake);
+    }
+
+    #[test]
+    fn duplicate_key_ids_count_for_none() {
+        let fake = setup(ON);
+        let dup = keys_file(&[("k1", 1, "owner"), ("k1", 2, "owner")]);
+        fake.content(".bosun/approvers.toml", MAIN, &dup);
+        app_comment(&fake, "ada", &record(1, "k1", "acme/widget", 1, HEAD));
+        refused(&fake);
+    }
+
+    #[test]
+    fn the_failure_names_the_unsigned_record() {
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{v}");
+        let fix = v["error"]["fix"].as_str().unwrap();
+        assert!(fix.contains("unsigned under chat_signed"), "{fix}");
+        assert!(!fix.contains("orchestrator session left"), "{fix}");
+    }
 }

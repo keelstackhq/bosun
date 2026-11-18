@@ -903,7 +903,16 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         ),
         _ => String::new(),
     };
-    let chat_note = if lapsed {
+    let unsigned = lapsed
+        && chat_signed(gh, base)?
+        && (gh.list_comments(n)?.iter()).any(|c| {
+            approve::parse_chat_record(&c.body, head, Some(n)).is_some_and(|r| r.sig.is_none())
+        });
+    let chat_note = if unsigned {
+        format!(
+            "a chat approval record for head {head} exists but does not count: unsigned under chat_signed (`[approvals] chat_signed = true`); the orchestrator records it again with `bosun approve {n}@{head} --chat --question <id> --sign-key <pem>`, or: "
+        )
+    } else if lapsed {
         format!(
             "a chat approval record for head {head} exists but does not count: its orchestrator session left, or its join had expired when the record was written (the registry is read at check time); a live orchestrator must join and record the owner's chat approval again, or: "
         )
