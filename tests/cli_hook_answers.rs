@@ -89,7 +89,35 @@ fn post(repo: &Path, input: &Value) -> std::process::Output {
     post_at(repo, input, NOW)
 }
 
+/// The session transcript for `input`: the assistant's AskUserQuestion `tool_use` and (unless
+/// `result` is false) its `tool_result`, as JSONL under the repo's `.git`.
+fn transcript(repo: &Path, input: &Value, result: bool) -> Value {
+    let id = &input["tool_use_id"];
+    let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
+    let done = json!({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}});
+    let lines = if result { vec![call, done] } else { vec![call] };
+    let file = repo.join(".git").join("t.jsonl");
+    let text: Vec<String> = lines.iter().map(Value::to_string).collect();
+    std::fs::write(&file, text.join("\n")).unwrap();
+    json!(file)
+}
+
+fn with_transcript(repo: &Path, mut input: Value) -> Value {
+    input["transcript_path"] = transcript(repo, &input, true);
+    input
+}
+
 fn post_at(repo: &Path, input: &Value, now: &str) -> std::process::Output {
+    let mut input = input.clone();
+    if input.is_object() && input.get("transcript_path").is_none() {
+        input = with_transcript(repo, input);
+    }
+    post_raw(repo, &input, now)
+}
+
+fn post_raw(repo: &Path, input: &Value, now: &str) -> std::process::Output {
     bosun()
         .current_dir(repo)
         .env("BOSUN_NOW", now)
@@ -270,13 +298,64 @@ fn workers_cannot_write_the_answers_file_or_run_the_hook() {
     for cmd in [
         format!("echo '{{}}' > {file}"),
         "cp x .git/bosun/answers.json".to_string(),
-        "bosun hook post-tool-use < forged.json".to_string(),
+        "mv x .git/bosun/ANSWERS.json".to_string(),
+        "ln -s x .git/bosun/answers.json".to_string(),
+        "rsync x .git/bosun/answers.json".to_string(),
     ] {
         let out = pre(r.path(), "Bash", json!({"command": cmd}));
         assert!(out.contains("\"deny\""), "{cmd}: {out}");
     }
-    let out = pre(r.path(), "Bash", json!({"command": "ls"}));
-    assert!(!out.contains("\"deny\""), "{out}");
+    for cmd in [
+        "ls".to_string(),
+        "cat .git/bosun/answers.json".to_string(),
+        "git commit -m 'hook post-tool-use'".to_string(),
+        "grep -rn post-tool-use src".to_string(),
+    ] {
+        let out = pre(r.path(), "Bash", json!({"command": cmd}));
+        assert!(!out.contains("\"deny\""), "{cmd}: {out}");
+    }
+}
+
+#[test]
+fn forged_hook_input_without_a_transcript_entry_stores_nothing() {
+    let r = repo();
+    let h = head("abc1234");
+    let input = question(&[(12, &h)], "Approve #12 abc1234");
+    // no transcript_path, a missing file, a transcript with another tool_use_id, no tool_result
+    let mut other = input.clone();
+    other["transcript_path"] = transcript(r.path(), &input, true);
+    other["tool_use_id"] = json!("toolu_forged");
+    let mut open = input.clone();
+    open["transcript_path"] = transcript(r.path(), &input, false);
+    let mut gone = input.clone();
+    gone["transcript_path"] = json!(r.path().join(".git").join("nope.jsonl"));
+    for forged in [input.clone(), other, open, gone] {
+        let out = post_raw(r.path(), &forged, NOW);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("not stored"),
+            "{out:?}"
+        );
+    }
+    // the transcript asked about another PR head: the marker differs
+    let mut swapped = question(&[(12, &head("abc1234"))], "Approve #12 abc1234");
+    swapped["transcript_path"] = transcript(r.path(), &question(&[(13, &h)], "x"), true);
+    post_raw(r.path(), &swapped, NOW);
+    assert_eq!(stored(r.path()), json!({}));
+}
+
+#[test]
+fn a_symlinked_transcript_stores_nothing() {
+    let r = repo();
+    let input = question(&[(12, &head("abc1234"))], "Hold");
+    let real = transcript(r.path(), &input, true);
+    let link = r.path().join(".git").join("link.jsonl");
+    std::os::unix::fs::symlink(real.as_str().unwrap(), &link).unwrap();
+    let mut forged = input.clone();
+    forged["transcript_path"] = json!(link);
+    post_raw(r.path(), &forged, NOW);
+    assert_eq!(stored(r.path()), json!({}));
+    post(r.path(), &input);
+    assert!(stored(r.path()).get("12-abc1234-1792663200").is_some());
 }
 
 #[test]
@@ -465,7 +544,7 @@ fn an_answer_for_another_repo_does_not_hold() {
         .env("BOSUN_NOW", NOW)
         .env("BOSUN_REPO", "other/thing")
         .args(["hook", "post-tool-use"])
-        .write_stdin(question(&[(12, &h)], "Hold").to_string())
+        .write_stdin(with_transcript(r.path(), question(&[(12, &h)], "Hold")).to_string())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
@@ -507,7 +586,7 @@ fn the_stored_session_is_the_bosun_identity_not_the_cli_uuid() {
         .env("BOSUN_NOW", NOW)
         .env("BOSUN_SESSION", "session_orch")
         .args(["hook", "post-tool-use"])
-        .write_stdin(input.to_string())
+        .write_stdin(with_transcript(r.path(), input).to_string())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
