@@ -248,7 +248,7 @@ pub fn comment_json(body: &str) -> Option<&str> {
 
 /// No-CI mode: sessions whose newest verdict comment on `pr` at `head` is clean (approve, confidence
 /// at least [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, all `chunks` listed), unedited,
-/// not `excluded`, of an allowed model. Any unclean newest verdict blocks all. Writers' comments.
+/// not `excluded`, of an allowed model. Any unclean newest verdict blocks all.
 pub fn comment_clean<'a>(
     comments: impl IntoIterator<Item = (&'a str, bool)>,
     pr: u64,

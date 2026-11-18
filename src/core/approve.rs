@@ -712,7 +712,7 @@ pub fn question_id(pr: u64, head: &str, unix: i64) -> String {
 
 const READY_MARKER: &str = "<!-- bosun:ready v1 head=";
 
-/// The no-CI summary `bosun pr --ready` posts once per head (spec §4); `risk`: `normal` or `high: <ids>`.
+/// The no-CI summary `bosun pr --ready` posts per head; `risk`: `normal` or `high: <ids>`.
 pub fn ready_summary(
     head: &str,
     gates: &[String],
@@ -748,8 +748,7 @@ pub fn summary_readiness(summary: Option<&str>) -> (Readiness, String) {
         .unwrap_or_default()
         .to_string();
     let risk = summary_field(body, "risk").unwrap_or_default();
-    let waiting = risk.starts_with("high") && summary_field(body, "approval") == Some("none");
-    let r = if waiting {
+    let r = if risk.starts_with("high") && summary_field(body, "approval") == Some("none") {
         Readiness::Ready(risk_ids(risk))
     } else {
         Readiness::NotWaiting

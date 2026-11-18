@@ -148,20 +148,18 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// No-CI readiness of `p`: its newest ready summary of the head by a writer (spec §4).
+/// No-CI readiness of `p`: its newest ready summary of the head by a writer.
 fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
     let comments = gh.list_comments(p.number)?;
     for c in comments.iter().rev() {
-        if parse_ready_summary(&c.body, &p.head_sha)
-            && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"))
-        {
+        if parse_ready_summary(&c.body, &p.head_sha) && crate::app::is_writer(gh, &c.user)? {
             return Ok(summary_readiness(Some(&c.body)));
         }
     }
     Ok(summary_readiness(None))
 }
 
-/// The board of `pulls`, in their order. A PR whose base has no CI is read from its ready summary.
+/// The board of `pulls`, in their order (no CI: read from the ready summary).
 fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
