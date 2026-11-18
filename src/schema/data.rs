@@ -152,7 +152,9 @@ gate = {gate?: str, stack?: str | null, command?: [str], packages?: [str], exit_
     secs?: num, over_budget?: bool, skipped?: bool, reason?: str, stamp?: str | null,
     uncommitted?: [str], files?: [str], findings?: [any], base?: str, files_checked?: int,
     integrity?: str, head_sha?: str, main_red?: int | null, mainfix?: bool, pass?: bool, pr?: int,
-    checks_skipped?: bool,
+    checks_skipped?: bool, mode?: str, app_id?: int | null, verified?: bool, gates?: [{context: str,
+    status: {state: str, creator: str} | null, app_run: {state: str, id: int} | null,
+    other_runs: int, state: str | null, trusted: bool, disagree: bool}],
     ci?: {base: str, event: str, provider: str}, runs?: [{gate: str, stack: str | null,
     command: [str], packages: [str], exit_status: int, secs: num, over_budget: bool,
     skipped: bool}]};

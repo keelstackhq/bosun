@@ -271,7 +271,8 @@ pub fn gate_statuses(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
         .collect())
 }
 
-fn as_status(r: CheckRun) -> Status {
+/// A check run read as a status: an `error:` title is `error`, an open run is `pending`.
+pub(crate) fn as_status(r: CheckRun) -> Status {
     let state = match (r.status.as_str(), r.conclusion.as_deref()) {
         ("completed", Some("success")) => "success",
         ("completed", _) if r.title.starts_with("error:") => "error",

@@ -121,6 +121,15 @@ key goes only to the token step, the token only to the bosun step. main-health's
   once per process; `gate_statuses` and `gate_history` (`src/github/gate.rs`) give the App's runs
   as statuses (title as the description, an `error:` title as `error`, an open run as `pending`),
   so the readers keep their logic. `bosun pr --auto-merge` reports the gates from them.
+- Verifying the poster: `bosun gate sources --pr N` (or `BOSUN_PR`) is read-only. For each gate
+  context on the PR head it reports the newest status (`state`, `creator`), the newest run of the
+  gate App (`app_id` = `[checks] app_id`; `state` as `gate_statuses` reads it, `id`), the count of
+  same-name runs by any other App (Actions included; they never count), the judged `state`
+  (`checks`: the App run; `dual`: the worse of both, error > failure > pending > success;
+  `statuses`: the status), `trusted` (the App posted, never in `statuses`) and `disagree` (status
+  and App run differ: a forge sign). `verified` = all trusted, none disagree: exit 0; else exit 3
+  naming the contexts, with the data, and a fix (statuses: set `mode = "dual"`; else re-run the
+  gate workflow and treat the status as unverified).
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and
   only records by `<app_slug>[bot]` count (two verdicts, delegate, carry): the readers see that
   login as the trusted author and `github-actions[bot]` as nobody. The App's record body is
