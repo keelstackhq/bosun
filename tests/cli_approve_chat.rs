@@ -36,6 +36,20 @@ fn repo() -> tempfile::TempDir {
     tmp
 }
 
+/// The hook input with the session transcript it must be backed by: the AskUserQuestion
+/// `tool_use` and its `tool_result`, as JSONL under the repo's `.git`.
+fn with_transcript(repo: &Path, mut input: Value) -> Value {
+    let id = &input["tool_use_id"];
+    let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
+    let done = json!({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}});
+    let file = repo.join(".git").join("t.jsonl");
+    std::fs::write(&file, format!("{call}\n{done}")).unwrap();
+    input["transcript_path"] = json!(file);
+    input
+}
+
 /// Store an answer as the PostToolUse hook does.
 fn answer(dir: &Path, id: &str, answer: &str, pr: u64, head: &str) {
     let file = dir
@@ -183,7 +197,7 @@ fn chat_end_to_end_with_the_hook_stored_answer_in_cloud() {
     let mut hook = cloud(bosun());
     let out = hook
         .args(["hook", "post-tool-use"])
-        .write_stdin(input.to_string())
+        .write_stdin(with_transcript(tmp.path(), input).to_string())
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -667,7 +681,7 @@ fn chat_end_to_end_from_the_hook_input() {
             .env("BOSUN_NOW", NOW)
             .env("BOSUN_SESSION", session)
             .args(["hook", "post-tool-use"])
-            .write_stdin(input.to_string())
+            .write_stdin(with_transcript(tmp.path(), input.clone()).to_string())
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(0));
