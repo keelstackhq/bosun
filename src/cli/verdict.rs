@@ -308,7 +308,12 @@ pub(crate) fn require_all_chunks(
     listed.sort_unstable();
     Err(BosunError::error(
         format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
-        "review every chunk of `bosun review-pack <pr>` and list each number in `chunks_reviewed`",
+        format!(
+            "add them to \"chunks_reviewed\": {:?} (every chunk of `bosun review-pack {}`; \
+             its verdict_skeleton lists them), then post again",
+            (1..=count).collect::<Vec<_>>(),
+            verdict.pr
+        ),
     ))
 }
 

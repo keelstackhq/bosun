@@ -44,6 +44,10 @@ are facts about the head: name a red check or a missing stamp in a finding when 
 Before you return, write the verdict JSON to a file in your scratchpad (it survives a restart); \
 it is posted with `bosun verdict comment --from -` (the JSON on stdin) or `--from <file>`.";
 
+/// Added to the instructions by `bosun review-pack` only (review-ci's pack has no skeleton).
+const SKELETON_NOTE: &str = " Start from `verdict_skeleton`: pr, head_sha and every chunk number \
+are filled in, and its fail-safe values (request-changes, confidence 0) never approve.";
+
 /// Pack fields whose text comes from people or agents (never from the base branch).
 const UNTRUSTED: [&str; 15] = [
     "title",
@@ -80,6 +84,12 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             .map(|(c, s)| json!({"context": c, "state": s}))
             .collect()
     });
+    // Fail-safe defaults: posted unchanged, it never approves.
+    let count = pack["chunks"].as_array().map_or(0, Vec::len).max(1);
+    pack["verdict_skeleton"] = json!({"pr": args.pr, "head_sha": head, "verdict": "request-changes",
+        "confidence": 0.0, "findings": [], "lessons_hit": [], "escalate_risk": false,
+        "chunks_reviewed": (1..=count).collect::<Vec<_>>()});
+    pack["instructions"] = json!(format!("{INSTRUCTIONS}{SKELETON_NOTE}"));
     pack["gate_stamps"] = gate_stamps(&app.ctx.dir, &head).unwrap_or_else(|e| {
         eprintln!("bosun: review-pack: gate stamps: {}", e.message);
         Value::Null

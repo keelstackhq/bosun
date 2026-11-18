@@ -1,0 +1,1 @@
+- `bosun review-pack` adds `verdict_skeleton` (a fail-safe request-changes verdict with pr, head_sha and every chunk filled in) and tells the reviewer to start from it; the missing-chunks refusal of `verdict post/comment/apply` now gives the full `chunks_reviewed` list to add.
