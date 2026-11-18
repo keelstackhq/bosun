@@ -1,0 +1,1 @@
+- 2026-11-18 · risk-check verdict re-apply · src/cli/risk_check.rs, src/cli/verdict.rs, src/schema/data.rs, spec §8 · this PR

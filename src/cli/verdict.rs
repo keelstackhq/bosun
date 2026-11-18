@@ -127,7 +127,7 @@ pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, B
 
 /// Check a verdict comment (unedited, by a member, on its own PR, for the current head) and
 /// record its verdict.
-fn apply(app: &App, id: u64) -> CmdResult {
+pub(crate) fn apply(app: &App, id: u64) -> CmdResult {
     let gh = app.gh.as_ref();
     let refuse = |why: String| {
         BosunError::error(

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::{APPROVABLE, CONTEXT as VERDICT};
+use super::verdict::{APPROVABLE, CONTEXT as VERDICT, apply as apply_verdict};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -25,6 +25,7 @@ use crate::core::risk::{
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
+use crate::core::verdict::{Verdict, comment_json};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -795,6 +796,10 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     w.post_full(head, CONTEXT, state, &description, &summary)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
     let carried = carry_status(gh, w, &pull, &linked);
+    // A green head with no review-verdict gets its own verdict comment applied (spec §8).
+    let reapplied = (passed && carried.is_none())
+        .then(|| reapply_verdict(app, w, &pull))
+        .flatten();
     // An owner's approval of this exact head also clears an escalated verdict (spec §7).
     // A low-risk head reads the owners' approval only when an escalation waits for it.
     let signer = need.signer_on;
@@ -818,7 +823,8 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
-        "verdict_carried_from": carried, "approval_carried_from": carried_from});
+        "verdict_carried_from": carried, "approval_carried_from": carried_from,
+        "verdict_reapplied": reapplied});
     if cleared.is_some() {
         data["verdict_cleared_by"] = json!(cleared);
     }
@@ -1218,6 +1224,33 @@ fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) ->
     }
     w.post(head, VERDICT, "success", &text).ok()?;
     settle(gh, w, head, &text).then_some(h)
+}
+
+/// The newest verdict comment for exactly the head that `bosun verdict apply` accepts, applied
+/// when the head has no `review-verdict` (a doubt counts as having one). Never an error.
+fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
+    let gh = app.gh.as_ref();
+    let head = pull.head_sha.as_str();
+    if w.is_dry() || has_verdict(gh, head) {
+        return None;
+    }
+    let mut comments = gh.list_comments(pull.number).ok()?;
+    comments.sort_by_key(|c| std::cmp::Reverse(c.id));
+    for c in comments {
+        let v = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok());
+        if !v.is_some_and(|v| v.head_sha == head && v.pr == pull.number) {
+            continue;
+        }
+        match apply_verdict(app, c.id) {
+            Ok(o) if !o.data["status"].is_null() => return Some(c.id),
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "bosun: risk-check: verdict comment {} not re-applied: {}",
+                c.id, e.message
+            ),
+        }
+    }
+    None
 }
 
 const CARRIED: &str = "carried from ";

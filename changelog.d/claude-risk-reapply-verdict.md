@@ -1,0 +1,1 @@
+- `bosun risk-check` that posts `success` on a head with no `review-verdict` re-applies the newest valid verdict comment for exactly that head (as `bosun verdict apply`) and reports `data.verdict_reapplied`; never an error.
