@@ -119,7 +119,11 @@ key goes only to the token step, the token only to the bosun step. main-health's
   failure > pending > success); a context only the App posted counts; other Apps' runs never
   count. So a forged green status can never outvote the App's red, and a red status still
   blocks (the ruleset requires the statuses until step 6). `gate_history` puts these judged
-  entries first. Readers: risk-check (pending repair, carry), `bosun
+  entries first. Fail closed: when a later run skips the App write (no token) its green status
+  cannot clear an older red or pending App run on the same head; re-run the gate workflow with
+  the token (a status carries no proof of who posted it, so a newer one is never trusted over
+  the App). A token that cannot read check runs (a private repo whose workflow grants no
+  `checks: read`) reads statuses only, one stderr line. Readers: risk-check (pending repair, carry), `bosun
   approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
   context counts only as a check run of the App and `ci-ok` only from github-actions; in
   `statuses` and `dual` a status or check run, as today). `Ctx::load` records the trusted App

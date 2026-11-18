@@ -274,7 +274,7 @@ pub fn gate_history(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
             .filter(|s| seen.insert(s.context.clone()))
             .cloned()
             .collect();
-        let mut out = worse_of_app(newest, gh.check_runs_all(sha)?, id);
+        let mut out = worse_of_app(newest, dual_runs(gh, sha), id);
         out.extend(history);
         return Ok(out);
     };
@@ -292,7 +292,7 @@ pub fn gate_statuses(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
     if trusted_app().is_none() {
         let statuses = gh.statuses(sha)?;
         return match DUAL_APP.get().copied().flatten() {
-            Some(id) => Ok(worse_of_app(statuses, gh.check_runs_all(sha)?, id)),
+            Some(id) => Ok(worse_of_app(statuses, dual_runs(gh, sha), id)),
             None => Ok(statuses),
         };
     }
@@ -302,6 +302,16 @@ pub fn gate_statuses(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
         .into_iter()
         .filter(|s| seen.insert(s.context.clone()))
         .collect())
+}
+
+/// The check runs on `sha` for the `dual` check. A token without `checks: read` (a private repo's
+/// workflow `GITHUB_TOKEN` that does not grant it) reads none: one stderr line, the statuses
+/// alone, as before `dual` checked the poster.
+fn dual_runs(gh: &dyn Github, sha: &str) -> Vec<CheckRun> {
+    gh.check_runs_all(sha).unwrap_or_else(|e| {
+        eprintln!("bosun: dual mode: cannot read the gate App's check runs ({e}); statuses only");
+        Vec::new()
+    })
 }
 
 /// Each status whose context App `id` also posted becomes the worse of the two; a context only

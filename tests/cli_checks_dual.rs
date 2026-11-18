@@ -102,3 +102,29 @@ fn dual_other_apps_runs_never_count() {
     fake.app_run(HEAD, "review-verdict", "failure", "x", "other-app", 7);
     assert_eq!(ready(&list(&fake, &dual)), [1], "only the trusted App");
 }
+
+#[test]
+fn dual_fails_closed_on_a_stale_red_app_run() {
+    // An App run said request changes; a later run without the App token posts only a green
+    // status. The status cannot prove its poster, so the App's red stays in force.
+    let fake = waiting();
+    let dual = repo("dual");
+    fake.app_run(
+        HEAD,
+        "review-verdict",
+        "failure",
+        "request changes",
+        SLUG,
+        APP_ID,
+    );
+    fake.status(HEAD, "review-verdict", "success", "approved");
+    assert!(ready(&list(&fake, &dual)).is_empty());
+}
+
+#[test]
+fn statuses_mode_ignores_app_runs() {
+    let fake = waiting();
+    let statuses = repo("statuses");
+    fake.app_run(HEAD, "review-verdict", "failure", "x", SLUG, APP_ID);
+    assert_eq!(ready(&list(&fake, &statuses)), [1]);
+}
