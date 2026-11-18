@@ -579,24 +579,11 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     if !runs_bosun || !words.iter().any(|w| w == "merge") {
         return None;
     }
-    let verbs = [
-        "export",
-        "unset",
-        "declare",
-        "typeset",
-        "env",
-        "readonly",
-        "eval",
-        "source",
-        "local",
-        "read",
-        "mapfile",
-        "readarray",
-        "getopts",
-        "let",
-    ];
+    let verbs = "export unset declare typeset env readonly eval source local read mapfile \
+                 readarray getopts let";
+
     let touches_env = words.iter().any(|w| {
-        verbs.contains(&w.as_str())
+        verbs.split_whitespace().any(|v| v == w)
             || w.split_once('=').is_some_and(|(n, _)| {
                 n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
                     && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -621,7 +608,6 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     // `${!name}` expands the variable `name` points to: the identity variable can be named at
     // run time (`n=BOSUN_SESSION; export ${!n}=x`).
     let by_name = command.contains("${!");
-    // an arithmetic command assigns too
     (touches_env || set_a || indirect || by_name || command.contains("((")).then(|| {
         "a command that runs `bosun merge` may not change the environment (export, unset, \
          declare, env, eval, source, NAME=...): the merge checks the caller's own identity \
