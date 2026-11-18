@@ -301,6 +301,23 @@ pub fn script_rules(
     script_walk(command, read, branch_at, default_branch, None)
 }
 
+/// The answers-lock for script files: refuses a command that runs a script (or reads stdin by
+/// name) whose text holds both words `hook` and `post-tool-use`; see [`super::answers_hook_words`].
+pub fn answers_script_lock(command: &str, read: &dyn Fn(&str) -> Option<Script>) -> Option<String> {
+    script_paths(command, 0).into_iter().find_map(|sp| {
+        let Some(Script::Text(code)) = read(&sp.path) else {
+            return None;
+        };
+        super::answers_hook_words(&code).then(|| {
+            format!(
+                "the script `{}` names the answers hook (`hook` and `post-tool-use`): the owner's \
+                 answers file is written only by the PostToolUse hook for AskUserQuestion",
+                sp.path
+            )
+        })
+    })
+}
+
 /// [`script_rules`], reporting each allowed push to `sinks`.
 pub(super) fn script_walk(
     command: &str,
@@ -371,6 +388,18 @@ mod tests {
                 .then(|| Script::Text(body.to_string()))
         };
         script_rules(cmd, &read, &|_| Some("feature".into()), "main")
+    }
+
+    #[test]
+    fn a_script_naming_the_answers_hook_is_refused() {
+        let read = |body: &'static str| move |_: &str| Some(Script::Text(body.to_string()));
+        let hit = |body: &'static str| answers_script_lock("python3 x.py", &read(body));
+        assert!(
+            hit("import subprocess\nsubprocess.run(['bosun','hook','post-tool-use'])").is_some()
+        );
+        assert!(hit("cmd = 'bosun hook ' + 'post-tool-use'").is_some());
+        assert!(hit("print('hook')").is_none());
+        assert!(answers_script_lock("python3 x.py", &|_| None).is_none());
     }
 
     #[test]
