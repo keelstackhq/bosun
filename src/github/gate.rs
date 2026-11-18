@@ -385,6 +385,7 @@ mod tests {
             confidence: Some(0.9),
             major: Some(0),
             model: None,
+            relayed_by: None,
         }
         .to_line();
         let body = defuse(&format!("bosun verdict for sha42\n\n{line}"));

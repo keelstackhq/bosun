@@ -146,7 +146,19 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
 - Cloud sessions cannot write commit statuses (the agent proxy answers 403), so a reviewer there
   runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
-  (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
+  (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The input
+  may instead be a verdict comment body as `comment` writes it (a relay): its JSON, reviewer,
+  model and chunks lines are kept; when its reviewer is another session, the posted comment adds
+  `<!-- bosun:relayed_by <session> -->` before the marker (an audit hint, self-declared like the
+  reviewer tag; its model line is kept and never replaced by the relaying session's model).
+  Relaying a relayed comment keeps the reviewer and replaces `relayed_by` (only the last
+  relayer is named). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
+  `relayed_by` too and records the reviewer with `relayed_by` in the verdict record. In the
+  two-verdict, delegate and autonomous checks and in verdict carry-over, a verdict whose relayer
+  holds or held a lease on a linked task (so also the PR author's session) is not independent:
+  it counts as the relayer's and never counts, and as the reviewer's newest record it withdraws
+  an older approval. Wave agents share their orchestrator's session id (§4), so `S` and `S/task`
+  are one session here: the orchestrator relaying its own wave's verdict fails closed. The
   `verdict` workflow (`issue_comment` created, comments with the marker, or by a Bot account and
   containing `"head_sha"` and a ```` ```json ```` fence, so bosun's own record comments never start
   it, on a PR only) runs

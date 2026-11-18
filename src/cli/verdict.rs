@@ -17,8 +17,9 @@ use crate::core::records::Record;
 use crate::core::risk::BOT_SESSION;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, bot_verdict_json, closes_issue, comment_body, comment_chunks,
-    comment_json, comment_model, comment_session, effective, valid_model,
+    COMMENT_MARKER, Verdict, bot_verdict_json, closes_issue, comment_chunks, comment_json,
+    comment_model, comment_relayed_by, comment_session, effective, relayed_comment_body,
+    valid_model,
 };
 use crate::github::{Comment, Github, IssuePatch, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -68,20 +69,45 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 &verdict,
                 &app.ctx.session,
                 env_model().as_deref(),
+                None,
             )
         }
         VerdictCmd::Comment(FromArg { from }) => {
-            let verdict = parse(&read_input(from)?)?;
+            // A verdict comment body relayed by another session keeps its reviewer and model.
+            let text = read_input(from)?;
+            let me = app.ctx.session.as_str();
+            // JSON input stays JSON even when a string in it holds the marker.
+            let body = (!text.trim_start().starts_with('{')).then_some(text.as_str());
+            let relay = body.and_then(comment_json);
+            let (json, reviewer, model) = match relay {
+                Some(j) => (
+                    j,
+                    comment_session(&text).unwrap_or(me),
+                    comment_model(&text),
+                ),
+                None => (text.as_str(), me, None),
+            };
+            let mut verdict = parse(json)?;
+            // The chunks line belongs to a comment body; plain JSON lists its own.
+            if relay.is_some() && verdict.chunks_reviewed.is_empty() {
+                verdict.chunks_reviewed = comment_chunks(&text);
+            }
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-            let c = gh.add_comment(
-                verdict.pr,
-                &comment_body(&verdict, &app.ctx.session, env_model().as_deref()),
-            )?;
-            Ok(Outcome::data(
-                json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
-                "comment_id": c.id, "applied_by": "the verdict workflow"}),
-            ))
+            let relayed_by = (reviewer != me).then_some(me);
+            // A relay keeps the body's model only: the relaying session's env is not the reviewer's.
+            let model = match relayed_by {
+                Some(_) => model.map(str::to_string),
+                None => model.map(str::to_string).or_else(env_model),
+            };
+            let body = relayed_comment_body(&verdict, reviewer, model.as_deref(), relayed_by);
+            let c = gh.add_comment(verdict.pr, &body)?;
+            let mut data = json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
+                "comment_id": c.id, "applied_by": "the verdict workflow", "reviewer": reviewer});
+            if let Some(r) = relayed_by {
+                data["relayed_by"] = json!(r);
+            }
+            Ok(Outcome::data(data))
         }
         VerdictCmd::Apply(ApplyArg { comment_id }) => apply(&app, *comment_id),
     }
@@ -245,7 +271,18 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    let mut out = record(app, &pull, &verdict, recorded, comment_model(&c.body))?;
+    let relayed_by = comment_relayed_by(&c.body);
+    let mut out = record(
+        app,
+        &pull,
+        &verdict,
+        recorded,
+        comment_model(&c.body),
+        relayed_by,
+    )?;
+    if let Some(r) = relayed_by {
+        out.data["relayed_by"] = json!(r);
+    }
     if verdict.verdict == "request-changes" && cfg.mode_effective().mode == ModeName::Autonomous {
         // The verdict is recorded: a failed write is reported, never an error.
         out.data["fix_task"] = match fix_task(gh, &verdict) {
@@ -370,6 +407,7 @@ pub(crate) fn record(
     verdict: &Verdict,
     session: &str,
     model: Option<&str>,
+    relayed_by: Option<&str>,
 ) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
@@ -398,6 +436,7 @@ pub(crate) fn record(
         confidence: Some(verdict.confidence),
         major: Some(verdict.count("major") as u32),
         model: model.map(str::to_string),
+        relayed_by: relayed_by.map(str::to_string),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
     w.add_record(n, &format!("{human}\n\n{}", record.to_line()))?;
