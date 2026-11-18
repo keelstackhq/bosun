@@ -31,34 +31,19 @@ const ENV_PASTE: &str = "claude.ai/code > Environments > <environment> > Environ
 /// Cloud sessions set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE themselves (Claude Code cloud docs).
 const PCT_NOTE: &str = "autocompact_pct is for local sessions only: a cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself and ignores an environment value; use autocompact_window for cloud";
 
-/// The hooks bosun wants in every repo: (event, matcher, command, timeout); a test checks they
-/// equal the repo's own `.claude/settings.json`, so Claude Code runs each command once.
-pub const HOOKS: [(&str, Option<&str>, &str, Option<u32>); 5] = [
-    ("SessionStart", None, "bosun hook session-start", None),
-    (
-        "Stop",
-        None,
-        "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0",
-        None,
-    ),
-    (
-        "PreCompact",
-        None,
-        "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0",
-        Some(15),
-    ),
-    (
-        "PreToolUse",
-        Some("Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*"),
-        "bosun hook pre-tool-use",
-        None,
-    ),
-    (
-        "PostToolUse",
-        Some("AskUserQuestion"),
-        "bosun hook post-tool-use",
-        None,
-    ),
+const STOP: &str = "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0";
+const COMPACT: &str = "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0";
+const ASK: &str = "AskUserQuestion";
+const TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*";
+
+/// The hooks bosun wants in every repo: (event, matcher, command, timeout), `""` and 0 for none;
+/// a test checks they equal the repo's own `.claude/settings.json`, so each command runs once.
+pub const HOOKS: [(&str, &str, &str, u32); 5] = [
+    ("SessionStart", "", "bosun hook session-start", 0),
+    ("Stop", "", STOP, 0),
+    ("PreCompact", "", COMPACT, 15),
+    ("PreToolUse", TOOLS, "bosun hook pre-tool-use", 0),
+    ("PostToolUse", ASK, "bosun hook post-tool-use", 0),
 ];
 
 /// The events whose bosun hook command is not in `settings` (any matcher).
@@ -105,23 +90,28 @@ fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static 
             Some((g, at))
         });
         if let Some((g, at)) = found {
-            let same = g.get("matcher").and_then(Value::as_str) == matcher;
-            let mut changed = set_key(g, "matcher", same, matcher.map(|m| json!(m)));
+            let same = g.get("matcher").and_then(Value::as_str).unwrap_or("") == matcher;
+            let mut changed = set_key(
+                g,
+                "matcher",
+                same,
+                (!matcher.is_empty()).then(|| json!(matcher)),
+            );
             let h = &mut g["hooks"][at];
-            let same = h.get("timeout").and_then(Value::as_u64) == timeout.map(u64::from);
-            changed |= set_key(h, "timeout", same, timeout.map(|t| json!(t)));
+            let same = h.get("timeout").and_then(Value::as_u64).unwrap_or(0) == u64::from(timeout);
+            changed |= set_key(h, "timeout", same, (timeout > 0).then(|| json!(timeout)));
             if changed {
                 updated.push(event);
             }
             continue;
         }
         let mut g = Map::new();
-        if let Some(m) = matcher {
-            g.insert("matcher".into(), json!(m));
+        if !matcher.is_empty() {
+            g.insert("matcher".into(), json!(matcher));
         }
         let mut h = json!({"type": "command", "command": command});
-        if let Some(t) = timeout {
-            h["timeout"] = json!(t);
+        if timeout > 0 {
+            h["timeout"] = json!(timeout);
         }
         g.insert("hooks".into(), json!([h]));
         groups.push(Value::Object(g));
@@ -146,28 +136,19 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
         })
         .ok_or_else(|| BosunError::error("HOME is not set", "pass --settings <path>"))?;
+    let bad = |why: String| {
+        let shown = path.display();
+        let fix = format!("fix or move {shown}, then rerun `bosun setup-snippet --install-hooks`");
+        BosunError::error(format!("{shown}: {why}"), fix)
+    };
     // A symlinked file is written through; a dangling link is an error.
     let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
-    let path = match std::fs::canonicalize(&path) {
-        Ok(p) => p,
-        Err(_) if is_link => {
-            return Err(BosunError::error(
-                format!(
-                    "{}: a symlink to a file that does not exist",
-                    path.display()
-                ),
-                "point the link at a real file or remove it, then rerun `bosun setup-snippet --install-hooks`",
-            ));
-        }
-        Err(_) => path,
-    };
+    let real = std::fs::canonicalize(&path);
+    if is_link && real.is_err() {
+        return Err(bad("a symlink to a file that does not exist".into()));
+    }
+    let path = real.unwrap_or(path.clone());
     let shown = path.display();
-    let bad = |why: String| {
-        BosunError::error(
-            format!("{shown}: {why}"),
-            format!("fix or move {shown}, then rerun `bosun setup-snippet --install-hooks`"),
-        )
-    };
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(t) if t.trim().is_empty() => json!({}),
         Ok(t) => serde_json::from_str(&t).map_err(|e| bad(format!("not valid JSON ({e})")))?,
@@ -208,10 +189,7 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
-    }
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
     o.open(path)
 }
 

@@ -525,11 +525,9 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
 /// `.bosun/version` would switch the guards off. Best effort: a path built in a variable or glob is missed.
 pub fn bosun_dir_lock(tool: &str, input: &Value) -> Option<String> {
     let c = (tool == "Bash").then(|| input.get("command").and_then(Value::as_str))??;
-    removes_bosun_dir(c, 0).then(|| {
-        "removing or moving `.bosun/` is refused: it holds the repo's bosun setup (version, \
-         config, approvers); change it in a PR the owner approves"
-            .to_string()
-    })
+    let why = "removing or moving `.bosun/` is refused: it holds the repo's bosun setup; change \
+        it in a PR the owner approves";
+    removes_bosun_dir(c, 0).then(|| why.to_string())
 }
 
 fn is_bosun_dir_path(w: &str) -> bool {
@@ -540,44 +538,19 @@ fn is_bosun_dir_path(w: &str) -> bool {
 fn removes_bosun_dir(command: &str, depth: usize) -> bool {
     let words = shell_words(command);
     for seg in words.split(|w| w == SEP) {
-        // The command word: after assignments and plain wrappers.
-        let at = seg
-            .iter()
-            .position(|w| {
-                !w.contains('=')
-                    && !matches!(
-                        w.as_str(),
-                        "sudo"
-                            | "env"
-                            | "command"
-                            | "exec"
-                            | "nohup"
-                            | "time"
-                            | "xargs"
-                            | "timeout"
-                            | "nice"
-                    )
-            })
-            .unwrap_or(seg.len());
-        let Some(name) = seg.get(at).map(|w| base(w)) else {
-            continue;
-        };
+        let (name, args, _) = writes::command_of(seg);
         let (kind, args) = match name {
-            "rm" | "unlink" | "rmdir" | "mv" => (name, &seg[at + 1..]),
-            "git" => match seg[at + 1..].iter().position(|w| w == "rm" || w == "mv") {
-                Some(k) => (seg[at + 1 + k].as_str(), &seg[at + 2 + k..]),
+            "rm" | "unlink" | "rmdir" | "mv" => (name, args),
+            "git" => match args.iter().position(|w| matches!(*w, "rm" | "mv")) {
+                Some(k) => (args[k], args[k + 1..].to_vec()),
                 None => continue,
             },
             _ => continue,
         };
-        let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
         // `mv a b`: the last path is the destination, the rest are sources.
-        let checked = if kind == "mv" && paths.len() > 1 {
-            &paths[..paths.len() - 1]
-        } else {
-            &paths[..]
-        };
-        if checked.iter().any(|p| is_bosun_dir_path(p)) {
+        let paths: Vec<_> = args.iter().filter(|a| !a.starts_with('-')).collect();
+        let n = paths.len() - usize::from(kind == "mv" && paths.len() > 1);
+        if paths[..n].iter().any(|p| is_bosun_dir_path(p)) {
             return true;
         }
     }

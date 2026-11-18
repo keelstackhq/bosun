@@ -123,6 +123,7 @@ fn hook_with(
         .env("BOSUN_SESSION", session)
         .env("BOSUN_ORIGIN", origin)
         .env("BOSUN_NOW", now)
+        .env("BOSUN_ADOPTED_CACHE_SECS", "0")
         .args(["hook", sub])
         .write_stdin(input.to_string());
     if let Some(f) = fake {
@@ -928,7 +929,7 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
 }
 
 #[test]
-fn session_start_unadopted_no_network() {
+fn session_start_unadopted_makes_no_github_api_call() {
     let (fake, tmp) = (FakeGithub::start(), bare_repo());
     let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
     let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
@@ -952,7 +953,7 @@ fn session_start_unadopted_no_network() {
 }
 
 #[test]
-fn unadopted_repo_keeps_pure_guards_and_makes_no_github_call() {
+fn unadopted_repo_keeps_pure_guards_and_makes_no_github_api_call() {
     let (fake, tmp) = (FakeGithub::start(), bare_repo());
     let cwd = tmp.path().to_str().unwrap();
     let bash = |c: &str| {
@@ -1082,4 +1083,34 @@ fn no_origin_remote_with_a_bosun_dir_is_adopted() {
     let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
     let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
     assert!(o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+}
+
+/// The adopted answer is cached per session for ten minutes in the git dir: a burst of hooks asks
+/// the remote once, and the next ask after the TTL sees a later adoption.
+#[test]
+fn the_adopted_answer_is_cached_per_session_for_ten_minutes() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    let start = |session: &str, now: &str| {
+        let input = json!({"hook_event_name":"SessionStart","cwd":r.to_str().unwrap()});
+        let out = bosun()
+            .current_dir(r)
+            .env("BOSUN_SESSION", session)
+            .env("BOSUN_NOW", now)
+            .env("BOSUN_ADOPTED_CACHE_SECS", "600")
+            .args(["hook", "session-start"])
+            .write_stdin(input.to_string())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains("bosun adopt --policy")
+    };
+    assert!(start("session_a", "2026-10-22T10:00:00Z"));
+    assert!(r.join(".git/bosun/adopted").exists());
+    adopted_on_remote(r);
+    assert!(start("session_a", "2026-10-22T10:09:00Z"), "cached");
+    assert!(
+        !start("session_b", "2026-10-22T10:09:00Z"),
+        "another session asks again"
+    );
+    assert!(!start("session_a", "2026-10-22T10:11:00Z"), "expired");
 }

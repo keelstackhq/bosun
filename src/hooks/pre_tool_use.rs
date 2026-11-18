@@ -675,7 +675,7 @@ fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> 
 /// comment). An MCP call must also target this repo. Any doubt (no repo, no GitHub) is no.
 fn registered_child(dir: &Path, write: &ChildTask) -> bool {
     if super::session_start::unadopted(dir) {
-        return false; // no registry here: no GitHub call
+        return false; // no registry here: no GitHub API call
     }
     let Ok(app) = App::load(Some(dir)) else {
         return false;
@@ -718,7 +718,7 @@ fn plan_tick_edit(tool: &str, path: &str, input: &Value) -> bool {
 
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
     if super::session_start::unadopted(dir) {
-        return Ok(None); // no leases here: no GitHub call
+        return Ok(None); // no leases here: no GitHub API call
     }
     let app = App::load(Some(dir)).map_err(|e| e.message)?;
     let Some(rel) = repo_relative(&app.ctx.dir, dir, path) else {

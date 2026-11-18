@@ -1504,10 +1504,8 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         && let Some(home) = std::env::var_os("HOME")
     {
         let file = std::path::PathBuf::from(home).join(".claude/settings.json");
-        let doc = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .unwrap_or_else(|| json!({}));
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let doc = serde_json::from_str::<Value>(&text).unwrap_or_default();
         let missing = super::setup_snippet::missing_events(&doc);
         let mut it = item(
             19,
@@ -1518,10 +1516,9 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         );
         if !missing.is_empty() {
             it["status"] = json!("warn");
+            let (f, m) = (file.display(), missing.join(", "));
             it["detail"] = json!(format!(
-                "{} lacks bosun's hook(s) for {}; the guards only run in this repo's own .claude/settings.json",
-                file.display(),
-                missing.join(", ")
+                "{f} lacks bosun's hook(s) for {m}; the guards only run in this repo's own .claude/settings.json"
             ));
         }
         items.push(it);
