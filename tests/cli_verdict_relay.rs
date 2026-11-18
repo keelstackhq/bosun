@@ -250,7 +250,7 @@ fn plain_json_never_takes_chunks_from_a_tag_in_its_evidence() {
     let (code, v) = comment(&fake, "session_orch", json);
     assert_eq!(code, 1, "{v}");
     let msg = v["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("missing [1, 2, 3]"), "{v}");
+    assert!(msg.contains("reviews no chunks"), "{v}");
 }
 
 #[test]
