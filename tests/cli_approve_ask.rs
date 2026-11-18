@@ -156,6 +156,24 @@ fn list_slack_origin_next_is_slack_post() {
 }
 
 #[test]
+fn list_spawned_or_routine_hands_the_question_up_with_no_next() {
+    for origin in ["spawned", "routine"] {
+        let fake = FakeGithub::start();
+        ready(&fake, 12, "gov change", &head("abc1234"));
+        let v = list(&fake, Some(origin));
+        assert_eq!(v["next"], json!([]), "{origin}: {v}");
+        assert!(
+            v["data"]["handoff"]
+                .as_str()
+                .unwrap()
+                .contains("hand this question to the orchestrator"),
+            "{v}"
+        );
+        assert!(v["data"]["ready"][0]["ask"].is_object(), "ask kept: {v}");
+    }
+}
+
+#[test]
 fn list_none_ready_no_next() {
     let fake = FakeGithub::start();
     let v = list(&fake, None);
