@@ -46,10 +46,35 @@ pub fn findings_json(findings: &[Finding]) -> Vec<Value> {
         .collect()
 }
 
+/// The CI provider at the merge-base with the PR base (`origin/$GITHUB_BASE_REF`, else
+/// `origin/main`), never the working tree: a PR that sets `none` cannot skip the gate on itself.
+/// Any doubt (no base, no file, unparsable) is the default provider, so the gate runs.
+pub fn base_provider(root: &Path) -> CiProvider {
+    let base_ref = std::env::var("GITHUB_BASE_REF")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .map_or_else(|| "origin/main".to_string(), |b| format!("origin/{b}"));
+    let Some(base) = crate::hooks::git_out(root, &["merge-base", "HEAD", &base_ref]) else {
+        return CiProvider::default();
+    };
+    let spec = format!("{base}:.bosun/bosun.toml");
+    crate::hooks::git_out(root, &["show", &spec])
+        .and_then(|t| Config::parse(&t, ".bosun/bosun.toml").ok())
+        .map_or_else(CiProvider::default, |c| c.ci_provider())
+}
+
+/// Whether the gate is skipped: the base config says no CI provider and the repo has no workflow
+/// file. Workflow files that exist are always scanned.
+pub fn skipped(root: &Path) -> bool {
+    base_provider(root) == CiProvider::None && scan(root).0.is_empty()
+}
+
 pub fn check(dir: Option<&Path>) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
-    if Config::load(&root)?.ci_provider() == CiProvider::None {
+    // A config that does not parse is an error, whatever the provider.
+    Config::load(&root)?;
+    if skipped(&root) {
         return Ok(Outcome::data(
             json!({"gate": "ci-minutes", "skipped": true, "reason": "ci provider none", "files": [], "findings": []}),
         ));
