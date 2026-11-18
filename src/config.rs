@@ -622,6 +622,18 @@ impl Config {
                 ),
             ));
         }
+        // `none` runs no CI, so no App check runs could ever post: refuse the pair.
+        if c.ci_provider() == CiProvider::None && c.checks.mode != CheckMode::Statuses {
+            return Err(BosunError::error(
+                format!(
+                    "{file}: ci.provider = \"none\" cannot go with checks.mode = {:?}",
+                    c.checks.mode.as_str()
+                ),
+                format!(
+                    "edit {file}: set checks.mode = \"statuses\" or ci.provider to \"github\" or \"circleci\""
+                ),
+            ));
+        }
         Ok(c)
     }
 

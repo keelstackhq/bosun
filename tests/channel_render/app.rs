@@ -25,6 +25,7 @@ fn render(pieces: &[&str], own_ci: &str, bosun_app: &str) -> Vec<(String, String
         ("policy", ""),
         ("policy_pin_checked", ""),
         ("ci_provider", ""),
+        ("ci_pin_checked", ""),
         ("bosun_app", bosun_app),
     ]
     .into_iter()

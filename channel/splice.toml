@@ -35,5 +35,6 @@ policy = { prompt = "approval policy (empty: none written, the default owner)", 
 # does, exit 2 otherwise). Without it, an explicit pin renders a comment and no policy.
 policy_pin_checked = { prompt = "the pinned bosun_version reads the policy (1 or empty)", default = "", pattern = "^1?$" }
 # Non-empty to render `[ci] provider` in .bosun/bosun.toml (spec section 9): github, circleci or
-# none. Release ordering as for `policy`: the pinned release must read `[ci]`. Default empty: unchanged.
+# none. With an explicit bosun_version it is written only with ci_pin_checked (0.21.0 on; `bosun adopt` sets it), else a comment. Default empty: unchanged.
+ci_pin_checked = { prompt = "the pinned bosun_version reads [ci] (1 or empty)", default = "", pattern = "^1?$" }
 ci_provider = { prompt = "CI provider (empty: none written, the default github)", default = "", pattern = "^(github|circleci|none)?$" }

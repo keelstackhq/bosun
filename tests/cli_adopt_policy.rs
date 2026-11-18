@@ -303,6 +303,18 @@ fn adopt_ci_none_owner_steps_name_no_required_checks() {
         assert!(!steps.contains(check), "{check}: {steps}");
     }
     assert!(steps.contains("bosun merge"), "{steps}");
+    assert!(steps.contains("1 approving review"), "{steps}");
+}
+
+#[test]
+fn adopt_kept_config_in_a_circleci_only_checkout_is_github() {
+    let tmp = common::git_tempdir();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::create_dir_all(tmp.path().join(".circleci")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ci"], "github", "{v}");
 }
 
 #[test]

@@ -188,3 +188,16 @@ fn ci_provider_bad_value_error() {
     }
     assert!(Config::parse("[ci]\nother = 1\n", "x").is_err());
 }
+
+#[test]
+fn ci_none_with_app_checks_mode_is_an_error() {
+    for mode in ["checks", "dual"] {
+        let t = format!(
+            "[ci]\nprovider = \"none\"\n[checks]\nmode = \"{mode}\"\napp_id = 7\napp_slug = \"x\"\n"
+        );
+        let e = Config::parse(&t, "bosun.toml").unwrap_err();
+        assert!(e.message.contains("ci.provider"), "{}", e.message);
+        assert!(e.fix.contains("statuses"), "{}", e.fix);
+    }
+    assert!(Config::parse("[ci]\nprovider = \"none\"\n", "x").is_ok());
+}

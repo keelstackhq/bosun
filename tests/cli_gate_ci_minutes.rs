@@ -163,7 +163,8 @@ fn ci_minutes_skips_without_ci() {
     .unwrap();
     let (code, v) = gate(tmp.path());
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["skipped"], "ci provider none");
+    assert_eq!(v["data"]["skipped"], true);
+    assert_eq!(v["data"]["reason"], "ci provider none");
 }
 
 #[test]

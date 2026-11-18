@@ -79,6 +79,7 @@ fn vars<'a>(
         ("policy", ""),
         ("policy_pin_checked", ""),
         ("ci_provider", ""),
+        ("ci_pin_checked", ""),
     ]
 }
 

@@ -146,6 +146,7 @@ pub fn vars_for(
     v.set("policy_pin_checked", "");
     v.set("bosun_app", "");
     v.set("ci_provider", "");
+    v.set("ci_pin_checked", "");
     v
 }
 
@@ -264,7 +265,7 @@ fn owner_steps(
         |u| format!("the default branch at {u}"),
     );
     if no_ci {
-        v.push(format!("Set branch protection on {place} requiring a pull request and no required checks (ci provider none: bosun runs its gates locally; merges go through `bosun merge` once it ships)."));
+        v.push(format!("Set branch protection on {place} requiring a pull request and 1 approving review (the owner's), with no required status checks (ci provider none: bosun runs its gates locally; merges then go through `bosun merge`, spec D-019)."));
     } else {
         v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open (with hoist: put them in hoist.toml `[github] required_checks`, then `hoist apply --area github --adopt --yes`)."));
     }
@@ -509,9 +510,19 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     let ci: Option<String> = ci_ok.then(|| {
         a.ci.clone()
             .or(kept_ci.clone())
-            .unwrap_or_else(|| detect_ci(&root).to_string())
+            // A kept config without `[ci]` is github: detection reads the checkout, which a
+            // circleci-only one would turn into a table the owner never chose.
+            .unwrap_or_else(|| {
+                if kept_cfg.is_some() {
+                    "github".to_string()
+                } else {
+                    detect_ci(&root).to_string()
+                }
+            })
     });
     vars.set("ci_provider", ci.as_deref().unwrap_or(""));
+    // `ci` is only set for a pin that reads `[ci]` (CI_MIN above).
+    vars.set("ci_pin_checked", if ci.is_some() { "1" } else { "" });
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
         return Err(BosunError::error(

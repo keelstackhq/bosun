@@ -51,7 +51,7 @@ pub fn check(dir: Option<&Path>) -> CmdResult {
     let root = repo_root(&dir)?;
     if Config::load(&root)?.ci_provider() == CiProvider::None {
         return Ok(Outcome::data(
-            json!({"gate": "ci-minutes", "skipped": "ci provider none", "files": [], "findings": []}),
+            json!({"gate": "ci-minutes", "skipped": true, "reason": "ci provider none", "files": [], "findings": []}),
         ));
     }
     let (files, findings) = scan(&root);
