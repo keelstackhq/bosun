@@ -67,7 +67,7 @@ naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending 
 `Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
 than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
 `answer "approve <short>…"`. Nothing ready, no `next`. Only the orchestrator asks the owner (D-018):
-a child session hands `next` to it. This is the per-PR form; the daily digest below is the batch form
+a spawned or routine session gets no `next`, only `data.handoff` (hand the question to the orchestrator) with `ask` kept. This is the per-PR form; the daily digest below is the batch form
 and reads only `data`.
 
 **Daily digest (§18, `approvals_batch = "daily"`).** For Claude-Tag-first repos the Slack kind `digest` (§10, opt-in) posts the owner-waiting PRs with GitHub links and the comment to approve with; Slack itself approves nothing. `bosun digest` (the orchestrator, once a day)
