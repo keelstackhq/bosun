@@ -107,3 +107,22 @@ fn a_dry_run_applies_nothing() {
     assert_eq!(code, 0, "{v}");
     assert!(verdicts(&fake).is_empty());
 }
+
+#[test]
+fn a_failed_write_after_the_status_never_lets_an_older_comment_replace_it() {
+    let fake = pr();
+    verdict_comment(&fake, HEAD, "rev", "session_q");
+    let text =
+        format!(r#"{{"pr":1,"head_sha":"{HEAD}","verdict":"request-changes","confidence":0.9}}"#);
+    let v = Verdict::parse(&text).unwrap();
+    fake.comment_by(1, "rev", &comment_body(&v, "session_r", None));
+    // risk-check posts its status, the newest verdict posts its failure, then its record
+    // comment fails, so its apply errors after the status stands.
+    fake.after_requests(&format!("/statuses/{HEAD}"), 2, |s| {
+        s.fail = Some((500, 1));
+    });
+    let v = check(&fake);
+    assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+    let st = verdicts(&fake);
+    assert!(st.iter().all(|s| s["state"] == "failure"), "{st:?}");
+}

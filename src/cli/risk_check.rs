@@ -1227,7 +1227,8 @@ fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) ->
 }
 
 /// The newest verdict comment for exactly the head that `bosun verdict apply` accepts, applied
-/// when the head has no `review-verdict` (a doubt counts as having one). Never an error.
+/// when the head has no `review-verdict` (a doubt counts as having one), checked again before
+/// each try. Never an error.
 fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
     let gh = app.gh.as_ref();
     let head = pull.head_sha.as_str();
@@ -1240,6 +1241,11 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
         let v = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok());
         if !v.is_some_and(|v| v.head_sha == head && v.pr == pull.number) {
             continue;
+        }
+        // An apply that failed after posting its status (a later write failed) left a verdict:
+        // an older comment must never replace it.
+        if has_verdict(gh, head) {
+            return None;
         }
         match apply_verdict(app, c.id) {
             Ok(o) if !o.data["status"].is_null() => return Some(c.id),
