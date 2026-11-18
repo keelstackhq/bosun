@@ -149,22 +149,62 @@ fn doctor_reports_the_same_findings_as_step_14() {
     assert_eq!(doctor_step_14(tmp.path())["status"], "ok");
 }
 
+/// Commit `.bosun/bosun.toml` with `base_cfg` and point `origin/main` at it, then write `work_cfg`
+/// into the working tree (a PR that changes the provider).
+fn with_base(tmp: &Path, base_cfg: &str, work_cfg: &str) {
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(tmp)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    fs::create_dir_all(tmp.join(".bosun")).unwrap();
+    fs::write(tmp.join(".bosun/bosun.toml"), base_cfg).unwrap();
+    git(&["add", ".bosun"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fs::write(tmp.join(".bosun/bosun.toml"), work_cfg).unwrap();
+}
+
+const NONE: &str = "[ci]\nprovider = \"none\"\n";
+const BAD: &str = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n";
+
 #[test]
-fn ci_minutes_skips_without_ci() {
-    let tmp = repo(&[(
-        "x.yml",
-        "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n",
-    )]);
-    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
-    std::fs::write(
-        tmp.path().join(".bosun/bosun.toml"),
-        "[ci]\nprovider = \"none\"\n",
-    )
-    .unwrap();
+fn ci_minutes_skips_without_ci_and_without_workflows() {
+    let tmp = repo(&[]);
+    with_base(tmp.path(), NONE, NONE);
     let (code, v) = gate(tmp.path());
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["skipped"], true);
     assert_eq!(v["data"]["reason"], "ci provider none");
+}
+
+#[test]
+fn ci_minutes_scans_existing_workflows_even_under_provider_none() {
+    let tmp = repo(&[("x.yml", BAD)]);
+    with_base(tmp.path(), NONE, NONE);
+    let (code, v) = gate(tmp.path());
+    assert_eq!(code, 1, "{v}");
+    assert!(v["data"]["skipped"].is_null(), "{v}");
+    assert!(!v["data"]["findings"].as_array().unwrap().is_empty(), "{v}");
+}
+
+#[test]
+fn ci_minutes_reads_the_provider_from_the_base_not_the_working_tree() {
+    // The PR sets `none` in its working tree; the base says github: no skip.
+    let tmp = repo(&[]);
+    with_base(tmp.path(), "[ci]\nprovider = \"github\"\n", NONE);
+    let (code, v) = gate(tmp.path());
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["skipped"].is_null(), "{v}");
+    // And with workflows that break the rules, the PR cannot hide them by setting none.
+    let tmp = repo(&[("x.yml", BAD)]);
+    with_base(tmp.path(), "[ci]\nprovider = \"github\"\n", NONE);
+    let (code, _) = gate(tmp.path());
+    assert_eq!(code, 1);
 }
 
 #[test]
