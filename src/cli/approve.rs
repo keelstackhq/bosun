@@ -168,7 +168,6 @@ fn summary_hint(gh: &dyn Github, p: &Pull) -> Result<Option<String>> {
 fn no_ci_readiness(gh: &dyn Github, ctx: &Ctx, p: &Pull) -> Result<Readiness> {
     Ok(match crate::cli::risk_check::evaluate_with(gh, ctx, p) {
         Ok(_) => Readiness::NotWaiting,
-        // Only "high risk, not approved" is ready; any other exit 5 is not.
         Err(e)
             if e.exit == crate::output::Exit::NeedsHuman
                 && e.data.as_ref().is_some_and(|d| d["level"] == "high") =>

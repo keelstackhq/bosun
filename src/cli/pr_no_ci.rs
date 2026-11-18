@@ -65,8 +65,8 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     if provider_default(gh)? != CiProvider::None {
         return Ok(found);
     }
-    // Without CI no App record counts (`github-actions[bot]` is any writer's push workflow): only
-    // a signature of an enrolled key does (D-019), never a writer's comment or a session tag.
+    // Without CI only an enrolled key's signature counts (D-019), never an App record (any
+    // writer's push workflow posts as `github-actions[bot]`), a comment or a session tag.
     let keys = super::risk_check::enrolled_keys(gh).unwrap_or_default();
     let (repo, pr) = (&app.ctx.repo, pull.number);
     let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -125,7 +125,6 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let risk = evaluate_local(app, &pull);
     let risk_data = match &risk {
         Ok(o) => o.data.clone(),
-        // Only "high risk, not approved" waits for the owner; any other exit 5 is no "normal".
         Err(e)
             if e.exit == Exit::NeedsHuman
                 && e.data.as_ref().is_some_and(|d| d["level"] == "high") =>
