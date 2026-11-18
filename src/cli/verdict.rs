@@ -230,7 +230,9 @@ fn trusted_config(gh: &dyn Github, issue_url: &str) -> Result<(Config, bool), Bo
     let pr = issue_url.rsplit('/').next().and_then(|n| n.parse().ok());
     let pull = pr.map(|n| gh.get_pull(n)).transpose()?.flatten();
     let on_default = pull.is_some_and(|p| p.base_ref == branch);
-    let text = gh.file_at(CONFIG_FILE, &branch)?.unwrap_or_default();
+    let text = gh
+        .file_at(CONFIG_FILE, &format!("refs/heads/{branch}"))?
+        .unwrap_or_default();
     let cfg = Config::parse(&text, CONFIG_FILE).or_else(|_| Config::parse("", CONFIG_FILE))?;
     Ok((cfg, on_default))
 }

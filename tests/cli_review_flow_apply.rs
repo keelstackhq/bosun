@@ -6,7 +6,7 @@ use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
 const T0: &str = "2026-10-22T10:00:00Z";
-const MAIN: &str = "main";
+const MAIN: &str = "refs/heads/main";
 const BOT: &str = "claude[bot]";
 
 fn setup(config: &str) -> FakeGithub {
