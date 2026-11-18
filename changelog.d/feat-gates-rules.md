@@ -1,0 +1,1 @@
+- Push gates carry stamps over a docs-only diff (local pre-push only: *.md under docs/ or changelog.d/, not the spec or READMEs; CI still runs every gate); R-weaken ignores lone `dead_code` allows in test code and prints ASCII `->`; `bosun risk-check --local` judges `origin/main...HEAD` before a push.

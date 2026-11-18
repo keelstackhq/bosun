@@ -67,7 +67,7 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     Ok(owners.into_iter().filter_map(|o| o.slack).collect())
 }
 
-fn is_manifest(path: &str) -> bool {
+pub(crate) fn is_manifest(path: &str) -> bool {
     matches!(
         path.rsplit('/').next(),
         Some("Cargo.toml" | "package.json" | "pnpm-workspace.yaml")
@@ -75,9 +75,11 @@ fn is_manifest(path: &str) -> bool {
 }
 
 pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
+    let Some(n) = args.pr.filter(|_| !args.local) else {
+        return super::risk_local::run(dir);
+    };
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    let n = args.pr;
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
             format!("PR #{n} does not exist"),
@@ -205,12 +207,93 @@ pub(crate) fn is_one_off(
     Ok(true)
 }
 
+/// Where R-weaken reads files: GitHub (a PR) or the local git (`--local`).
+pub(crate) trait Files {
+    /// The text of `path` at `at`; `None` when it is not there.
+    fn read(&self, path: &str, at: &str) -> Result<Option<String>>;
+    /// Every file path at `at`; `None` when it cannot be listed whole.
+    fn paths(&self, at: &str) -> Option<Vec<String>>;
+}
+
+struct Remote<'a>(&'a dyn Github);
+
+impl Files for Remote<'_> {
+    fn read(&self, path: &str, at: &str) -> Result<Option<String>> {
+        self.0.file_at(path, at)
+    }
+    fn paths(&self, at: &str) -> Option<Vec<String>> {
+        let t = self.0.tree(at).ok()?.filter(|t| !t.truncated)?;
+        Some(
+            t.entries
+                .into_iter()
+                .filter(|e| e.kind == "blob")
+                .map(|e| e.path)
+                .collect(),
+        )
+    }
+}
+
 pub(crate) fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
     base: &str,
     head: &str,
 ) -> Result<Vec<String>> {
+    weaken_from(&Remote(gh), pr_files, base, head)
+}
+
+/// The changed Rust files that are test code, where a lone `dead_code` allow is no finding:
+/// a Cargo `tests/` file no `#[path]` pulls in, or a file only `#[cfg(test)] #[path]` mods pull
+/// in. The mods are read at `base` from every Rust file outside Cargo `tests/` (at most 300).
+/// None when the PR adds or changes a `#[path]` line or hides a Rust diff, or a read fails.
+fn test_code(src: &dyn Files, files: &[PrFile], base: &str) -> Vec<String> {
+    let adds = |f: &&PrFile| {
+        let ins = f.patch.as_deref().map(|p| weaken::split_patch(p).1);
+        ins.is_some_and(|i| i.iter().any(|l| weaken::dead_code_allow(l)))
+    };
+    let wanted: Vec<&str> = (files.iter().filter(adds))
+        .filter(|f| f.filename.ends_with(".rs"))
+        .map(|f| f.filename.as_str())
+        .collect();
+    let patches: Vec<(&str, Option<&str>)> = (files.iter())
+        .map(|f| (f.filename.as_str(), f.patch.as_deref()))
+        .collect();
+    if wanted.is_empty() || !risk::path_attributes(&patches).is_empty() {
+        return Vec::new();
+    }
+    let Some(paths) = src.paths(base) else {
+        return Vec::new();
+    };
+    let rs: Vec<&String> = (paths.iter())
+        .filter(|p| p.ends_with(".rs") && !weaken::cargo_test_file(p))
+        .collect();
+    let mut mods = Vec::new();
+    for p in rs.iter().take(if rs.len() > 300 { 0 } else { 300 }) {
+        match src.read(p, base) {
+            Ok(Some(t)) => mods.extend(weaken::path_mods(p, &t)),
+            _ => return Vec::new(),
+        }
+    }
+    if rs.len() > 300 || mods.iter().any(|(m, _)| m == "?") {
+        return Vec::new();
+    }
+    let by = |f: &str, test: bool| mods.iter().any(|(m, t)| m == f && *t == test);
+    (wanted.into_iter())
+        .filter(|f| match weaken::cargo_test_file(f) {
+            true => !by(f, true) && !by(f, false),
+            false => by(f, true) && !by(f, false),
+        })
+        .map(String::from)
+        .collect()
+}
+
+pub(crate) fn weaken_from(
+    src: &dyn Files,
+    pr_files: &[PrFile],
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>> {
+    let test_files = test_code(src, pr_files, base);
     let patches = || {
         pr_files
             .iter()
@@ -223,8 +306,12 @@ pub(crate) fn weaken_findings(
     for f in pr_files {
         let p = f.patch.as_deref();
         out.extend(
-            p.map(|p| weaken::patch_findings(&f.filename, p, &added))
-                .unwrap_or_default(),
+            p.map(|p| {
+                let n = &f.filename;
+                let test = test_files.contains(n);
+                weaken::code_findings(n, p, &added, test)
+            })
+            .unwrap_or_default(),
         );
         // Each side of a rename on its own: the path left behind falls back to its built-in (or
         // nothing), the new path is judged against what it replaces, never the moved file.
@@ -238,20 +325,21 @@ pub(crate) fn weaken_findings(
             }
             let at_base = f.status != "added" && !(here && prev.is_some());
             let old = match at_base {
-                true => gh.file_at(path, base)?,
+                true => src.read(path, base)?,
                 false => builtin_base(path).map(str::to_string),
             };
             let new = match here && f.status != "removed" {
-                true => gh.file_at(path, head)?,
+                true => src.read(path, head)?,
                 false => builtin_base(path).map(str::to_string),
             };
             out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
         }
     }
-    out.extend(test_findings(gh, pr_files, base, head)?);
+    out.extend(test_findings(src, pr_files, base, head)?);
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert(s.clone()));
-    Ok(out)
+    // ASCII arrows: `→` comes out garbled where a terminal or log is not UTF-8.
+    Ok(out.into_iter().map(|s| s.replace('→', "->")).collect())
 }
 
 /// The built-in file a new `.bosun/risk.toml` or `.bosun/profiles/<name>.toml` replaces.
@@ -269,7 +357,7 @@ fn builtin_base(path: &str) -> Option<&'static str> {
 /// files is no loss: tests, assertions, skips, `.only` and `cfg` switch-offs, as test-integrity
 /// counts them. A file counts only where it runs: a Rust test file under a `src/` or `tests/`
 /// root, a TS/JS test file. Also every deleted test file.
-fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
+fn test_findings(src: &dyn Files, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
     let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
     let mut lists: [std::collections::BTreeMap<String, Vec<String>>; 2] = Default::default();
     // A cap on reads: past it the owner judges, no quota is burnt and nothing errors.
@@ -293,7 +381,7 @@ fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> R
             if !exists || !code_file(path) {
                 continue;
             }
-            match gh.file_at(path, at) {
+            match src.read(path, at) {
                 Ok(Some(t)) if t.len() <= 1 << 20 => {
                     let r = test_counts(path, &t);
                     (0..5).for_each(|i| c[side][i] += r[i]);
@@ -835,7 +923,11 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
 
 /// The risk rules at `base` (the built-in defaults when it has none).
 pub(crate) fn base_rules(gh: &dyn Github, base: &str) -> Result<Rules> {
-    Ok(match gh.file_at(RULES_PATH, base)? {
+    rules_from(&Remote(gh), base)
+}
+
+pub(crate) fn rules_from(src: &dyn Files, base: &str) -> Result<Rules> {
+    Ok(match src.read(RULES_PATH, base)? {
         Some(text) => Rules::parse(&text).map_err(|e| {
             BosunError::error(
                 format!("{RULES_PATH} at base {base}: {e}"),

@@ -55,7 +55,7 @@ fn a_raised_cap_is_high_and_needs_the_owner() {
     let m = &v["data"]["matches"][0];
     assert_eq!(m["rule"], "R-weaken");
     let evidence = m["evidence"].to_string();
-    assert!(evidence.contains("daily_usd 150 → 300"), "{evidence}");
+    assert!(evidence.contains("daily_usd 150 -> 300"), "{evidence}");
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn a_deleted_test_file_is_a_weakening() {
     assert_eq!(code, 5, "{v}");
     let evidence = v["data"]["matches"][0]["evidence"].to_string();
     assert!(
-        evidence.contains("test file present → (deleted)"),
+        evidence.contains("test file present -> (deleted)"),
         "{evidence}"
     );
 }
@@ -116,7 +116,7 @@ fn a_gate_file_renamed_away_counts_as_removed() {
     fake.content("deny.toml", BASE, "[sources]\nunknown-git = \"deny\"\n");
     let e = evidence(&fake);
     assert!(
-        e.contains("deny.toml: sources.unknown-git deny → (removed)"),
+        e.contains("deny.toml: sources.unknown-git deny -> (removed)"),
         "{e}"
     );
 }
@@ -131,7 +131,7 @@ fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
     fake.content(".bosun/risk.toml", HEAD, weak);
     let e = evidence(&fake);
     assert!(
-        e.contains(".bosun/risk.toml: R-secrets rule present → (removed)"),
+        e.contains(".bosun/risk.toml: R-secrets rule present -> (removed)"),
         "{e}"
     );
 }
@@ -147,7 +147,7 @@ fn repo_rules_without_r_weaken_still_send_a_weakening_to_the_owner() {
     assert_eq!(v["data"]["requirement"], "owner", "{v}");
     let m = v["data"]["matches"].to_string();
     assert!(
-        m.contains("R-weaken") && m.contains("daily_usd 150 → 300"),
+        m.contains("R-weaken") && m.contains("daily_usd 150 -> 300"),
         "{v}"
     );
 }
@@ -188,7 +188,7 @@ fn tests_moved_between_files_are_no_weakening_but_a_dropped_inline_test_is() {
 
     let fake = pr();
     file(&fake, "src/a.rs", Some(T), Some("fn a() {}\n"));
-    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+    assert!(evidence(&fake).contains("tests (all files) 1 -> 0"));
 }
 
 #[test]
@@ -198,33 +198,33 @@ fn whole_file_counts_catch_switched_off_tests() {
     fake.renamed_from(1, "tests/a.rs");
     fake.content("tests/a.rs", BASE, T);
     fake.content("junk/a.rs", HEAD, T);
-    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+    assert!(evidence(&fake).contains("tests (all files) 1 -> 0"));
 
     let cases = [
         (
             "tests/a.rs",
             format!("#[cfg(any())]\nmod t {{\n{T}}}\n"),
-            "cfg switch-offs (all files) 0 → 1",
+            "cfg switch-offs (all files) 0 -> 1",
         ),
         (
             "tests/a.rs",
             format!("/*\n{T}*/\n"),
-            "tests (all files) 1 → 0",
+            "tests (all files) 1 -> 0",
         ),
         (
             "tests/a.rs",
             format!("{T}#[test]\n#[ignore]\nfn b() {{ assert!(y); }}\n"),
-            "skips (all files) 0 → 1",
+            "skips (all files) 0 -> 1",
         ),
         (
             "web/a.test.ts",
             "it.only('a', () => { expect(1); });\n".into(),
-            "only (all files) 0 → 1",
+            "only (all files) 0 -> 1",
         ),
         (
             "web/b.test.ts",
             "/*\nit('a', () => { expect(1); });\n".into(),
-            "tests (all files) 1 → 0",
+            "tests (all files) 1 -> 0",
         ),
     ];
     for (path, new, want) in cases {
@@ -263,7 +263,7 @@ fn only_built_test_files_count_and_reads_are_capped() {
     fake.renamed_from(1, "tests/a.rs");
     fake.content("tests/a.rs", BASE, T);
     fake.content("tests/sub/a.rs", HEAD, T);
-    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+    assert!(evidence(&fake).contains("tests (all files) 1 -> 0"));
 
     let fake = pr();
     file(
@@ -338,10 +338,65 @@ fn a_grown_or_swapped_allowed_list_is_a_weakening() {
         Some(old),
         Some("pub const PATHS_ALLOWED: [&str; 1] = [\"**\"];\n"),
     );
-    assert!(evidence(&fake).contains("PATHS_ALLOWED (all files): \\\"**\\\" 0 → 1"));
+    assert!(evidence(&fake).contains("PATHS_ALLOWED (all files): \\\"**\\\" 0 -> 1"));
     // The same list moved to another file is no weakening.
     let fake = pr();
     file(&fake, "src/a.rs", Some(old), Some(""));
     file(&fake, "src/b.rs", Some(""), Some(old));
     no_weakening(&fake);
+}
+
+#[test]
+fn dead_code_allows_in_test_code_are_no_weakening() {
+    let add = "@@ -1,1 +1,2 @@\n+#![allow(dead_code)]\n use x;";
+    let blob = |p| (p, "100644", "blob", "b");
+    let decl = "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n";
+    // A base where src/core/foo.rs pulls in foo_tests.rs under cfg(test); `extra` is a third
+    // src file's text at base.
+    let setup = |extra: &str| {
+        let fake = pr();
+        fake.pull_file(1, "tests/common/mod.rs", "modified", 1, 0, Some(add));
+        fake.pull_file(1, "src/core/foo_tests.rs", "modified", 1, 0, Some(add));
+        fake.content("src/core/foo.rs", BASE, decl);
+        fake.content("src/core/foo_tests.rs", BASE, "use x;\n");
+        fake.content("src/lib.rs", BASE, extra);
+        let files = [
+            blob("src/core/foo.rs"),
+            blob("src/core/foo_tests.rs"),
+            blob("src/lib.rs"),
+            blob("tests/common/mod.rs"),
+        ];
+        fake.git_tree(BASE, &files, false);
+        fake
+    };
+    let (code, v) = check(&setup("pub mod core;\n"));
+    assert_eq!(code, 0, "{v}");
+    // A tests/ file that src pulls in by `#[path]` (cfg(test) or not) is no test code; neither
+    // is a file a plain `mod` pulls in too.
+    for extra in [
+        "#[path = \"../tests/common/mod.rs\"]\nmod c;\n",
+        "#[cfg(test)]\n#[path = \"../tests/common/mod.rs\"]\nmod c;\n",
+        "#[path = \"core/foo_tests.rs\"]\nmod t;\n",
+    ] {
+        let (code, v) = check(&setup(extra));
+        assert_eq!(code, 5, "{extra}: {v}");
+    }
+    // A PR that adds a `#[path]` line exempts nothing.
+    let fake = setup("pub mod core;\n");
+    let p = "@@ -1,1 +1,3 @@\n+#[path = \"x.rs\"]\n+mod x;\n pub mod core;";
+    fake.pull_file(1, "src/lib.rs", "modified", 2, 0, Some(p));
+    assert_eq!(check(&fake).0, 5);
+    // Still a finding: an allow in src, another lint in tests.
+    for (path, line) in [
+        ("src/lib.rs", "#[allow(dead_code)]"),
+        ("tests/common/mod.rs", "#![allow(unused)]"),
+    ] {
+        let fake = pr();
+        let patch = format!("@@ -1,1 +1,2 @@\n+{line}\n use x;");
+        fake.pull_file(1, path, "modified", 1, 0, Some(&patch));
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{v}");
+        let ev = v["data"]["matches"][0]["evidence"].to_string();
+        assert!(ev.contains("lint allow/expect 0 -> 1"), "{ev}");
+    }
 }

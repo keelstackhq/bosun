@@ -53,6 +53,7 @@ pub mod resume;
 pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
+pub mod risk_local;
 pub mod rules;
 pub mod schema;
 pub mod spawn;
@@ -610,7 +611,11 @@ pub struct RulesArgs {
 #[derive(Debug, Args)]
 pub struct RiskCheckArgs {
     /// The PR number.
-    pub pr: u64,
+    #[arg(required_unless_present = "local")]
+    pub pr: Option<u64>,
+    /// Judge `git diff origin/main...HEAD` offline before a push (path rules and R-weaken).
+    #[arg(long, conflicts_with_all = ["pr", "dry_run"])]
+    pub local: bool,
     /// Print the judgment and write nothing (no status, check run or comment): for a cloud
     /// session, which cannot post statuses.
     #[arg(long)]

@@ -39,9 +39,44 @@ pub fn gate_loop(gates: &[String]) -> String {
     )
 }
 
+/// A path whose change needs no local gate run before a push (spec §7): a `*.md` under `docs/`
+/// or `changelog.d/`, except the spec (`docs/spec.md`, `docs/spec/`) and any `README.md`, which
+/// bosun's tests read. Push stamps carry over a diff of only such paths; CI still runs every gate.
+pub fn docs_only(path: &str) -> bool {
+    let under = ["docs/", "changelog.d/"]
+        .iter()
+        .any(|d| path.starts_with(d));
+    let spec = path == "docs/spec.md" || path.starts_with("docs/spec/");
+    let readme = path.rsplit('/').next() == Some("README.md");
+    path.ends_with(".md") && under && !spec && !readme
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docs_only_paths() {
+        for p in ["docs/a/b.md", "docs/progress.d/f.md", "changelog.d/f.md"] {
+            assert!(docs_only(p), "{p}");
+        }
+        for p in [
+            "docs/a.rs",
+            "README.md",
+            "src/x.md",
+            "notes.txt",
+            "Cargo.toml",
+            "x.md.rs",
+            "mydocs/a.md",
+            "CHANGELOG.md",
+            "plans/p.md",
+            "docs/spec/a.md",
+            "docs/spec.md",
+            "docs/progress.d/README.md",
+        ] {
+            assert!(!docs_only(p), "{p}");
+        }
+    }
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

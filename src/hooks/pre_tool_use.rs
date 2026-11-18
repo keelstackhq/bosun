@@ -466,7 +466,7 @@ fn push_gates(
                 .filter(|g| !stamps::has(root, &tree, g))
                 .cloned()
                 .collect();
-            if !missing.is_empty() {
+            if !missing.is_empty() && !stamps::carried(root, &src, &gates, &at) {
                 return Some(format!(
                     "push-gates (push_gates = \"push\"): the tree of `{src}` has no passing stamp \
                      for {}: commit your work, run `{}`, fix what fails, then push again",
