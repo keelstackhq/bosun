@@ -10,12 +10,10 @@ profile = "rust"
 mode = "subagent"
 
 [approvals]
-# Bootstrap mode (D-012, spec §8): until this day (UTC, inclusive) an owner key's
-# `--bootstrap` signature counts as the owner on owner-class PRs outside the excluded paths.
+# Bootstrap mode (D-012, spec §8): until this day (UTC, inclusive). Under the autonomous policy
+# (D-017) a bootstrap-form signature no longer counts; the key stays for a move back to a tighter policy.
 bootstrap_until = "2026-11-30"
-# Who approves gated PRs once bootstrap mode is over (D-014, spec §8): the orchestrator for
-# R-ci outside the CI workflows, the owner for the rest.
-policy = "owner-gated"
+# No explicit `policy`: `[mode] name = "autonomous"` fills it with `autonomous` (D-017, spec §18).
 
 [cloud]
 # The shared cloud environment "keelstack" (spec §5.2): a relayed root starts there.
@@ -27,3 +25,6 @@ environment_id = "env_014hvpWkGQxciwPhBBysjvGr"
 mode = "dual"
 app_id = 5696830
 app_slug = "keelstackhq-bosun-gate"
+
+[mode]
+name = "autonomous"

@@ -1,0 +1,1 @@
+- 2026-11-18 · deps push-to-main manifests · bosun.yml.jinja bosun-trusted deps keeps HEAD manifests on a push to the default branch, spec §3 · this PR

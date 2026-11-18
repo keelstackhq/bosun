@@ -137,3 +137,34 @@ fn other_files_are_not() {
         assert!(v["data"]["critical"].is_null(), "{path}: {v}");
     }
 }
+
+/// Handoff notes live in `docs/handoff/**`, outside R-gov, so a handoff PR is normal risk and
+/// autonomous mode may cover it; an agent-instruction file placed there stays R-gov (spec §8).
+#[test]
+fn handoff_notes_are_normal_risk_but_instruction_files_there_stay_r_gov() {
+    use bosun::core::risk::{autonomous_excluded, governance_globs, matches_globs};
+    for path in ["docs/handoff/notes.md", "docs/handoff/claude-x.md"] {
+        let (code, v) = check(path);
+        assert_eq!((code, rules(&v)), (0, vec![]), "{path}: {v}");
+        assert!(!matches_globs(&governance_globs(), path), "{path}");
+        assert!(
+            autonomous_excluded(&[(path, None)], &[], None).is_empty(),
+            "{path}"
+        );
+    }
+    for path in [
+        "docs/handoff/CLAUDE.md",
+        "docs/handoff/AGENTS.md",
+        "docs/handoff/claude.local.md",
+        "docs/handoff/.claude/skills/x/SKILL.md",
+        "src/.claude/settings.json",
+    ] {
+        let (code, v) = check(path);
+        assert_eq!((code, rules(&v)), (5, vec!["R-gov"]), "{path}: {v}");
+        assert!(matches_globs(&governance_globs(), path), "{path}");
+        assert_eq!(
+            autonomous_excluded(&[(path, None)], &[], None),
+            vec![path.to_string()]
+        );
+    }
+}
