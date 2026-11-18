@@ -17,6 +17,8 @@ fn hook(dir: &std::path::Path, command: &str) -> String {
 #[test]
 fn hook_reads_the_script_an_interpreter_runs() {
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
     std::fs::write(
         tmp.path().join("m.py"),
         "import os\nos.system('gh pr merge 3')\n",
@@ -39,6 +41,8 @@ fn hook_reads_the_script_an_interpreter_runs() {
 #[test]
 fn hook_refuses_a_script_it_cannot_read_in_full() {
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
     std::fs::write(tmp.path().join("big.py"), vec![b'#'; (1 << 20) + 10]).unwrap();
     for command in ["python3 big.py", "python3 /proc/self/pagemap"] {
         let out = hook(tmp.path(), command);
@@ -53,6 +57,8 @@ fn hook_refuses_a_script_it_cannot_read_in_full() {
 #[test]
 fn hook_reads_heredoc_stdin_inline_and_never_blocks_on_a_fifo() {
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
     for command in [
         "python3 - <<'EOF'\nprint(1)\nEOF",
         "python3 /dev/stdin <<'EOF'\nprint(1)\nEOF",

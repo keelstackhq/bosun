@@ -29,6 +29,8 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo_at(d: &Path) {
     fs::create_dir_all(d).unwrap();
     git(d, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(d.join(".bosun")).unwrap();
+    std::fs::write(d.join(".bosun/version"), "0.9.0\n").unwrap();
     git(
         d,
         &[

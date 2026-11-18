@@ -339,6 +339,8 @@ fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
     let main = tmp.path().join("main");
     std::fs::create_dir(&main).unwrap();
     git(&main, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir(main.join(".bosun")).unwrap();
+    std::fs::write(main.join(".bosun/version"), "0.9.0\n").unwrap();
     let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
     git(
         &main,
@@ -903,6 +905,34 @@ fn session_start_unadopted_no_network() {
         s.comments.is_empty() && s.issues.is_empty(),
         "no registry join"
     );
+    drop(s);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+}
+
+#[test]
+fn other_hooks_are_no_ops_in_an_unadopted_repo() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let push = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash",
+        "tool_input":{"command":"git push origin main"}});
+    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &push);
+    assert_eq!((o.code, o.stdout.trim()), (0, ""), "{}", o.stderr);
+    for (sub, ev) in [("stop", "Stop"), ("pre-compact", "PreCompact")] {
+        let input = json!({"hook_event_name":ev,"cwd":cwd});
+        let o = hook(Some(&fake), tmp.path(), T0, sub, &input);
+        assert_eq!((o.code, o.stdout.trim()), (0, ""), "{sub}: {}", o.stderr);
+    }
+    let cd = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash",
+        "tool_input":{"command":"cd /nonexistent && git push origin main"}});
+    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &cd);
+    assert!(
+        o.stdout.contains("deny"),
+        "a cd is still judged: {}",
+        o.stdout
+    );
+    let post = json!({"hook_event_name":"PostToolUse","cwd":cwd,"tool_name":"AskUserQuestion"});
+    hook(Some(&fake), tmp.path(), T0, "post-tool-use", &post);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
 }
 
 #[test]

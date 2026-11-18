@@ -40,6 +40,8 @@ fn repo(branch: &str) -> tempfile::TempDir {
             .unwrap();
         assert!(st.success());
     }
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(dir.path().join(".bosun/version"), "0.9.0\n").unwrap();
     dir
 }
 

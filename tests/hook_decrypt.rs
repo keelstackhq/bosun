@@ -18,6 +18,8 @@ const CASES: &[(&str, bool)] = &[
 #[test]
 fn hook_denies_decrypting_and_allows_the_rest() {
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
     for (command, deny) in CASES {
         let input = json!({"session_id":"s","tool_name":"Bash","tool_input":{"command":command},
             "cwd":tmp.path().to_str().unwrap()});

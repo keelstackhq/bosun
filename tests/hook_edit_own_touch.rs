@@ -30,6 +30,8 @@ fn setup(holder: &str, touch: &str) -> (FakeGithub, tempfile::TempDir) {
     let (fake, tmp) = (FakeGithub::start(), tempfile::tempdir().unwrap());
     let d = tmp.path();
     git(d, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(d.join(".bosun")).unwrap();
+    std::fs::write(d.join(".bosun/version"), "0.9.0\n").unwrap();
     git(
         d,
         &[

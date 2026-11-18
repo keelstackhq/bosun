@@ -442,7 +442,7 @@ fn install_hooks_keeps_existing_entries() {
     )
     .unwrap();
     let env = install(&f);
-    assert_eq!(env["data"]["added"].as_array().unwrap().len(), 3);
+    assert_eq!(env["data"]["added"].as_array().unwrap().len(), 4);
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
     assert_eq!(v["model"], "x");
     assert_eq!(
@@ -482,4 +482,29 @@ fn install_hooks_refuses_invalid_json_and_matches_the_repo_settings() {
     ] {
         assert_eq!(commands(&user, e), commands(&repo, e), "{e}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn install_hooks_follows_a_symlink_and_keeps_the_mode() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let t = tempfile::tempdir().unwrap();
+    let real = t.path().join("real.json");
+    fs::write(&real, "  \n").unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+    let link = t.path().join("settings.json");
+    symlink(&real, &link).unwrap();
+    install(&link);
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&real).unwrap()).unwrap();
+    assert_eq!(commands(&v, "SessionStart").len(), 1);
+    assert_eq!(
+        fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }

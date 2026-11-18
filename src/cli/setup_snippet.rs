@@ -112,6 +112,8 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
         })
         .ok_or_else(|| BosunError::error("HOME is not set", "pass --settings <path>"))?;
+    // Edit a symlinked settings file in place: the link stays and the target is rewritten.
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
     let shown = path.display();
     let bad = |why: String| {
         BosunError::error(
@@ -120,6 +122,7 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
         )
     };
     let mut doc = match std::fs::read_to_string(&path) {
+        Ok(t) if t.trim().is_empty() => json!({}),
         Ok(t) => serde_json::from_str(&t).map_err(|e| bad(format!("not valid JSON ({e})")))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(e) => return Err(bad(e.to_string())),
@@ -131,8 +134,14 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
         }
         let text = serde_json::to_string_pretty(&doc).map_err(|e| bad(e.to_string()))?;
         // Write beside, then rename: a crash never leaves half a settings file.
-        let tmp = path.with_extension(format!("json.bosun-tmp-{}", std::process::id()));
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".bosun-tmp-{}", std::process::id()));
+        let tmp = path.with_file_name(name);
         std::fs::write(&tmp, format!("{text}\n"))
+            .and_then(|()| match std::fs::metadata(&path) {
+                Ok(m) => std::fs::set_permissions(&tmp, m.permissions()),
+                Err(_) => Ok(()),
+            })
             .and_then(|()| std::fs::rename(&tmp, &path))
             .map_err(|e| {
                 let _ = std::fs::remove_file(&tmp);
