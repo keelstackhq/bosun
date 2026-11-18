@@ -61,17 +61,12 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     excluded.push(app.ctx.session.clone());
     let models = review_models(gh, &pull.base_sha)?;
     let head = &pull.head_sha;
+    let found = autonomous_clean(&comments, head, &excluded, models.as_deref());
     if provider_default(gh)? != CiProvider::None {
-        return Ok(autonomous_clean(
-            &comments,
-            head,
-            &excluded,
-            models.as_deref(),
-        ));
+        return Ok(found);
     }
-    // Without CI no App record counts: `[checks] mode = "checks"` is refused with provider none,
-    // and in `statuses` mode `github-actions[bot]` is any writer's push workflow. Only a
-    // signature of an enrolled key counts (D-019), never a writer's comment or a session tag.
+    // Without CI no App record counts (`github-actions[bot]` is any writer's push workflow): only
+    // a signature of an enrolled key does (D-019), never a writer's comment or a session tag.
     let keys = super::risk_check::enrolled_keys(gh).unwrap_or_default();
     let (repo, pr) = (&app.ctx.repo, pull.number);
     let mut seen: Vec<Vec<u8>> = Vec::new();

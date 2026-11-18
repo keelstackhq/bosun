@@ -1787,9 +1787,8 @@ pub(crate) fn autonomous_inputs(
     pull: &Pull,
     repo: &str,
 ) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
-    // Without CI, a `github-actions[bot]` record is any writer's push workflow (spec section 8).
-    let ci = super::pr_no_ci::provider_default(gh)? != crate::config::CiProvider::None;
-    if !ci {
+    // Without CI a `github-actions[bot]` record is any writer's push workflow (spec section 8).
+    if super::pr_no_ci::provider_default(gh)? == crate::config::CiProvider::None {
         return Ok(None);
     }
     let mut task = false;
