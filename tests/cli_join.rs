@@ -381,3 +381,19 @@ fn a_plain_rejoin_keeps_origin_slack_without_a_seat() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["origin"], "slack");
 }
+
+#[test]
+fn a_spawned_or_routine_record_cannot_join_as_local() {
+    for origin in ["spawned", "routine"] {
+        let fake = FakeGithub::start();
+        let d = slack_dir(SLACK_CFG);
+        let (code, v) = seat_run(
+            &fake,
+            d.path(),
+            &[("BOSUN_ORIGIN", origin)],
+            &["--origin", "local"],
+        );
+        assert_eq!(code, 5, "{origin}: {v}");
+        assert!(registry_bodies(&fake).is_empty());
+    }
+}

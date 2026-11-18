@@ -86,14 +86,16 @@ pub fn run(dir: Option<&Path>, args: &JoinArgs) -> CmdResult {
     let slack = seat_of(args, origin)?;
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
-    if origin == Some(Origin::Slack) && matches!(app.ctx.origin, Origin::Spawned | Origin::Routine)
+    if let Some(claimed @ (Origin::Slack | Origin::Local)) = origin
+        && matches!(app.ctx.origin, Origin::Spawned | Origin::Routine)
     {
         return Err(BosunError::needs_human(
             format!(
-                "--origin slack, but this session resolves to origin {}",
+                "--origin {}, but this session resolves to origin {}",
+                claimed.as_str(),
                 app.ctx.origin.as_str()
             ),
-            "a spawned or routine session cannot relabel itself as Slack; join without --origin",
+            "a spawned or routine session cannot relabel itself as Slack or local; join without --origin",
         ));
     }
     if let Some(seat) = &slack {

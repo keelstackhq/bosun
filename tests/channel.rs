@@ -168,6 +168,11 @@ fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
     let recheck = "contains(github.event.comment.body, '/bosun recheck')";
     assert_eq!(risk.matches(recheck).count(), 2, "job if: and concurrency");
     assert!(!risk.contains("\n  pull_request_review:"), "{risk}");
+    // A trusted bot's marker-less verdict also runs the relay (spec §7).
+    let verdict = fs::read_to_string(wf.join("verdict.yml.jinja")).unwrap();
+    // The fence keeps bosun's own record comments (App token, "head_sha", no fence) out of it.
+    let bot = "(github.event.comment.user.type == 'Bot' && contains(github.event.comment.body, '\"head_sha\"') && contains(github.event.comment.body, '```json'))";
+    assert_eq!(verdict.matches(bot).count(), 2, "job if: and concurrency");
 }
 
 #[test]
