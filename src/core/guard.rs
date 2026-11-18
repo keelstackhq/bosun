@@ -183,6 +183,23 @@ pub fn tool_rules(
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
         return bash_rules(command, branch_at, default_branch);
     }
+    // Any other MCP server's write tool is refused when it carries the chat form too: only
+    // read-only verbs (`get_`, `list_`, `search_`, ...) are skipped.
+    if let Some(rest) = tool.strip_prefix("mcp__")
+        && !tool.starts_with("mcp__github__")
+    {
+        let name = rest.rsplit("__").next().unwrap_or(rest);
+        let read_only = [
+            "get_", "list_", "search_", "read_", "find_", "query_", "fetch_",
+        ]
+        .iter()
+        .any(|v| name.starts_with(v));
+        if !read_only && strings(input).iter().any(|t| carries_chat_form(t)) {
+            return Some(format!(
+                "`{tool}` writes a chat approval record: {CHAT_FIX}"
+            ));
+        }
+    }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
             return Some(format!("`{tool}` is refused: {MERGE_FIX}"));
@@ -191,6 +208,11 @@ pub fn tool_rules(
         // read-only tools are skipped; a tool not listed is judged below (fails closed).
         if READ_ONLY_GITHUB.contains(&name) {
             return None;
+        }
+        if strings(input).iter().any(|t| carries_chat_form(t)) {
+            return Some(format!(
+                "`{tool}` writes a chat approval record: {CHAT_FIX}"
+            ));
         }
         // A label tool is judged on its whole input; any other tool only on its label fields,
         // so a PR or issue body that names a state label in prose is not a label edit.
@@ -461,6 +483,177 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
     })
 }
 
+const CHAT_FIX: &str = "only an orchestrator records a chat approval: run \
+    `bosun approve <pr>@<head> --chat` (prose that only names the marker: put it in a file, \
+    `--body-file` or `git commit -F`)";
+
+/// The chat approval marker, or the record's first line `/bosun approve <40-hex> chat`, anywhere
+/// in the text (any case, any spacing). Broader than `core::approve::parse_chat_record`, so
+/// whatever the risk-check counter would count, the guard refuses.
+static CHAT_FORM: LazyLock<Regex> = LazyLock::new(|| {
+    let marker = regex::escape(crate::core::approve::CHAT_MARKER);
+    Regex::new(&format!(
+        r"(?i){marker}|/bosun\s+approve\s+[0-9a-f]{{40}}\s+chat\b"
+    ))
+    .expect("chat form regex")
+});
+
+fn carries_chat_form(text: &str) -> bool {
+    CHAT_FORM.is_match(text) || CHAT_FORM.is_match(&decode_escapes(text))
+}
+
+/// `text` with `\uXXXX` and `\xNN` escapes (JSON, printf, `$'..'`) replaced by their character,
+/// so a record cannot be spelled past the matcher.
+fn decode_escapes(text: &str) -> String {
+    static ESC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})").expect("escape regex")
+    });
+    ESC.replace_all(text, |c: &regex::Captures| {
+        let hex = c.get(1).or_else(|| c.get(2)).map_or("", |m| m.as_str());
+        u32::from_str_radix(hex, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .map_or_else(String::new, |ch| ch.to_string())
+    })
+    .into_owned()
+}
+
+/// Every string value in `v`, at any depth.
+fn strings(v: &Value) -> Vec<&str> {
+    match v {
+        Value::String(s) => vec![s.as_str()],
+        Value::Object(m) => m.values().flat_map(strings).collect(),
+        Value::Array(a) => a.iter().flat_map(strings).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Chat-lock (D-018): a command that carries the chat form is refused unless it is read-only
+/// throughout with no `bosun` word (`grep bosun:chat-approval src` passes). The legitimate
+/// `bosun approve <pr>@<head> --chat` carries no form: bosun writes the record itself. Best
+/// effort, like the label-lock: text in a file (`--body-file`, `--input`), a variable, or split
+/// by quotes is missed.
+fn chat_rule(command: &str) -> Option<String> {
+    if !carries_chat_form(command) {
+        return None;
+    }
+    let reads = read_only(command, 0) && !shell_words(command).iter().any(|w| base(w) == "bosun");
+    (!reads).then(|| format!("the command writes a chat approval record: {CHAT_FIX}"))
+}
+
+/// [`chat_rule`] for the text of a script file: a script is never "read-only throughout", so
+/// any script carrying the form is refused.
+pub(super) fn chat_rule_script(code: &str) -> Option<String> {
+    carries_chat_form(code).then(|| format!("it writes a chat approval record: {CHAT_FIX}"))
+}
+
+/// The command with quotes and backslashes removed (`bos''un`, `bo\\sun` read as `bosun`) and
+/// split into words at whitespace and shell separators.
+fn dequoted_words(command: &str) -> Vec<String> {
+    let plain: String = command
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    plain
+        .split(|c: char| c.is_whitespace() || ";&|()`$<>".contains(c))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether the command may run `bosun approve … --chat`: the words `approve` and `--chat` both
+/// appear (dequoted, nested or not). No `bosun` word is required, so a spelling of the command
+/// name cannot slip past. Over-matches on purpose: the hook lets only an orchestrator through.
+pub fn records_chat_approval(command: &str) -> bool {
+    let words = dequoted_words(command);
+    ["approve", "--chat"]
+        .iter()
+        .all(|w| words.iter().any(|x| x == w))
+}
+
+/// Whether a command that records a chat approval also sets its own identity
+/// (`BOSUN_SESSION=…`, `BOSUN_ORIGIN=…`, `CLAUDE_CODE_…=…`): refused for everyone.
+pub fn chat_identity_override(command: &str) -> bool {
+    records_chat_approval(command)
+        && dequoted_words(command).iter().any(|w| {
+            let name = w.split('=').next().unwrap_or("");
+            w.contains('=') && (name.starts_with("BOSUN_") || name.starts_with("CLAUDE_CODE_"))
+        })
+}
+
+/// The index of the command word of a simple command: past shell keywords and prefix words
+/// (`if`, `then`, `time`, `nohup`, `sudo`, `nice`, ...) with their options, and `NAME=value`.
+fn command_word(seg: &[String]) -> usize {
+    const PREFIX: [&str; 17] = [
+        "if", "then", "else", "elif", "do", "while", "until", "!", "{", "time", "nohup", "command",
+        "exec", "sudo", "nice", "builtin", "setsid",
+    ];
+    let mut i = 0;
+    while let Some(w) = seg.get(i) {
+        if PREFIX.contains(&w.as_str()) {
+            i += 1;
+            while let Some(o) = seg.get(i).filter(|o| o.starts_with('-')) {
+                // `nice -n 5`, `sudo -u root`: these options take a value.
+                i += 1 + usize::from(matches!(o.as_str(), "-n" | "-u" | "-g"));
+            }
+        } else if w.contains('=') && !w.starts_with('-') {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// Whether a command drops or overrides the child-session flag next to a `bosun` word: an
+/// unset of it, a cleared environment, or an assignment to it. Best effort (lexical, like the
+/// rest of the chat-lock): refused for everyone, since no honest command needs to hide that it
+/// runs as a child. `-u`, `-i` and `-` count only as options of an `env` word (its options end
+/// at the first word that is neither an option nor `NAME=value`), and `unset` only as the first
+/// word of a command, so `grep -i x && bosun status` is not tamper.
+pub fn child_flag_tamper(command: &str) -> bool {
+    let words = dequoted_words(command);
+    if !words.iter().any(|w| base(w) == "bosun") {
+        return false;
+    }
+    let flag = |w: &String| w.contains("CLAUDE_CODE_CHILD_SESSION");
+    if words.iter().any(|w| flag(w) && w.contains('=')) {
+        return true;
+    }
+    command
+        .split(|c: char| ";&|\n()`".contains(c))
+        .map(dequoted_words)
+        .any(|seg| {
+            let named = seg.iter().any(flag);
+            let at = command_word(&seg);
+            if seg.get(at).is_some_and(|w| w == "unset") && named {
+                return true;
+            }
+            if seg.get(at).is_none_or(|w| base(w) != "env") {
+                return false;
+            }
+            let (mut unsets, mut clears, mut skip) = (false, false, false);
+            for w in &seg[at + 1..] {
+                if std::mem::take(&mut skip) {
+                    continue;
+                }
+                if matches!(w.as_str(), "-u" | "--unset") {
+                    unsets = true;
+                    skip = true;
+                } else if w.starts_with("-u") || w.starts_with("--unset=") {
+                    unsets = true;
+                } else if matches!(w.as_str(), "-C" | "--chdir" | "-S" | "--split-string") {
+                    skip = true;
+                } else if matches!(w.as_str(), "-i" | "--ignore-environment" | "-") {
+                    clears = true;
+                } else if !w.starts_with('-') && !w.contains('=') {
+                    break;
+                }
+            }
+            (unsets && named) || clears
+        })
+}
+
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
 fn label_fields(v: &Value) -> String {
     match v {
@@ -505,7 +698,8 @@ fn too_deep() -> String {
 }
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
-    decrypt_rule(command, 0)
+    chat_rule(command)
+        .or_else(|| decrypt_rule(command, 0))
         .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0, None))
         .or_else(|| {
@@ -7071,5 +7265,240 @@ mod tests {
         assert!(why.contains("re-claim with valid globs"), "{why}");
         let only = [own(6, "me", &["src/[a"])];
         assert!(edit_lock("src/[a", true, &only, "me").is_some());
+    }
+
+    const H: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn chat_body() -> String {
+        crate::core::approve::chat_comment(
+            H,
+            "session_x",
+            "2026-11-10T00:00:00Z",
+            Some("1-0123456-1"),
+        )
+    }
+
+    fn mcp(tool: &str, input: Value) -> Option<String> {
+        tool_rules(tool, &input, &|_| Some("feat".into()), "main")
+    }
+
+    #[test]
+    fn mcp_comment_with_marker_denied() {
+        let body = chat_body();
+        let marker_only = format!("lgtm\n<!-- {} v1 -->", crate::core::approve::CHAT_MARKER);
+        let form_only = format!("/bosun approve {} chat", H.to_uppercase());
+        for (tool, input) in [
+            (
+                "add_issue_comment",
+                json!({"issue_number": 3, "body": body}),
+            ),
+            (
+                "update_issue_comment",
+                json!({"comment_id": 9, "body": marker_only}),
+            ),
+            (
+                "create_pull_request",
+                json!({"title": "x", "body": form_only}),
+            ),
+            (
+                "pull_request_review_write",
+                json!({"method": "create", "body": body}),
+            ),
+            ("issue_write", json!({"method": "update", "body": body})),
+            (
+                "add_comment_to_pending_review",
+                json!({"x": [{"body": body}]}),
+            ),
+        ] {
+            let why = mcp(&format!("mcp__github__{tool}"), input)
+                .unwrap_or_else(|| panic!("{tool} allowed"));
+            assert!(why.contains("bosun approve <pr>@<head> --chat"), "{why}");
+        }
+        // Reading is not writing.
+        let q = json!({"query": "bosun:chat-approval"});
+        assert_eq!(mcp("mcp__github__search_issues", q), None);
+    }
+
+    #[test]
+    fn plain_comment_allowed() {
+        let ok = [
+            "lgtm",
+            "/bosun approve 0123456789abcdef0123456789abcdef01234567",
+            "/bosun approve <head> chat",
+            "chat approvals are recorded by the orchestrator",
+        ];
+        for body in ok {
+            let input = json!({"issue_number": 3, "body": body});
+            assert_eq!(mcp("mcp__github__add_issue_comment", input), None, "{body}");
+            let cmd = format!("gh pr comment 3 --body '{body}'");
+            assert_eq!(bash(&cmd, "feat"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn any_mcp_write_tool_with_the_form_is_denied() {
+        let body = chat_body();
+        let tool =
+            |t: &str| tool_rules(t, &json!({"body": body}), &|_| Some("feat".into()), "main");
+        assert!(tool("mcp__x__post").is_some());
+        assert!(tool("mcp__other_server__create_comment").is_some());
+        assert!(tool("mcp__x__get_thing").is_none());
+        assert!(tool("mcp__x__search_things").is_none());
+    }
+
+    #[test]
+    fn child_flag_tamper_is_caught() {
+        for c in [
+            "env -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@h --chat",
+            "unset CLAUDE_CODE_CHILD_SESSION; bosun approve 3@h --chat",
+            "env -i bosun approve 3@h --chat",
+            "CLAUDE_CODE_CHILD_SESSION=0 bosun status",
+            "env --unset=CLAUDE_CODE_CHILD_SESSION /usr/bin/bosun status",
+            "env -u 'CLAUDE_CODE_CHILD_SESSION' bos''un status",
+            "cd /r && env -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@h --chat",
+            "env FOO=1 -i bosun status",
+            "if true; then env -i bosun status; fi",
+            "while :; do unset CLAUDE_CODE_CHILD_SESSION; done; bosun status",
+            "! env -u CLAUDE_CODE_CHILD_SESSION bosun status",
+            "time nohup env -i bosun status",
+            "sudo -u root env -i bosun status",
+            "nice -n 5 command exec env --unset=CLAUDE_CODE_CHILD_SESSION bosun status",
+            "FOO=1 env -C /r -u CLAUDE_CODE_CHILD_SESSION bosun status",
+            "env --chdir /r --unset CLAUDE_CODE_CHILD_SESSION bosun status",
+            "env -S x -i bosun status",
+        ] {
+            assert!(child_flag_tamper(c), "{c}");
+        }
+        for c in [
+            "bosun status",
+            "env FOO=1 bosun status",
+            "unset FOO",
+            "env -i ls",
+            "grep -i x && bosun status",
+            "grep -u x; bosun status",
+            "ls - && bosun status",
+            "grep -i CLAUDE_CODE_CHILD_SESSION notes && bosun status",
+            "bosun status | grep -i x",
+            "bosun comment unset CLAUDE_CODE_CHILD_SESSION",
+            "env -C /r bosun status",
+            "env -C -i bosun status",
+            "env -u FOO -S x bosun status",
+            "if grep -i x f; then bosun status; fi",
+            "echo env -i; bosun status",
+            "then unset FOO; bosun status",
+        ] {
+            assert!(!child_flag_tamper(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn guard_denies_every_record_the_counter_counts() {
+        use crate::core::approve::parse_chat_record;
+        let body = chat_body();
+        assert!(parse_chat_record(&body, H, None).is_some());
+        assert!(carries_chat_form(&body));
+        // Each line on its own carries the form: a record cannot be split past the guard.
+        assert!(
+            body.lines()
+                .filter(|l| !l.contains("Approved"))
+                .all(carries_chat_form)
+        );
+        let shouty = body.replace("bosun:chat-approval", "BOSUN:Chat-Approval");
+        assert!(carries_chat_form(&shouty));
+    }
+
+    #[test]
+    fn bash_gh_and_curl_marker_denied() {
+        let body = chat_body().replace('\n', "\\n");
+        let cmds = [
+            format!("gh api repos/o/r/issues/3/comments -f body='{body}'"),
+            format!("gh pr comment 3 --body \"{body}\""),
+            format!("gh issue comment 3 -b '/bosun approve {H} chat'"),
+            format!(
+                "curl -X POST -H 'Authorization: token x' https://api.github.com/repos/o/r/issues/3/comments -d '{{\"body\":\"{body}\"}}'"
+            ),
+            format!(
+                "gh api repos/o/r/issues/3/comments --input - <<'EOF'\n{{\"body\": \"/bosun approve {H} chat\"}}\nEOF"
+            ),
+            format!(
+                "bash -c \"gh pr comment 3 -b '<!-- bosun:chat-approval v1 session=s head={H} -->'\""
+            ),
+            format!("bosun handoff-pr 3 --note '/bosun approve {H} chat'"),
+            format!("git commit -m '/bosun approve {H} chat'"),
+        ];
+        for cmd in &cmds {
+            let why = bash(cmd, "feat").unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(why.contains("chat approval record"), "{cmd}: {why}");
+        }
+        // Read-only commands may name it.
+        assert_eq!(bash("grep -rn bosun:chat-approval src", "feat"), None);
+        assert_eq!(
+            bash(
+                "gh pr view 3 --json comments | grep 'bosun:chat-approval'",
+                "feat"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn bosun_approve_chat_is_recognised_for_the_orchestrator_check() {
+        for cmd in [
+            format!("bosun approve 12@{H} --chat"),
+            format!("cd x && bosun approve 12@{H} --chat --question q"),
+            format!("bash -c \"bosun approve 12@{H} --chat\""),
+            format!("bos''un approve 12@{H} --chat"),
+            format!("bo\\sun approve 12@{H} --chat"),
+            format!("\"bo\"sun \"approve\" 12@{H} '--chat'"),
+            format!("/usr/bin/bosun approve 12@{H} --chat"),
+        ] {
+            assert!(records_chat_approval(&cmd), "{cmd}");
+            assert_eq!(bash(&cmd, "feat"), None, "{cmd}");
+        }
+        assert!(!records_chat_approval("bosun approve 12 --sign-key k"));
+        assert!(!records_chat_approval("git log --chat"));
+    }
+
+    #[test]
+    fn chat_approve_with_identity_assignment_is_flagged() {
+        for cmd in [
+            format!("BOSUN_ORIGIN=local bosun approve 1@{H} --chat"),
+            format!("env BOSUN_SESSION=root bosun approve 1@{H} --chat"),
+            format!("export CLAUDE_CODE_CHILD_SESSION=0; bosun approve 1@{H} --chat"),
+            format!("BOSUN_ORIGIN='local' bos''un approve 1@{H} --chat"),
+        ] {
+            assert!(chat_identity_override(&cmd), "{cmd}");
+        }
+        assert!(!chat_identity_override(&format!(
+            "bosun approve 1@{H} --chat"
+        )));
+        assert!(!chat_identity_override("BOSUN_ORIGIN=local bosun status"));
+    }
+
+    #[test]
+    fn escaped_records_are_still_records() {
+        let u = r"gh api repos/o/r/issues/3/comments -f body='\u002fbosun approve 0123456789abcdef0123456789abcdef01234567 chat'";
+        let x = r"printf '\x3c!-- bosun:chat-approval v1 --\x3e' | gh pr comment 3 -F -";
+        for cmd in [u, x] {
+            assert!(
+                bash(cmd, "feat").is_some_and(|w| w.contains("chat approval record")),
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn bosun_approve_chat_chained_denied() {
+        let tail = format!("gh api repos/o/r/issues/12/comments -f body='/bosun approve {H} chat'");
+        for cmd in [
+            format!("bosun approve 1@{H} --chat && {tail}"),
+            format!("bosun approve 1@{H} --chat; {tail}"),
+            format!("bosun approve 1@{H} --chat | {tail}"),
+            format!("bosun approve 1@{H} --chat\n{tail}"),
+            format!("bosun approve 1@{H} --chat --note \"$({tail})\""),
+            format!("bosun approve 1@{H} --chat --note '/bosun approve {H} chat' `true`"),
+        ] {
+            assert!(bash(&cmd, "feat").is_some(), "allowed: {cmd}");
+        }
     }
 }

@@ -874,3 +874,187 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
         assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
     }
 }
+
+#[test]
+fn chat_lock_denies_forged_records_and_allows_bosun_approve_chat() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let h = "0123456789abcdef0123456789abcdef01234567";
+    let record =
+        format!("/bosun approve {h} chat\nok\n<!-- bosun:chat-approval v1 session=s head={h} -->");
+    let bash = |c: &str| pre(&fake, tmp.path(), "Bash", json!({"command": c}));
+    let comment = json!({"owner": "o", "repo": "r", "issue_number": 3, "body": record});
+    let why = denied(&pre(
+        &fake,
+        tmp.path(),
+        "mcp__github__add_issue_comment",
+        comment,
+    ));
+    assert!(why.contains("--chat"), "{why}");
+    denied(&bash(&format!(
+        "gh api repos/o/r/issues/3/comments -f body='/bosun approve {h} chat'"
+    )));
+    denied(&bash(
+        "curl -X POST https://api.github.com/repos/o/r/issues/3/comments -d '{\"body\":\"<!-- bosun:chat-approval v1 -->\"}'",
+    ));
+    allowed(&bash("grep -rn bosun:chat-approval src"));
+    allowed(&bash("gh pr comment 3 --body lgtm"));
+}
+
+#[test]
+fn only_a_live_orchestrator_may_run_bosun_approve_chat() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let cmd = "bosun approve 3@0123456789abcdef0123456789abcdef01234567 --chat";
+    let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
+    let run = |session: &str, origin: &str, fake: &FakeGithub| {
+        hook_with(
+            session,
+            origin,
+            Some(fake),
+            tmp.path(),
+            T0,
+            "pre-tool-use",
+            &input,
+        )
+    };
+    // No registry: fail closed.
+    assert!(denied(&run("session_me", "local", &fake)).contains("orchestrator"));
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    let join = |s: &str, o: &str, parent: &str, depth: u32| {
+        format!(
+            "{{\"bosun\":\"join\",\"session\":\"{s}\",\"origin\":\"{o}\"{parent},\"depth\":{depth},\"expires\":\"{LIVE}\"}}"
+        )
+    };
+    fake.comment(1, &join("session_me", "local", "", 1));
+    fake.comment(1, &join("kid", "spawned", ",\"parent\":\"session_me\"", 2));
+    allowed(&run("session_me", "local", &fake));
+    denied(&run("kid", "spawned", &fake));
+    denied(&run("stranger", "local", &fake));
+    // Nested in a shell is judged the same.
+    let nested = call(
+        tmp.path(),
+        "Bash",
+        json!({ "command": format!("bash -c '{cmd}'") }),
+    );
+    let kid = hook_with(
+        "kid",
+        "spawned",
+        Some(&fake),
+        tmp.path(),
+        T0,
+        "pre-tool-use",
+        &nested,
+    );
+    denied(&kid);
+}
+
+#[test]
+fn a_child_cannot_become_the_chat_orchestrator_by_its_own_join_or_env() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    let join = format!(
+        "{{\"bosun\":\"join\",\"session\":\"kid\",\"origin\":\"local\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
+    );
+    fake.comment(1, &join);
+    let h = "0123456789abcdef0123456789abcdef01234567";
+    let run = |origin: &str, cmd: String| {
+        let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
+        hook_with(
+            "kid",
+            origin,
+            Some(&fake),
+            tmp.path(),
+            T0,
+            "pre-tool-use",
+            &input,
+        )
+    };
+    let plain = format!("bosun approve 3@{h} --chat");
+    // The self-written join says local and live, but the hook's own origin is spawned.
+    denied(&run("spawned", plain.clone()));
+    // The same join as a real local session is accepted ...
+    allowed(&run("local", plain.clone()));
+    // ... unless the command sets its own identity or spells the name oddly.
+    denied(&run("local", format!("BOSUN_ORIGIN=local {plain}")));
+    denied(&run("spawned", format!("bos''un approve 3@{h} --chat")));
+}
+
+const FORGE: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn chat_lock_reads_script_files_and_any_mcp_write_tool() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let record = format!(
+        "/bosun approve {FORGE} chat\\nok\\n<!-- bosun:chat-approval v1 session=s head={FORGE} -->"
+    );
+    std::fs::write(
+        tmp.path().join("forge.py"),
+        format!("import subprocess\nsubprocess.run(['gh','api','x','-f','body={record}'])\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("forge.sh"),
+        format!("gh api repos/o/r/issues/3/comments -f body='{record}'\n"),
+    )
+    .unwrap();
+    for cmd in ["python3 forge.py", "bash forge.sh", "sh ./forge.sh"] {
+        let out = pre(&fake, tmp.path(), "Bash", json!({"command": cmd}));
+        assert!(denied(&out).contains("chat approval"), "{cmd}");
+    }
+    std::fs::write(tmp.path().join("fine.py"), "print('hello')\n").unwrap();
+    allowed(&pre(
+        &fake,
+        tmp.path(),
+        "Bash",
+        json!({"command": "python3 fine.py"}),
+    ));
+    // A made-up MCP server's write tool is refused; its read tool is not.
+    let body = json!({"text": record});
+    denied(&pre(&fake, tmp.path(), "mcp__x__post", body.clone()));
+    allowed(&pre(&fake, tmp.path(), "mcp__x__get_thing", body));
+}
+
+#[test]
+fn the_child_flag_is_read_directly_and_cannot_be_dropped() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    let join = format!(
+        "{{\"bosun\":\"join\",\"session\":\"kid\",\"origin\":\"local\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
+    );
+    fake.comment(1, &join);
+    let cmd = format!("bosun approve 3@{FORGE} --chat");
+    let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
+    // The flag says child; BOSUN_ORIGIN says local: still a child.
+    let out = bosun()
+        .current_dir(tmp.path())
+        .env("BOSUN_SESSION", "kid")
+        .env("BOSUN_ORIGIN", "local")
+        .env("CLAUDE_CODE_CHILD_SESSION", "1")
+        .env("BOSUN_NOW", T0)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\"deny\""));
+    // Dropping the flag next to bosun is refused for everyone.
+    for cmd in [
+        format!("unset CLAUDE_CODE_CHILD_SESSION; bosun approve 3@{FORGE} --chat"),
+        format!(
+            "{} -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@{FORGE} --chat",
+            "env"
+        ),
+        format!("{} -i bosun approve 3@{FORGE} --chat", "env"),
+    ] {
+        let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
+        let out = hook_with(
+            "kid",
+            "local",
+            Some(&fake),
+            tmp.path(),
+            T0,
+            "pre-tool-use",
+            &input,
+        );
+        denied(&out);
+    }
+}

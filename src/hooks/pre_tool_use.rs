@@ -10,8 +10,9 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, bash_writes, child_task_create, config_fetch_risk, edit_lock, edited_path,
-    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
+    ChildTask, Script, bash_writes, chat_identity_override, child_flag_tamper, child_task_create,
+    config_fetch_risk, edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for,
+    pushes, records_chat_approval, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -124,6 +125,21 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
                 Ok(None) => {}
                 Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
             }
+        }
+        if child_flag_tamper(command) {
+            return Some(deny(
+                "a command that runs bosun may not unset or override CLAUDE_CODE_CHILD_SESSION: \
+                 a child session cannot hide that it is one",
+            ));
+        }
+        if records_chat_approval(command)
+            && (chat_identity_override(command) || !orchestrator(&dir))
+        {
+            return Some(deny(
+                "only an orchestrator session records a chat approval (`bosun approve \
+                 <pr>@<head> --chat`, without setting BOSUN_* or CLAUDE_CODE_* in the \
+                 command); a child hands the question to its orchestrator",
+            ));
         }
         let repeat = repeat_lock(&dir, input, &tool_input);
         let read = |p: &str| read_script(&dir, p);
@@ -687,6 +703,26 @@ fn registered_child(dir: &Path, write: &ChildTask) -> bool {
             && l.touch.is_empty()
             && l.is_live(app.ctx.now)
     })
+}
+
+/// Whether this session is an orchestrator by its live join in the trusted registry notes.
+/// Any doubt (no repo, no GitHub, no registry, no join) is no.
+fn orchestrator(dir: &Path) -> bool {
+    let Ok(app) = App::load(Some(dir)) else {
+        return false;
+    };
+    // A child is no orchestrator, whatever join it wrote itself: the hook reads
+    // `CLAUDE_CODE_CHILD_SESSION` directly (`BOSUN_ORIGIN` can relabel `ctx.origin`, the flag
+    // Claude Code sets for a child cannot be dropped that way), and also honours `ctx.origin`.
+    let child_flag = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
+    if child_flag || app.ctx.origin == crate::ctx::Origin::Spawned {
+        return false;
+    }
+    let Ok(Some((_, notes))) = crate::registry::load(app.gh.as_ref()) else {
+        return false;
+    };
+    let members = crate::core::lease::members(&notes);
+    crate::core::approve::is_orchestrator(&members, &app.ctx.session, app.ctx.now)
 }
 
 /// [`plan_tick_edit`] on a path as the tool gave it (absolute or relative to `dir`).

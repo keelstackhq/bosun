@@ -1,0 +1,1 @@
+- PreToolUse chat-lock: refuses MCP and Bash writes that carry a chat approval record, and lets only a live orchestrator run `bosun approve --chat`.
