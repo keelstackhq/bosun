@@ -194,7 +194,7 @@ fn chat_end_to_end_with_the_hook_stored_answer_in_cloud() {
         .unwrap();
     let v = one_object(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{v}");
-    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q));
+    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q), None);
     assert_eq!(chat_comments(&fake), vec![body]);
 }
 
@@ -714,7 +714,7 @@ fn setup_comment_only(ci: Option<&str>) -> FakeGithub {
     fake.issue(7, "task", &[], "task\n<!-- bosun:task {} -->");
     fake.comment(7, &lease_note("session_w", LIVE, "src/**"));
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     if let Some(c) = ci {
         fake.content(".bosun/bosun.toml", "base0000", c);
         fake.content(".bosun/bosun.toml", "refs/heads/main", c);
