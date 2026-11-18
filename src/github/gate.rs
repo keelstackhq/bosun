@@ -370,7 +370,28 @@ fn as_status(r: CheckRun) -> Status {
 
 #[cfg(test)]
 mod tests {
-    use super::forbidden;
+    use super::*;
+    use crate::core::records::Record;
+    use crate::core::verdict::bot_verdict_json;
+
+    #[test]
+    fn a_defused_verdict_record_is_no_bot_verdict() {
+        // bosun's own record comment (App token, a Bot) has "head_sha" but no ```json fence,
+        // so verdict.yml never runs on it and `apply` finds no verdict in it.
+        let line = Record::Verdict {
+            session: "bot:claude[bot]".into(),
+            head_sha: "sha42".into(),
+            approved: true,
+            confidence: Some(0.9),
+            major: Some(0),
+            model: None,
+        }
+        .to_line();
+        let body = defuse(&format!("bosun verdict for sha42\n\n{line}"));
+        assert!(body.contains("\"head_sha\""), "{body}");
+        assert!(!body.contains("```json"), "{body}");
+        assert_eq!(bot_verdict_json(&body), None);
+    }
 
     #[test]
     fn only_a_permission_403_falls_back() {
