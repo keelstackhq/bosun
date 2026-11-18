@@ -29,7 +29,10 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
     let child = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
-    if app.ctx.origin == Origin::Spawned || child || !is_orchestrator(&members, session) {
+    if app.ctx.origin == Origin::Spawned
+        || child
+        || !is_orchestrator(&members, session, app.ctx.now)
+    {
         return Err(BosunError::needs_human(
             format!(
                 "session {session} is not an orchestrator in the registry; only an orchestrator merges (spec D13)"

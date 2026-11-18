@@ -1409,13 +1409,8 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
     items.push(plugins_item(root, script.as_deref()));
 
     // Step 14: the CI-minute rules (docs/ci-minutes.md), the same check as `bosun gate ci-minutes`.
-    let (_, minutes) = if crate::config::Config::load(root)
-        .is_ok_and(|c| c.ci_provider() == crate::config::CiProvider::None)
-    {
-        (Vec::new(), Vec::new())
-    } else {
-        crate::cli::ci_minutes::scan(root)
-    };
+    // Workflow files are scanned whatever the provider says; with none there is nothing to scan.
+    let (_, minutes) = crate::cli::ci_minutes::scan(root);
     items.push(item(
         14,
         "CI minutes",

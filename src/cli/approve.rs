@@ -314,7 +314,7 @@ fn exec(
         // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
         let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
             .into_iter()
-            .partition(|r| answers::held(&ctx.dir, r.pr, &r.head_sha));
+            .partition(|r| answers::held(&ctx.dir, &ctx.repo.to_string(), r.pr, &r.head_sha));
         b.ready = ready;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
@@ -453,7 +453,28 @@ fn ask_next(ctx: &Ctx, ready: &[Ready], mut data: Value) -> Outcome {
     for (i, item) in items.iter().enumerate() {
         data["ready"][i]["ask"] = ask::ask(&repo, item, unix);
     }
+    // A spawned or routine session does not ask the owner: it hands the question up.
+    if matches!(ctx.origin, Origin::Spawned | Origin::Routine) {
+        data["handoff"] = json!(
+            "hand this question to the orchestrator: send data.ready[].ask (question id, text, options) to the orchestrator session, which asks the owner; a child session never asks"
+        );
+        return Outcome::data(data);
+    }
     let out = if ctx.origin == Origin::Slack {
+        // The asks this post issues are remembered: `--chat --slack-user` needs one of them.
+        let asks: Vec<(String, u64, String)> = (items.iter())
+            .map(|i| {
+                (
+                    crate::core::approve::question_id(i.pr, i.head, unix),
+                    i.pr,
+                    i.head.to_string(),
+                )
+            })
+            .collect();
+        if !asks.is_empty() {
+            let now = ctx.now.to_string();
+            answers::record_asks(&ctx.dir, &repo, &ctx.session, &now, &asks);
+        }
         ask::slack_text(&repo, &items, unix).map(|text| {
             let mut a = json!({"text": text});
             let channel = ctx.config.slack.as_ref().map(|s| s.channel.trim());
