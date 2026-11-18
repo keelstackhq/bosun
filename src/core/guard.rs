@@ -435,19 +435,18 @@ pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
     prereqs_lock_for(tool, input, false)
 }
 
-/// Answers-lock (spec 14): refuses an edit tool on `<git common dir>/bosun/answers.json`, and a
-/// Bash command that names it (path normalised, any case, also inside `bash -c`) or names a bare
-/// `answers.json` beside a `.git/.../bosun` directory, unless it only reads (see
-/// [`answers_read_only`]): redirects, `cp`, `mv`, `install`, `tar`, `rsync`, `ln` all count as
-/// writes. A hint, not a seal: it stops confused workers, not liars (a path built in a variable
-/// or `$(...)` is not covered). The PostToolUse hook checks the transcript, so a forged hook
-/// input stores nothing; the strong path is the signed record (`chat_signed`).
+/// Answers-lock (spec 14): refuses an edit tool on `<git common dir>/bosun/answers.json`, and any
+/// Bash command whose text names `answers.json` or the state dir `.git/bosun` (any case, path
+/// normalised, also inside `bash -c`, `python -c`, a `cd` chain or a `$d` path), unless it is
+/// purely read-only ([`answers_read_only`]). A hint, not a seal: it stops confused workers,
+/// not liars (quoting can hide a name). The PostToolUse hook checks the transcript; the strong
+/// path is the signed record (`chat_signed`).
 pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
     let hit = match tool {
-        "Bash" => answers_in_command(
-            input.get("command").and_then(Value::as_str).unwrap_or(""),
-            0,
-        ),
+        "Bash" => {
+            let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
+            names_answers(cmd) && !answers_read_only(cmd)
+        }
         _ => edited_path(tool, input).is_some_and(|p| is_answers_path(&p)),
     };
     hit.then(|| {
@@ -458,19 +457,27 @@ pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
     })
 }
 
-/// Only read-only viewers (`cat`, `jq`, `less`, `head`, `tail`, `grep`, `rg`, `ls`, `wc`, `stat`, `cd`), no redirect that writes,
-/// no `$(...)` or backticks: naming `answers.json` there reads it.
+/// Only read-only viewers (`cat`, `jq`, `less`, `head`, `tail`, `grep`, `rg`, `ls`, `wc`, `stat`,
+/// `test`, `[`, `cd`, `python3 -m json.tool`), no write redirect (`2>/dev/null`, `>&2` are not
+/// writes), no `$(...)` or backticks.
 fn answers_read_only(command: &str) -> bool {
-    if command.contains(['`', '>']) || command.contains("$(") {
+    let mut text = command.to_string();
+    for ok in ["2>/dev/null", ">/dev/null", "2>&1", "1>&2", ">&2"] {
+        text = text.replace(ok, " ");
+    }
+    if text.contains(['`', '>']) || text.contains("$(") {
         return false;
     }
-    rough_segments(command).iter().all(|seg| {
+    rough_segments(&text).iter().all(|seg| {
         let words = shell_words(seg);
-        let first = words.iter().find(|w| *w != SEP && !w.contains('='));
-        // An empty segment is the second `&` of `&&`.
-        first.is_none_or(|w| {
-            matches!(
-                w.rsplit('/').next().unwrap_or(w),
+        let mut it = words.iter().filter(|w| *w != SEP && !w.contains('='));
+        let Some(first) = it.next() else { return true };
+        match first.rsplit('/').next().unwrap_or(first) {
+            "python3" | "python" => {
+                it.next().is_some_and(|w| w == "-m") && it.next().is_some_and(|w| w == "json.tool")
+            }
+            c => matches!(
+                c,
                 "cat"
                     | "jq"
                     | "less"
@@ -481,9 +488,11 @@ fn answers_read_only(command: &str) -> bool {
                     | "ls"
                     | "wc"
                     | "stat"
+                    | "test"
+                    | "["
                     | "cd"
-            )
-        })
+            ),
+        }
     })
 }
 
@@ -494,30 +503,18 @@ fn is_answers_path(path: &str) -> bool {
     parts.next() == Some("answers.json") && parts.next() == Some("bosun")
 }
 
-fn answers_in_command(command: &str, depth: usize) -> bool {
-    // A redirect or `--opt=` glued to a path: try the word, its tail after `=`, and without `<>`.
-    let words = shell_words(command);
-    let cands = |w: &str| -> Vec<String> {
-        let bare = w.trim_start_matches(['<', '>', '&']);
-        let tail = bare.rsplit('=').next().unwrap_or(bare);
-        vec![w.to_string(), bare.to_string(), tail.to_string()]
-    };
-    let direct = words
-        .iter()
-        .any(|w| cands(w).iter().any(|c| is_answers_path(c)));
-    let bare = words.iter().any(|w| {
-        cands(w)
+/// Whether the command text names `answers.json` or the state dir `.git/bosun`.
+fn names_answers(command: &str) -> bool {
+    let mut t = command.to_lowercase().replace('\\', "/");
+    while t.contains("//") || t.contains("/./") {
+        t = t.replace("//", "/").replace("/./", "/");
+    }
+    let state = |s: &str| s.contains(".git/bosun");
+    t.contains("answers.json")
+        || state(&t)
+        || shell_words(&t)
             .iter()
-            .any(|c| lexical(c).eq_ignore_ascii_case("answers.json"))
-    }) && words.iter().any(|w| {
-        let n = lexical(w.trim_end_matches('/')).to_lowercase();
-        n.rsplit('/').next() == Some("bosun") && n.split('/').any(|p| p == ".git")
-    });
-    ((direct || bare) && !answers_read_only(command))
-        || (depth < 3
-            && word_scripts(command)
-                .iter()
-                .any(|s| answers_in_command(s, depth + 1)))
+            .any(|w| state(&lexical(w.trim_start_matches(['<', '>', '&']))))
 }
 
 /// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
@@ -7168,18 +7165,29 @@ mod tests {
             "cat x > .git/bosun/answers.json",
             "echo x >.git/bosun/answers.json",
             "cp f .git/bosun/answers.json",
-            "mv f .git/bosun/answers.json",
-            "install f .git/bosun/answers.json",
-            "tar -xf a.tar -C .git/bosun answers.json",
-            "rsync f .git/bosun/answers.json",
-            "ln -s f .git/bosun/answers.json",
-            "ln -sf /tmp/x .git/bosun/ANSWERS.JSON",
+            "mv f .git/bosun/ANSWERS.JSON",
             "cp f .git/Bosun/Answers.Json",
-            "echo x > .git/bosun//answers.json",
             "echo x > ./.git/bosun/x/../answers.json",
-            "tee --output=.git/bosun/answers.json",
-            "cd .git/bosun && echo x > answers.json",
+            "install f .git/bosun/answers.json",
+            "cp -t .git/bosun f",
+            "cp --target-directory=.git/bosun f",
+            "mv -t .git/./bosun/ f",
+            "install -t .git//bosun f",
+            "tar -xf a.tar -C .git/bosun",
+            "rsync f .git/bosun/",
+            "cd .git/bosun && cp x answers.json",
+            "cd .git/bosun; echo x > answers.json",
+            "ln -s f .git/bosun/answers.json",
+            "ln -sf /tmp/x answers.json",
+            "python3 -c \"open('answers.json','w').write('x')\"",
+            "node -e \"require('fs').writeFileSync('answers.json','x')\"",
+            "perl -e 'open F,\">answers.json\"'",
+            "d=.git/bosun; cp x $d/answers.json",
+            "d=.git/bosun/answers.json; echo x > $d",
             "bash -c 'cp f .git/bosun/answers.json'",
+            "cat f | tee .git/bosun/answers.json",
+            "cat .git/bosun/answers.json > .git/bosun/answers.json",
+            "cat .git/bosun/answers.json; rm .git/bosun/answers.json",
         ] {
             assert!(bash(w), "{w}");
         }
@@ -7192,45 +7200,40 @@ mod tests {
     #[test]
     fn answers_lock_leaves_innocent_commands_alone() {
         let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
-        assert!(!bash("grep x /home/user/bosun"));
-        assert!(!bash("cd /home/user/bosun && cargo test"));
-        assert!(!bash("cat answers.json"));
-        assert!(!bash("bosun hook pre-tool-use"));
         for c in [
+            "grep x /home/user/bosun",
+            "cd /home/user/bosun && cargo test",
+            "bosun hook pre-tool-use",
             "grep -rn 'hook post-tool-use' docs",
-            "rg post-tool-use src",
             "git commit -m 'guard the hook post-tool-use path'",
             "gh pr create --title 'hook post-tool-use' --body x",
             "cat docs/spec/14-prereqs.md",
-            "ls src/hooks",
-            "wc -l src/hooks/post_tool_use.rs",
-            "stat .git/bosun/answers.json",
             "bosun hook post-tool-use < /dev/null",
+            "echo hook",
         ] {
             assert!(!bash(c), "{c}");
         }
-        assert!(!bash("ls /home/user/bosun/src/answers.json.bak"));
-        assert!(!bash("echo hook"));
-        assert!(!bash("bosun hook pre-tool-use && echo post-tool"));
     }
 
     #[test]
     fn answers_lock_allows_reading_the_file() {
         let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
-        assert!(!bash("cat .git/bosun/answers.json"));
-        assert!(!bash("jq . .git/bosun/answers.json"));
-        assert!(!bash("jq '.[]' /r/.git/bosun/answers.json | head -5"));
-        assert!(!bash("less .git/bosun/answers.json"));
-        assert!(!bash("head -c 200 .git/bosun/answers.json"));
-        assert!(!bash("cd .git/bosun && cat answers.json"));
-        // Writing, or anything beyond the read-only viewers, stays refused.
-        assert!(bash("cat x > .git/bosun/answers.json"));
-        assert!(bash(
-            "cat .git/bosun/answers.json > .git/bosun/answers.json"
-        ));
-        assert!(bash("jq . x | tee .git/bosun/answers.json"));
-        assert!(bash(
-            "cat .git/bosun/answers.json; rm .git/bosun/answers.json"
-        ));
+        for c in [
+            "cat .git/bosun/answers.json",
+            "cat .git/bosun/answers.json 2>/dev/null",
+            "cat answers.json >&2",
+            "test -f .git/bosun/answers.json",
+            "[ -f .git/bosun/answers.json ] && ls",
+            "python3 -m json.tool .git/bosun/answers.json",
+            "jq . .git/bosun/answers.json",
+            "jq '.[]' /r/.git/bosun/answers.json | head -5",
+            "less .git/bosun/answers.json",
+            "head -c 200 .git/bosun/answers.json",
+            "ls -l .git/bosun",
+            "stat .git/bosun/answers.json",
+            "cd .git/bosun && cat answers.json",
+        ] {
+            assert!(!bash(c), "{c}");
+        }
     }
 }
