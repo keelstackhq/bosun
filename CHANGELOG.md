@@ -4,6 +4,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `bosun pr --auto-merge` on an already clean PR hands it to the parent as `ready_to_merge` (`next`); `bosun metrics` gets `--max-prs`, stderr progress and a timeout (bad `BOSUN_METRICS_TIMEOUT_SECS` is exit 2); global `--full`; `bosun doctor` notes the notify fallback and the merge identity (step 18).
+- Push gates carry stamps over a docs-only diff (local pre-push only: *.md under docs/ or changelog.d/, not the spec or READMEs; CI still runs every gate); R-weaken ignores lone `dead_code` allows in test code and prints ASCII `->`; `bosun risk-check --local` judges `origin/main...HEAD` before a push.
+- One governance path list (`GOVERNANCE_PATHS`, R-gov's) for `bosun pr --pr N` and risk-check; `[approvals] oneoff_allow` lets task-less PRs and `--one-off` reach more paths (risk-check still asks the owner); `bosun owners set` opens an owner PR for `governance/owners.toml` with team entries; `migrate` fills the intake template's owner and visibility from the repo.
+- Review flow: an owner's own approval of the exact head clears an approvable escalated `review-verdict`; `verdict apply` refuses non-writer authors neutrally and accepts `[approvals] verdict_bots` (default branch only, `[bot]` logins of type Bot, PRs into the default branch, reviewer marker, current head) as `bot:<login>` verdicts that set `review-verdict` only and never count toward an approval; autonomous request-changes opens or updates a `bosun:fix-task` issue; `review-pack` adds `draft`, `required_checks` and `gate_stamps`; the reviewer saves its verdict JSON to the scratchpad.
+- `bosun rules --write` renders the session rules into a marked block of CLAUDE.md/AGENTS.md (hooks do not load in Claude in Slack), with an npx fallback line; `doctor` warns there when it is missing; CI runs ci-minutes with the release a pin PR moves to.
+- `bosun result --session-json` records spend; cloud sessions skip collaborator lookups; GET retried once on reset; any 403 on /graphql returns the MCP call in `next`; `migrate` HTTP budget 600 s.
+
 ## 0.19.0 (2026-11-17)
 
 - Merge-lock: refuse `remote.<r>.fetch` into the default branch or a tag set by `GIT_CONFIG_*` exported in an earlier segment or by `git config` (`--add`, `--replace-all`, `set`), and fetches into the default branch whose remote is a path with `:` (`./ev:il`) or any name but `origin`/`upstream` (`git fetch evil2 +main:main`); allow long brace sequences in read-only git subcommands (`git log -n {1..100}`).

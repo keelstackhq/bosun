@@ -1,1 +1,0 @@
-- 2026-11-17 · C6 bosun rules --write + doctor step 18, G1 ci-minutes with the head pin · src/cli/rules.rs, src/hooks/session_rules.rs, src/cli/doctor.rs, .github/workflows/ci.yml, docs/spec/04-lifecycle.md, docs/spec/07-gates.md · gated PR

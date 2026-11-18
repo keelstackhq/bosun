@@ -1,1 +1,0 @@
-- 2026-11-17 · G7 one governance path list · M5 `[approvals] oneoff_allow` · G10 `bosun owners set` (team entries) and migrate intake seed · gated PR

@@ -1,1 +1,0 @@
-- 2026-11-17 · Release 0.19.0 · version bump, fold, CHANGELOG (guard fetch/pull allowlist #603 #607 #608, R-secrets single-quoted $ literals #604, spec wrap #609) · release PR

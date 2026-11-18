@@ -471,3 +471,11 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-16 · Merge-lock: expansions and git-core programs in git option values · PR
 - 2026-11-16 · R-secrets: single-quoted `'$...'` arrow literals now match · FP corpus (8.01M lines, outside this repo) 1361 flags on main, 1361 after · PR
 - 2026-11-16 · Release 0.18.0 · version bump, fold, CHANGELOG (hoist 0.5.1 in release.yml #598, guard heredoc prose #599, R-secrets gaps #600, guard ref gaps #601) · release PR
+- 2026-11-17 · Pin bosun 0.19.0 · .bosun/version, docs/setup-script.sh version and sha512 pins · pin PR
+- 2026-11-17 · Release 0.19.0 · version bump, fold, CHANGELOG (guard fetch/pull allowlist #603 #607 #608, R-secrets single-quoted $ literals #604, spec wrap #609) · release PR
+- 2026-11-17 · Feat · agent ergonomics: clean-PR hand-over, metrics limits, global --full, doctor notify fallback and merge identity · feat/agent-ergonomics
+- 2026-11-17 · G3 docs-only stamp carry-over, G6 R-weaken test-code dead_code exemption, ASCII arrow, risk-check --local · src/cli/stamps.rs, src/core/weaken.rs, src/cli/risk_local.rs, docs/spec/07-gates.md, docs/spec/08-risk.md · gated PR
+- 2026-11-17 · G7 one governance path list · M5 `[approvals] oneoff_allow` · G10 `bosun owners set` (team entries) and migrate intake seed · gated PR
+- 2026-11-17 · review flow M7 M8 M10 M14 C11 · owner clears escalation, verdict bots, fix tasks, pack checks and stamps · review-flow PR
+- 2026-11-17 · C6 bosun rules --write + doctor step 18, G1 ci-minutes with the head pin · src/cli/rules.rs, src/hooks/session_rules.rs, src/cli/doctor.rs, .github/workflows/ci.yml, docs/spec/04-lifecycle.md, docs/spec/07-gates.md · gated PR
+- 2026-11-17 · Cloud proxy · result --session-json spend, cloud skips collaborator reads, GET reset retry, migrate budget 600 s, any /graphql 403 hands back the MCP call · PR (fix/cloud-proxy)
