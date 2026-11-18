@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use super::{IntakeCheckArgs, IntakeSignArgs, IntakeVerifyArgs};
 use crate::app::{App, default_ref};
 use crate::cli::approve::read_key;
-use crate::cli::risk_check::{OWNERS_PATH, chat_enabled, fallback_owners, owner_logins};
+use crate::cli::risk_check::{
+    OWNERS_PATH, chat_enabled, chat_sig_valid, enrolled_keys, fallback_owners, owner_logins,
+};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, is_orchestrator, parse_approvers, parse_intake_chat_record,
-    verify_ed25519,
+    signed_message_chat_intake, verify_ed25519,
 };
 use crate::core::intake::{INTAKE_PATH, Intake, SigFile, intake_sha256, parse};
 use crate::github::b64;
@@ -314,6 +316,14 @@ fn verify_chat(
     let fix = "ask the orchestrator to record the owner's chat yes on the intake issue again, or sign the intake (`bosun intake sign`) and pass --sig";
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
+    let repo = &app.ctx.repo;
+    if repo_of(intake) != format!("{}/{}", repo.owner, repo.name).to_ascii_lowercase() {
+        return Err(refuse(
+            "repo_mismatch",
+            "the intake names another repo than this one",
+            "run it in the repo the intake is for",
+        ));
+    }
     let main = default_ref(gh)?;
     if !chat_enabled(gh, &main)? {
         return Err(refuse(
@@ -345,6 +355,11 @@ fn verify_chat(
             .ok_or_else(|| refuse("no_chat_record", "the intake issue does not exist", fix))?;
         owners = fallback_owners(gh, &author)?;
     }
+    // Fail closed: only a record signed by an enrolled owner key counts, whatever `chat_signed` says.
+    let keys = enrolled_keys(gh).unwrap_or_else(|why| {
+        eprintln!("bosun: intake verify: no key counts: {why}");
+        Vec::new()
+    });
     let members = crate::registry::load(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
@@ -366,6 +381,16 @@ fn verify_chat(
                 "chat_wrong_mode",
                 "it approves the other mode (new or adopt)",
             )
+        } else if !r.question.as_deref().is_some_and(|q| {
+            let m = signed_message_chat_intake((&repo.owner, &repo.name, issue), &sha, mode, q);
+            chat_sig_valid(&r, &keys, &m)
+        }) {
+            (
+                "chat_unsigned",
+                "carries no valid signature of an enrolled owner key over its question",
+            )
+        } else if held(&comments, &owners, c.id) {
+            ("chat_held", "was held or declined by an owner after it")
         } else if made.is_none_or(|t| t > now.plus_secs(MAX_SKEW_SECS)) {
             ("issued_in_future", "it was written in the future")
         } else if made.is_some_and(|t| now.0 - t.0 > MAX_EXPIRES_SECS as i64) {
@@ -382,4 +407,19 @@ fn verify_chat(
     }
     let (reason, text) = why.expect("one record at least");
     Err(refuse(reason, &format!("the chat record {text}"), fix))
+}
+
+/// Whether an owner commented after record `id` with a first line `/bosun hold` or `/bosun no`.
+fn held(comments: &[crate::github::Comment], owners: &[String], id: u64) -> bool {
+    comments.iter().any(|h| {
+        let first = h.body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let first = first.trim();
+        h.id > id
+            && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
+            && ["/bosun hold", "/bosun no"].iter().any(|w| {
+                first
+                    .strip_prefix(w)
+                    .is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
+            })
+    })
 }

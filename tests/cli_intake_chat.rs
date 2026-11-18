@@ -2,8 +2,11 @@
 //! the intake issue stands in for the intake signature (spec §3, §8; plan 2026-11-10 T12).
 mod common;
 
+use bosun::core::approve::signed_message_chat_intake;
 use bosun::core::intake::intake_sha256;
+use bosun::github::b64;
 use common::fake::FakeGithub;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
 
 const NOW: &str = "2026-11-10T10:00:00Z";
@@ -14,7 +17,7 @@ const ISSUE: u64 = 7;
 const REG: u64 = 50;
 
 const OK: &str = r#"version = 1
-repo = { name = "app", owner = "keelstackhq", visibility = "private" }
+repo = { name = "widget", owner = "acme", visibility = "private" }
 stack = ["rust"]
 pieces = ["base", "rust-cli"]
 bosun_pieces = ["claude-md"]
@@ -29,10 +32,30 @@ fn sha() -> String {
     intake_sha256(OK.as_bytes())
 }
 
-fn record_mode(sha: &str, session: &str, mode: &str) -> String {
+const Q: &str = "7-abcdef0-1";
+
+fn key(seed: u8) -> Ed25519KeyPair {
+    Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap()
+}
+
+fn unsigned_mode(sha: &str, session: &str, mode: &str) -> String {
     format!(
-        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} intake={sha} mode={mode} question=7-abcdef0-1 -->"
+        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} intake={sha} mode={mode} question={Q} -->"
     )
+}
+
+/// A record signed by key `seed` under the id `k1` (the key enrolled by `setup` is seed 1).
+fn signed_by(seed: u8, sha: &str, session: &str, mode: &str) -> String {
+    let msg = signed_message_chat_intake(("acme", "widget", ISSUE), sha, mode, Q);
+    let sig = b64::encode(key(seed).sign(msg.as_bytes()).as_ref());
+    format!(
+        "{}\n<!-- bosun:chat-sig v1 key=k1 sig={sig} -->",
+        unsigned_mode(sha, session, mode)
+    )
+}
+
+fn record_mode(sha: &str, session: &str, mode: &str) -> String {
+    signed_by(1, sha, session, mode)
 }
 
 fn record(sha: &str, session: &str) -> String {
@@ -56,6 +79,9 @@ fn setup(owners: bool) -> FakeGithub {
     if owners {
         fake.content("governance/owners.toml", MAIN, OWNERS);
     }
+    let public = b64::encode(key(1).public_key().as_ref());
+    let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{public}\"\n");
+    fake.content(".bosun/approvers.toml", MAIN, &keys);
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
     join(&fake, "session_orch", "local", None, 1);
     join(&fake, "session_kid", "spawned", Some("session_orch"), 2);
@@ -102,13 +128,13 @@ fn chat_record_verifies_the_intake() {
     assert_eq!(d["via"], "chat");
     assert_eq!(d["approved_by"], "ada");
     assert_eq!(d["session"], "session_orch");
-    assert_eq!(d["repo"], "keelstackhq/app");
+    assert_eq!(d["repo"], "acme/widget");
     assert_eq!(d["issue"], ISSUE);
     assert_eq!(d["intake_sha256"], sha());
     assert_eq!(d["mode"], "new");
     assert_eq!(d["expires"], "2026-11-10T10:30:00Z");
     assert!(d["nonce"].as_str().unwrap().starts_with("chat-"), "{v}");
-    assert_eq!(d["intake"]["repo"]["name"], "app");
+    assert_eq!(d["intake"]["repo"]["name"], "widget");
 }
 
 #[test]
@@ -368,4 +394,90 @@ fn missing_registry_issue_is_not_an_orchestrator() {
     fake.content("governance/owners.toml", MAIN, OWNERS);
     post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
     refused(&fake, "chat_not_orchestrator");
+}
+
+#[test]
+fn only_a_valid_enrolled_signature_counts() {
+    let sha = sha();
+    // Unsigned, signed by an unenrolled key, signed for another mode or sha: none counts.
+    for body in [
+        unsigned_mode(&sha, "session_orch", "new"),
+        signed_by(2, &sha, "session_orch", "new"),
+        signed_by(1, &sha, "session_orch", "new").replace("sig=", "sig=AA"),
+        signed_by(1, &sha, "session_orch", "adopt").replace("adopt", "new"),
+        signed_by(1, &"ab".repeat(32), "session_orch", "new").replace(&"ab".repeat(32), &sha),
+    ] {
+        let fake = setup(true);
+        post(&fake, "ada", &body, NOW);
+        refused(&fake, "chat_unsigned");
+    }
+    // No approvers file at all: fail closed.
+    let fake = setup(true);
+    fake.content(".bosun/approvers.toml", MAIN, "");
+    post(&fake, "ada", &record(&sha, "session_orch"), NOW);
+    refused(&fake, "chat_unsigned");
+    // `chat_signed = false` does not loosen it.
+    let fake = setup(true);
+    fake.content(
+        ".bosun/bosun.toml",
+        MAIN,
+        "[approvals]\nchat_signed = false\n",
+    );
+    post(
+        &fake,
+        "ada",
+        &unsigned_mode(&sha, "session_orch", "new"),
+        NOW,
+    );
+    refused(&fake, "chat_unsigned");
+}
+
+#[test]
+fn an_intake_for_another_repo_refused() {
+    let other = OK.replace("widget", "other");
+    let fake = setup(true);
+    post(
+        &fake,
+        "ada",
+        &record(&intake_sha256(other.as_bytes()), "session_orch"),
+        NOW,
+    );
+    let (code, v) = verify(&fake, &other, &[]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["reason"], "repo_mismatch", "{v}");
+}
+
+#[test]
+fn a_later_owner_hold_revokes_and_a_later_record_restores() {
+    let fake = setup(true);
+    post(
+        &fake,
+        "ada",
+        &record(&sha(), "session_orch"),
+        "2026-11-10T09:30:00Z",
+    );
+    // A non-owner's hold changes nothing.
+    post(&fake, "bob", "/bosun hold", "2026-11-10T09:31:00Z");
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
+    post(&fake, "ada", "/bosun hold\nnot yet", "2026-11-10T09:32:00Z");
+    refused(&fake, "chat_held");
+    post(
+        &fake,
+        "ada",
+        &record(&sha(), "session_orch"),
+        "2026-11-10T09:33:00Z",
+    );
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
+    post(&fake, "ada", "/bosun no", "2026-11-10T09:34:00Z");
+    refused(&fake, "chat_held");
+    // Other words that merely start alike are not a hold.
+    let fake = setup(true);
+    post(
+        &fake,
+        "ada",
+        &record(&sha(), "session_orch"),
+        "2026-11-10T09:30:00Z",
+    );
+    post(&fake, "ada", "/bosun nothing", "2026-11-10T09:31:00Z");
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
 }

@@ -1690,10 +1690,21 @@ fn chat_signature_ok(
     keys: &[ApproverKey],
     (pr, head): (u64, &str),
 ) -> bool {
-    let (Some(q), Some((id, sig))) = (&r.question, &r.sig) else {
+    let Some(q) = &r.question else {
         return false;
     };
-    let msg = approve::signed_message_chat(&repo.owner, &repo.name, pr, head, q);
+    chat_sig_valid(
+        r,
+        keys,
+        &approve::signed_message_chat(&repo.owner, &repo.name, pr, head, q),
+    )
+}
+
+/// Whether the record's `chat-sig` line is a valid signature of an enrolled owner key over `msg`.
+pub(crate) fn chat_sig_valid(r: &approve::ChatRecord, keys: &[ApproverKey], msg: &str) -> bool {
+    let Some((id, sig)) = &r.sig else {
+        return false;
+    };
     keys.iter()
         .find(|k| k.id == *id && k.role == Role::Owner)
         .and_then(|k| b64::decode(&k.ed25519).zip(b64::decode(sig)))

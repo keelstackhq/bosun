@@ -576,6 +576,18 @@ pub fn signed_message_chat(owner: &str, repo: &str, pr: u64, head: &str, questio
     format!("bosun-chat v1 {o}/{r}#{pr} {head} {question}")
 }
 
+/// The bytes an enrolled owner key signs for an intake chat record: its own prefix, bound to
+/// the repo, the intake issue, the intake bytes' sha256, the mode and the question id.
+pub fn signed_message_chat_intake(
+    (owner, repo, issue): (&str, &str, u64),
+    sha: &str,
+    mode: &str,
+    question: &str,
+) -> String {
+    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    format!("bosun-chat-intake v1 {o}/{r}#{issue} {sha} {mode} {question}")
+}
+
 /// A chat approval record: the orchestrator wrote down the owner's chat yes for `head`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatRecord {
@@ -650,12 +662,16 @@ pub fn intake_chat_comment(
     session: &str,
     at: &str,
     question: Option<&str>,
+    sig: Option<(&str, &str)>,
 ) -> String {
     let q = question
         .map(|q| format!(" question={q}"))
         .unwrap_or_default();
+    let sig = sig.map_or(String::new(), |(key, sig)| {
+        format!("\n<!-- {CHAT_SIG_MARKER} v1 key={key} sig={sig} -->")
+    });
     format!(
-        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} intake={sha} mode={mode}{q} -->"
+        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} intake={sha} mode={mode}{q} -->{sig}"
     )
 }
 
@@ -839,6 +855,7 @@ mod tests {
             "session_o",
             "2026-11-10T10:00:00Z",
             Some("q"),
+            Some(("k1", "c2ln")),
         );
         let r = parse_intake_chat_record(&body, &sha).unwrap();
         assert_eq!(
@@ -847,6 +864,9 @@ mod tests {
         );
         assert_eq!(r.question.as_deref(), Some("q"));
         assert_eq!(r.mode.as_deref(), Some("adopt"));
+        assert_eq!(r.sig, Some(("k1".into(), "c2ln".into())));
+        let m = signed_message_chat_intake(("Ab", "Cd", 7), &sha, "new", "q");
+        assert_eq!(m, format!("bosun-chat-intake v1 ab/cd#7 {sha} new q"));
         assert!(parse_intake_chat_record(&body, &"cd".repeat(32)).is_none());
         // The mode in the first line and in the marker must agree, and be new or adopt.
         let split = body.replace("mode=adopt", "mode=new");
