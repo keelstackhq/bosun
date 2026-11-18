@@ -183,6 +183,23 @@ pub fn tool_rules(
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
         return bash_rules(command, branch_at, default_branch);
     }
+    // Any other MCP server's write tool is refused when it carries the chat form too: only
+    // read-only verbs (`get_`, `list_`, `search_`, ...) are skipped.
+    if let Some(rest) = tool.strip_prefix("mcp__")
+        && !tool.starts_with("mcp__github__")
+    {
+        let name = rest.rsplit("__").next().unwrap_or(rest);
+        let read_only = [
+            "get_", "list_", "search_", "read_", "find_", "query_", "fetch_",
+        ]
+        .iter()
+        .any(|v| name.starts_with(v));
+        if !read_only && strings(input).iter().any(|t| carries_chat_form(t)) {
+            return Some(format!(
+                "`{tool}` writes a chat approval record: {CHAT_FIX}"
+            ));
+        }
+    }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
             return Some(format!("`{tool}` is refused: {MERGE_FIX}"));
@@ -524,6 +541,12 @@ fn chat_rule(command: &str) -> Option<String> {
     (!reads).then(|| format!("the command writes a chat approval record: {CHAT_FIX}"))
 }
 
+/// [`chat_rule`] for the text of a script file: a script is never "read-only throughout", so
+/// any script carrying the form is refused.
+pub(super) fn chat_rule_script(code: &str) -> Option<String> {
+    carries_chat_form(code).then(|| format!("it writes a chat approval record: {CHAT_FIX}"))
+}
+
 /// The command with quotes and backslashes removed (`bos''un`, `bo\\sun` read as `bosun`) and
 /// split into words at whitespace and shell separators.
 fn dequoted_words(command: &str) -> Vec<String> {
@@ -556,6 +579,27 @@ pub fn chat_identity_override(command: &str) -> bool {
             let name = w.split('=').next().unwrap_or("");
             w.contains('=') && (name.starts_with("BOSUN_") || name.starts_with("CLAUDE_CODE_"))
         })
+}
+
+/// Whether a command drops or overrides the child-session flag next to a `bosun` word: an
+/// unset of it, a cleared environment, or an assignment to it. Best effort (lexical, like the
+/// rest of the chat-lock): refused for everyone, since no honest command needs to hide that it
+/// runs as a child.
+pub fn child_flag_tamper(command: &str) -> bool {
+    let words = dequoted_words(command);
+    if !words.iter().any(|w| base(w) == "bosun") {
+        return false;
+    }
+    let flag = |w: &String| w.contains("CLAUDE_CODE_CHILD_SESSION");
+    let unsets = words
+        .iter()
+        .any(|w| matches!(w.as_str(), "unset" | "-u") || w.starts_with("--unset"))
+        && words.iter().any(flag);
+    let clears = words
+        .iter()
+        .any(|w| matches!(w.as_str(), "-i" | "--ignore-environment" | "-"))
+        && words.iter().any(|w| base(w) == "env");
+    unsets || clears || words.iter().any(|w| flag(w) && w.contains('='))
 }
 
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
@@ -7174,7 +7218,12 @@ mod tests {
     const H: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn chat_body() -> String {
-        crate::core::approve::chat_comment(H, "session_x", "2026-11-10T00:00:00Z", Some("q"))
+        crate::core::approve::chat_comment(
+            H,
+            "session_x",
+            "2026-11-10T00:00:00Z",
+            Some("1-0123456-1"),
+        )
     }
 
     fn mcp(tool: &str, input: Value) -> Option<String> {
@@ -7235,10 +7284,43 @@ mod tests {
     }
 
     #[test]
+    fn any_mcp_write_tool_with_the_form_is_denied() {
+        let body = chat_body();
+        let tool =
+            |t: &str| tool_rules(t, &json!({"body": body}), &|_| Some("feat".into()), "main");
+        assert!(tool("mcp__x__post").is_some());
+        assert!(tool("mcp__other_server__create_comment").is_some());
+        assert!(tool("mcp__x__get_thing").is_none());
+        assert!(tool("mcp__x__search_things").is_none());
+    }
+
+    #[test]
+    fn child_flag_tamper_is_caught() {
+        for c in [
+            "env -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@h --chat",
+            "unset CLAUDE_CODE_CHILD_SESSION; bosun approve 3@h --chat",
+            "env -i bosun approve 3@h --chat",
+            "CLAUDE_CODE_CHILD_SESSION=0 bosun status",
+            "env --unset=CLAUDE_CODE_CHILD_SESSION /usr/bin/bosun status",
+            "env -u 'CLAUDE_CODE_CHILD_SESSION' bos''un status",
+        ] {
+            assert!(child_flag_tamper(c), "{c}");
+        }
+        for c in [
+            "bosun status",
+            "env FOO=1 bosun status",
+            "unset FOO",
+            "env -i ls",
+        ] {
+            assert!(!child_flag_tamper(c), "{c}");
+        }
+    }
+
+    #[test]
     fn guard_denies_every_record_the_counter_counts() {
         use crate::core::approve::parse_chat_record;
         let body = chat_body();
-        assert!(parse_chat_record(&body, H).is_some());
+        assert!(parse_chat_record(&body, H, None).is_some());
         assert!(carries_chat_form(&body));
         // Each line on its own carries the form: a record cannot be split past the guard.
         assert!(
