@@ -256,7 +256,13 @@ pub fn bot_verdict_json(body: &str) -> Option<&str> {
     let mut pos = 0;
     for line in body.split_inclusive('\n') {
         let t = line.trim();
-        let ch = t.chars().next().filter(|c| matches!(c, '`' | '~'));
+        // A line indented 4+ columns is an indented code line, never a fence (CommonMark).
+        let lead = &line[..line.len() - line.trim_start().len()];
+        let indent: usize = lead.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+        let ch = (indent < 4)
+            .then(|| t.chars().next())
+            .flatten()
+            .filter(|c| matches!(c, '`' | '~'));
         let run = ch.map_or(0, |c| t.len() - t.trim_start_matches(c).len());
         let info = t[run..].trim();
         match (open, ch) {
@@ -422,6 +428,11 @@ mod tests {
         }
         // an example in an outer fence does not hide the real top-level verdict
         let body = format!("````md\n```json\n{ok}\n```\n````\n\n```json\n{ok}\n```\n");
+        assert_eq!(bot_verdict_json(&body), Some(ok));
+        // a line indented 4+ spaces is code, not a fence (CommonMark)
+        let body = format!("    ```json\n{ok}\n    ```\n");
+        assert_eq!(bot_verdict_json(&body), None);
+        let body = format!("   ```json\n{ok}\n   ```\n");
         assert_eq!(bot_verdict_json(&body), Some(ok));
         // an unclosed fence is no block
         assert_eq!(bot_verdict_json(&format!("```json\n{ok}\n")), None);

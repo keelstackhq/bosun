@@ -162,8 +162,9 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   `head_sha` is the current head (each miss is a neutral refusal); a listed bot's comment needs no
   markers: without `<!-- bosun:verdict -->`, its verdict is the one top-level fenced ```json block that
   is a valid verdict (a json block inside another fence is ignored; two valid ones are "no single
-  verdict", a neutral refusal); its record names the session `bot:<login>`, whatever the marker says, and a
-  newer verdict comment of the same bot for the head replaces an older one whatever their markers;
+  verdict", a neutral refusal; a marker-less comment of a Bot account is judged so even with write
+  access); its record names the session `bot:<login>`, whatever the marker says, and a
+  newer verdict comment of the same bot for the head replaces an older one whatever their markers (another author's never does);
   a bot verdict sets `review-verdict` only: a `bot:` session never counts toward two verdicts, a
   delegate's clean verdict, the D-017 autonomous verdict or a carried verdict, since it may be the
   author's own session writing through the app; release ordering as for `review_models`) (`GET collaborators/{user}/permission`; when a proxy refuses that path, the token's own login

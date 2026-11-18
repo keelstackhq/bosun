@@ -338,3 +338,69 @@ fn a_newer_marker_less_comment_of_the_same_bot_replaces_an_older_one() {
         "{v}"
     );
 }
+
+#[test]
+fn another_authors_newer_comment_never_replaces_a_bot_verdict() {
+    let fake = setup(BOTS);
+    let id = plain(&fake, BOT, &bot_body("sha42"));
+    // a writer's newer marker comment without a reviewer session, for the same head
+    let other = comment(
+        &fake,
+        &verdict("sha42", "request-changes", &["major"]),
+        "alice",
+    );
+    fake.last_comment(|c| {
+        c.body = c
+            .body
+            .lines()
+            .filter(|l| !l.contains("session_r"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    assert!(
+        !fake
+            .comments_of(42)
+            .last()
+            .unwrap()
+            .body
+            .contains("session_r")
+    );
+    assert!(other > id);
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"].get("refused").is_none(), "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+}
+
+#[test]
+fn a_marker_less_verdict_of_a_bot_with_write_access_is_a_bot_verdict() {
+    let fake = setup(BOTS);
+    fake.permission(BOT, "write");
+    let id = plain(&fake, BOT, &bot_body("sha42"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"].get("refused").is_none(), "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+    let rec = fake.comments_of(42).last().unwrap().body.clone();
+    assert!(rec.contains(r#""session":"bot:claude[bot]""#), "{rec}");
+    // unlisted, or for an old head: neutral, not an error
+    let fake = setup("");
+    fake.permission(BOT, "write");
+    let id = plain(&fake, BOT, &bot_body("sha42"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["refused"].is_string(), "{v}");
+    assert!(fake.statuses_of("sha42").is_empty());
+    let fake = setup(BOTS);
+    fake.permission(BOT, "write");
+    let id = plain(&fake, BOT, &bot_body("sha41"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["refused"]
+            .as_str()
+            .unwrap()
+            .contains("not the head"),
+        "{v}"
+    );
+}

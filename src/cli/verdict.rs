@@ -146,14 +146,12 @@ fn apply(app: &App, id: u64) -> CmdResult {
     let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
     let writer = matches!(permission.as_str(), "admin" | "write");
     // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
+    // A marker-less comment of a Bot account is a bot verdict even with write access.
     let bot = c.user_type == "Bot";
-    let fallback = || {
-        (bot && !writer)
-            .then(|| bot_verdict_json(&c.body))
-            .flatten()
-    };
-    let text = comment_json(&c.body).or_else(fallback);
-    if !writer {
+    let marked = comment_json(&c.body);
+    let bot_verdict = !writer || (bot && marked.is_none());
+    let text = marked.or_else(|| bot.then(|| bot_verdict_json(&c.body)).flatten());
+    if bot_verdict {
         let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
         let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
         // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
@@ -195,19 +193,29 @@ fn apply(app: &App, id: u64) -> CmdResult {
     let session = comment_session(&c.body).unwrap_or("unknown");
     // A bot names any session it likes: all its verdicts are one session, so it is one vote.
     let bot_session = format!("{BOT_SESSION}{}", c.user);
-    let recorded = if writer {
-        session
-    } else {
+    let recorded = if bot_verdict {
         bot_session.as_str()
+    } else {
+        session
     };
-    // A bot's newer comment for the head replaces this one, whatever marker either carries.
-    let own = |o: &Comment| !writer && o.user.eq_ignore_ascii_case(&c.user);
-    let same = |o: &Comment| comment_session(&o.body).unwrap_or("unknown") == session || own(o);
+    // Only the same bot's newer comment for the head replaces a bot verdict, whatever marker
+    // either carries; another author's never does.
+    let same = |o: &Comment| {
+        if bot_verdict {
+            o.user.eq_ignore_ascii_case(&c.user)
+        } else {
+            comment_session(&o.body).unwrap_or("unknown") == session
+        }
+    };
     let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
         o.id > c.id
             && same(&o)
             && comment_json(&o.body)
-                .or_else(|| own(&o).then(|| bot_verdict_json(&o.body)).flatten())
+                .or_else(|| {
+                    (bot_verdict && bot)
+                        .then(|| bot_verdict_json(&o.body))
+                        .flatten()
+                })
                 .and_then(|t| Verdict::parse(t).ok())
                 .is_some_and(|v| v.head_sha == verdict.head_sha)
     });
