@@ -32,16 +32,15 @@ fn git_remote(dir: &Path, args: &[&str]) -> Option<String> {
         .args(args)
         .output()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    out.status.success().then_some(text)
 }
 
 /// True when bosun was never set up in the repo at `cwd`: no `.bosun/version` in the worktree AND
 /// none at the head of the remote's default branch. The remote itself is asked (`git ls-remote`,
-/// then the file at that sha, fetched into a private repo when it is not local): local refs and
-/// files can be edited, so none is trusted. Fail closed: a remote that cannot be reached counts
-/// as adopted. No `origin` remote plus a `.bosun/` directory counts as adopted too.
+/// then the file at that sha, fetched into a private repo if not local): local refs and files can
+/// be edited. Fail closed: an unreachable remote counts as adopted, and so does no `origin` with a
+/// `.bosun/` directory.
 pub fn unadopted(cwd: &Path) -> bool {
     let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
@@ -57,18 +56,19 @@ pub fn unadopted(cwd: &Path) -> bool {
     let Some(sha) = heads.split_whitespace().next() else {
         return true; // reachable, no default branch yet
     };
-    let (file, commit) = (format!("{sha}:.bosun/version"), format!("{sha}^{{commit}}"));
-    if git_remote(&root, &["cat-file", "-e", &file]).is_some() {
+    let file = format!("{sha}:.bosun/version");
+    let has = |dir: &Path| git_remote(dir, &["cat-file", "-e", &file]).is_some();
+    if has(&root) {
         return false;
     }
-    if git_remote(&root, &["cat-file", "-e", &commit]).is_some() {
+    if git_remote(&root, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_some() {
         return true;
     }
     let tmp = std::env::temp_dir().join(format!("bosun-adopted-{}", std::process::id()));
     let fetched = std::fs::create_dir_all(&tmp).is_ok()
         && git_remote(&tmp, &["init", "-q", "--bare"]).is_some()
         && git_remote(&tmp, &["fetch", "-q", "--depth=1", "--no-tags", &url, sha]).is_some();
-    let present = git_remote(&tmp, &["cat-file", "-e", &file]).is_some();
+    let present = has(&tmp);
     let _ = std::fs::remove_dir_all(&tmp);
     fetched && !present
 }
