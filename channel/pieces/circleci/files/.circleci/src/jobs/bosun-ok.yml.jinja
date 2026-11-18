@@ -75,7 +75,40 @@ environment:
           mkdir -p -- "$(dirname -- "$p")"
           git show "$BOSUN_BASE:$p" > "$p"
         done
-{% if "rust" in pieces %}  - run:
+{% if "ts-pnpm" in pieces %}        # As bosun.yml's step `ts-pnpm stack paths`: the pnpm steps follow these directories, never
+        # the render's ts_path alone, and nothing is created in the checkout.
+        # The ts-pnpm stacks of .bosun/bosun.toml (the base's here: the gates run in them).
+        paths=""; first=""; sect=""; p=""; prof=""
+        cfg=.bosun/bosun.toml; [ -f "$cfg" ] || cfg=/dev/null
+        top="$(pwd -P)"
+        add() {
+          if [ "$sect" = stack ] && [ "$prof" = ts-pnpm ]; then
+            p="${p:-.}"
+            if ! [[ "$p" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$p" == /* ]] || [[ "/$p/" == */../* ]]; then
+              echo ".bosun/bosun.toml: stack path '$p' must be a plain relative path"; exit 1
+            fi
+            case "$(realpath -m -- "$p")" in
+              "$top"|"$top"/*) ;;
+              *) echo ".bosun/bosun.toml: stack path '$p' links outside the checkout"; exit 1 ;;
+            esac
+            paths="$paths $p"
+            if [ -z "$first" ] && [ -f "$p/pnpm-lock.yaml" ]; then first="$p"; fi
+          fi
+          p=""; prof=""
+        }
+        q="[\"']"; v="[^\"']*"; w='[[:space:]]*'
+        while IFS= read -r l || [ -n "$l" ]; do
+          if [[ "$l" =~ ^$w\[ ]]; then
+            add
+            if [[ "$l" =~ ^$w\[\[${w}stack$w\]\]$w(#.*)?$ ]]; then sect=stack; else sect=""; fi
+          elif [[ "$l" =~ ^$w(path|profile)$w=$w$q($v)$q$w(#.*)?$ ]]; then
+            if [ "${BASH_REMATCH[1]}" = path ]; then p="${BASH_REMATCH[2]}"; else prof="${BASH_REMATCH[2]}"; fi
+          fi
+        done < "$cfg"
+        add
+        paths="${paths# }"
+        echo "export BOSUN_TS_PATHS='$paths' BOSUN_TS_PATH='$first'" >> "$BASH_ENV"
+{% endif %}{% if "rust" in pieces %}  - run:
       name: rustup and the cargo tools
       command: |
         # rustup 1.29.2, verified 2026-10-28 (static.rust-lang.org rustup-init.sha256), as hull's
@@ -138,16 +171,16 @@ environment:
         fi
         echo "export RUSTUP_TOOLCHAIN=$ch" >> "$BASH_ENV"
 {% endif %}{% if "ts-pnpm" in pieces %}  # The exact pnpm release (9 or later) the base's package.json names (the PR's while the base names
-  # none), as in bosun.yml; skipped while the stack has no lockfile.
+  # none), as in bosun.yml, from the first ts-pnpm stack with a lockfile; skipped while none has one.
   - run:
       name: pnpm
       command: |
-        [ -f "{{ ts_path }}/pnpm-lock.yaml" ] || exit 0
+        [ -n "$BOSUN_TS_PATH" ] || exit 0
         pm() { node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{let v="";try{v=JSON.parse(s).packageManager??""}catch(e){}console.log(typeof v==="string"?v:"!")})'; }
-        v="$(git show "$BOSUN_BASE:{{ ts_path }}/package.json" 2>/dev/null | pm || true)"
-        if [ -z "$v" ]; then v="$(pm < "{{ ts_path }}/package.json" || true)"; fi
+        v="$(git show "$BOSUN_BASE:$BOSUN_TS_PATH/package.json" 2>/dev/null | pm || true)"
+        if [ -z "$v" ]; then v="$(pm < "$BOSUN_TS_PATH/package.json" || true)"; fi
         v="${v%%+*}"
-        [[ "$v" =~ ^pnpm@(9|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "{{ ts_path }}/package.json: packageManager must name pnpm@x.y.z (9 or later), not '$v'"; exit 1; }
+        [[ "$v" =~ ^pnpm@(9|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "$BOSUN_TS_PATH/package.json: packageManager must name pnpm@x.y.z (9 or later), not '$v'"; exit 1; }
         (cd /tmp && npm install -g --ignore-scripts "$v")
         if [ -f "$(npm root -g)/pnpm/install.js" ]; then (cd "$(npm root -g)/pnpm" && node install.js); fi
         test "pnpm@$(pnpm --version)" = "$v"
@@ -190,10 +223,6 @@ environment:
             mkdir -p -- "$(dirname -- "$p")"
             git show "$1:$p" > "$p"
           done || return 1
-          if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ] && [ "$1" != HEAD ]; then
-            inside "{{ ts_path }}/package.json" || return 1
-            echo '{}' > "{{ ts_path }}/package.json"
-          fi
         }
 {% endif %}        for g in $GATES; do
           # ci-minutes came with bosun 0.7.0: a repo that pins an older release skips it.
@@ -209,7 +238,12 @@ environment:
             deps) swap "$BOSUN_BASE" || exit 1; swapped=1 ;;
             *)
               if [ -n "${swapped:-}" ]; then swap HEAD || exit 1; swapped=""; fi
-              if [ -z "${installed:-}" ] && [ -f "{{ ts_path }}/pnpm-lock.yaml" ]; then (cd "{{ ts_path }}" && pnpm install --frozen-lockfile); installed=1; fi
+              if [ -z "${installed:-}" ]; then
+                for d in $BOSUN_TS_PATHS; do
+                  if [ -f "$d/pnpm-lock.yaml" ]; then (cd "$d" && pnpm install --frozen-lockfile) || exit 1; fi
+                done
+                installed=1
+              fi
               ;;
           esac
 {% endif %}          # Defence in depth: the pinned bosun, unchanged since it was installed.

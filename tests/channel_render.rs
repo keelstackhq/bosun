@@ -1258,9 +1258,16 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
                     .unwrap()
                     .contains("echo \"$SHA256  $RUNNER_TEMP/bin/bosun\" | sha256sum -c --quiet")
             );
+            let pnpm = step(&b, "name", "pnpm install");
+            assert_eq!(
+                pnpm["env"]["TS_PATHS"],
+                "${{ needs.bosun-trusted.outputs.ts_paths }}"
+            );
             assert!(
-                b.iter()
-                    .any(|s| s["run"] == "pnpm install --frozen-lockfile")
+                pnpm["run"]
+                    .as_str()
+                    .unwrap()
+                    .contains("(cd \"$d\" && pnpm install --frozen-lockfile)")
             );
             let gates = step(&b, "name", "bosun gates");
             assert_eq!(
@@ -1421,10 +1428,11 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
         // The first failure stops the job.
         let (ok, log, _) = case(true, pr, "", "test-integrity");
         assert!(!ok && !log.contains("deps: "), "{log}");
-        // A PR that adds the stack: the base has no root package.json, so pnpm gets {}.
+        // A PR that adds the stack: the base has no root package.json, and none is created (the
+        // gate skips a stack without one).
         let (ok, log, _) = case(false, pr, "", "");
         assert!(ok);
-        assert!(log.contains("deps: {} packages:"), "{log}");
+        assert!(log.contains("deps:  packages:"), "{log}");
         // A PR without the lockfile still gets the base's config.
         let (ok, log, _) = case(true, &format!("{pr} && rm pnpm-lock.yaml"), "", "");
         assert!(ok);
@@ -1504,6 +1512,7 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
                 ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
                 ("BASE", &base_sha),
                 ("GITHUB_SHA", "unused"),
+                ("TS_PATH", "."),
             ],
         );
         let log = fs::read_to_string(log).unwrap_or_default();
@@ -1659,6 +1668,117 @@ fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
         fs::read_to_string(out).unwrap().trim(),
         "pr_gates=fmt lint test"
     );
+}
+
+/// The pnpm steps follow the ts-pnpm stacks of the (base's) .bosun/bosun.toml, not the render's
+/// ts_path: a stack the owner moved to `action/` still gets pnpm (a client repo's main went red).
+#[test]
+fn the_pnpm_steps_follow_the_configured_ts_stack_paths() {
+    let files = variant(&["ts-pnpm"], "");
+    let wf = file(&files, BOSUN_YML);
+    assert!(
+        !wf.contains("hashFiles("),
+        "no step keys off the render's path"
+    );
+    let Some(j) = yaml_json(wf) else {
+        return;
+    };
+    let a = steps(&j, "");
+    let outs = &j["jobs"][TRUSTED]["outputs"];
+    for k in ["path", "paths", "lock"] {
+        assert_eq!(
+            outs[format!("ts_{k}")],
+            format!("${{{{ steps.stack.outputs.{k} }}}}")
+        );
+    }
+    let audit = step(&a, "name", "pnpm for the audit");
+    assert!(
+        audit["if"]
+            .as_str()
+            .unwrap()
+            .ends_with("&& steps.stack.outputs.lock == 'true'")
+    );
+    assert_eq!(audit["env"]["TS_PATH"], "${{ steps.stack.outputs.path }}");
+    let b = check_steps(&j, "");
+    let lock = "needs.bosun-trusted.outputs.pr_gates != '' && needs.bosun-trusted.outputs.ts_lock == 'true'";
+    for u in [
+        "pnpm/action-setup@",
+        "actions/setup-node@",
+        "keelstackhq/hoard@",
+    ] {
+        let s = b
+            .iter()
+            .find(|s| s["uses"].as_str().is_some_and(|x| x.starts_with(u)))
+            .unwrap();
+        assert_eq!(s["if"], lock, "{u}");
+    }
+    assert_eq!(step(&b, "name", "pnpm install")["if"], lock);
+    let setup = b
+        .iter()
+        .find(|s| {
+            s["uses"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("pnpm/action-setup@"))
+        })
+        .unwrap();
+    assert_eq!(
+        setup["with"]["package_json_file"],
+        "${{ needs.bosun-trusted.outputs.ts_path }}/package.json"
+    );
+    // The paths step, on a bosun.toml (Some: the outputs; None: it fails).
+    let run = step(&a, "id", "stack")["run"].as_str().unwrap().to_string();
+    let case = |toml: &str, setup: &str| -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        fs::create_dir_all(d.join(".bosun")).unwrap();
+        fs::write(d.join(".bosun/bosun.toml"), toml).unwrap();
+        if !setup.is_empty() {
+            git_in(d, setup);
+        }
+        let out = d.join("out");
+        let ok = bash_in(d, &run, &[("GITHUB_OUTPUT", out.to_str().unwrap())]);
+        ok.then(|| fs::read_to_string(out).unwrap())
+    };
+    let ts =
+        |p: &str| format!("project = \"a\"\n\n[[stack]]\npath = \"{p}\"\nprofile = \"ts-pnpm\"\n");
+    let rust = "[[stack]]\npath = \".\"\nprofile = \"rust\"\n";
+    assert_eq!(
+        case(
+            &format!("{rust}{}\n[review]\nmode = \"subagent\"\n", ts("action")),
+            "mkdir action && touch action/pnpm-lock.yaml"
+        )
+        .as_deref(),
+        Some("paths=action\npath=action\nlock=true\n")
+    );
+    assert_eq!(
+        case(
+            &format!("{}{}", ts("web"), ts("api")),
+            "mkdir api && touch api/pnpm-lock.yaml"
+        )
+        .as_deref(),
+        Some("paths=web api\npath=api\nlock=true\n"),
+        "the first stack with a lockfile names pnpm"
+    );
+    assert_eq!(
+        case(&ts("action"), "").as_deref(),
+        Some("paths=action\npath=\nlock=false\n"),
+        "no lockfile yet"
+    );
+    assert_eq!(
+        case(rust, "touch pnpm-lock.yaml").as_deref(),
+        Some("paths=\npath=\nlock=false\n"),
+        "no ts-pnpm stack"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let link = format!("ln -s {} out", outside.path().display());
+    for (p, setup) in [
+        ("../x", ""),
+        ("/etc", ""),
+        ("a b", ""),
+        ("out/web", link.as_str()),
+    ] {
+        assert_eq!(case(&ts(p), setup), None, "{p}");
+    }
 }
 
 #[path = "channel_render/circleci.rs"]

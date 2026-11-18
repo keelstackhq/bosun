@@ -482,6 +482,55 @@ fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
     assert!(d.path().join("out/package.json").exists());
 }
 
+/// As in bosun.yml: the pnpm steps follow the ts-pnpm stacks of the base's .bosun/bosun.toml, not
+/// the render's ts_path, and nothing is created in the checkout.
+#[test]
+fn circleci_pnpm_steps_follow_the_configured_ts_stack_paths() {
+    let job = text(&mode(&["ts-pnpm"], &["circleci"], ""), JOB).to_string();
+    assert!(
+        !job.contains("./pnpm-lock.yaml") && !job.contains("./package.json"),
+        "{job}"
+    );
+    assert!(!job.contains("echo '{}'"), "{job}");
+    assert!(job.contains("[ -n \"$BOSUN_TS_PATH\" ] || exit 0"), "{job}");
+    assert!(job.contains("for d in $BOSUN_TS_PATHS; do"), "{job}");
+    let Some(step) = job_step(&["ts-pnpm"], "", "the base's config for the gates") else {
+        return;
+    };
+    let toml = "[[stack]]\\npath = \"action\"\\nprofile = \"ts-pnpm\"\\n";
+    let main = format!(
+        "mkdir -p .bosun action && echo 1.2.3 > .bosun/version && printf '{toml}' > .bosun/bosun.toml && touch action/pnpm-lock.yaml && {COMMIT}"
+    );
+    let (d, sum) = ci_repo(&main, "git checkout -qb pr");
+    let env = d.path().join("bash_env");
+    let (ok, _) = run_step(
+        d.path(),
+        &sum,
+        &step,
+        &[("BASH_ENV", env.to_str().unwrap())],
+    );
+    assert!(ok);
+    assert_eq!(
+        fs::read_to_string(&env).unwrap(),
+        "export BOSUN_TS_PATHS='action' BOSUN_TS_PATH='action'\n"
+    );
+    let bad = "[[stack]]\\npath = \"../x\"\\nprofile = \"ts-pnpm\"\\n";
+    let main = format!(
+        "mkdir -p .bosun && echo 1.2.3 > .bosun/version && printf '{bad}' > .bosun/bosun.toml && {COMMIT}"
+    );
+    let (d, sum) = ci_repo(&main, "git checkout -qb pr");
+    let env = d.path().join("bash_env");
+    assert!(
+        !run_step(
+            d.path(),
+            &sum,
+            &step,
+            &[("BASH_ENV", env.to_str().unwrap())]
+        )
+        .0
+    );
+}
+
 #[test]
 fn the_circleci_toolchain_is_validated_and_pinned_for_later_steps() {
     let Some((script, _)) = job_step(&["rust"], "", "rust toolchain") else {
