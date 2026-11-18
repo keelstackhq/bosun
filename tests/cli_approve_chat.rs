@@ -42,7 +42,7 @@ fn answer(dir: &Path, id: &str, answer: &str, pr: u64, head: &str) {
         .join(git(dir, &["rev-parse", "--git-common-dir"]))
         .join("bosun/answers.json");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    let v = json!({id: {"answer": answer, "pr": pr, "head": head, "at": NOW,
+    let v = json!({id: {"answer": answer, "repo": "acme/widget", "pr": pr, "head": head, "at": NOW,
         "session_id": "session_orch", "tool_use_id": "tu"}});
     std::fs::write(file, v.to_string()).unwrap();
 }
@@ -452,4 +452,102 @@ fn chat_later_hold_wins() {
     std::fs::write(file, v.to_string()).unwrap();
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     refused(&fake, r, 5);
+}
+
+/// Add an answer to the stored file at time `at`.
+fn answer_at(dir: &Path, id: &str, answer: &str, at: &str) {
+    let file = dir
+        .join(git(dir, &["rev-parse", "--git-common-dir"]))
+        .join("bosun/answers.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let mut map: Value = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}));
+    map[id] = json!({"answer": answer, "repo": "acme/widget", "pr": 1, "head": HEAD, "at": at,
+        "session_id": "session_orch", "tool_use_id": "tu"});
+    std::fs::write(file, map.to_string()).unwrap();
+}
+
+#[test]
+fn chat_needs_the_newest_answer_for_the_head_to_be_an_approve() {
+    let (fake, tmp) = (setup(), repo());
+    answer_at(tmp.path(), Q, "approve", "2026-11-10T09:00:00Z");
+    answer_at(
+        tmp.path(),
+        "1-0123456-1762768999",
+        "hold",
+        "2026-11-10T09:30:00Z",
+    );
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+    // The newer answer approves: now it records.
+    answer_at(
+        tmp.path(),
+        "1-0123456-1762769000",
+        "approve",
+        "2026-11-10T09:45:00Z",
+    );
+    let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn chat_refused_when_the_child_flag_is_set_whatever_the_origin_says() {
+    let (fake, tmp) = (setup(), repo());
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let env = [
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("BOSUN_ORIGIN", "local"),
+    ];
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &env);
+    refused(&fake, r, 5);
+}
+
+fn slack_short(fake: &FakeGithub, dir: &Path, short: &str) -> (i32, Value) {
+    let out = bosun()
+        .current_dir(dir)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_tag")
+        .env("BOSUN_NOW", NOW)
+        .env("BOSUN_ORIGIN", "slack")
+        .args([
+            "approve",
+            short,
+            "--chat",
+            "--question",
+            Q,
+            "--slack-user",
+            "U0ADA1",
+        ])
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+#[test]
+fn chat_slack_short_head_must_name_exactly_one_open_pr() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    // No PR has this head.
+    let (code, v) = slack_short(&fake, tmp.path(), "fffffff");
+    assert_eq!(code, 3, "{v}");
+    // Two open PRs share the short head.
+    fake.pull(2, "other", "feature2", "");
+    fake.pull_as_issue(2, "other");
+    let twin = format!("{}{}", &HEAD[..7], &OTHER[7..]);
+    fake.pull_set(2, "head", json!({"sha": twin, "ref": "feature2"}));
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7]);
+    assert_eq!(code, 3, "{v}");
+    assert!(chat_comments(&fake).is_empty());
+}
+
+#[test]
+fn chat_slack_short_head_with_one_match_records() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["head_sha"], HEAD);
+    assert_eq!(chat_comments(&fake).len(), 1);
 }
