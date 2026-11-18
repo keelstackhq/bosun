@@ -70,14 +70,6 @@ impl std::fmt::Display for RepoId {
     }
 }
 
-/// The repo a directory belongs to: `BOSUN_REPO`, else the `origin` remote. No network.
-pub fn repo_at(dir: &Path) -> Option<RepoId> {
-    match env("BOSUN_REPO") {
-        Some(v) => parse_repo(&v),
-        None => git_out(dir, &["remote", "get-url", "origin"]).and_then(|u| parse_remote_url(&u)),
-    }
-}
-
 /// `owner/name` (the `BOSUN_REPO` form).
 pub fn parse_repo(s: &str) -> Option<RepoId> {
     let (owner, name) = s.trim().split_once('/')?;

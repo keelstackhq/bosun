@@ -110,7 +110,8 @@ fn answer_approve_stored() {
     assert_eq!(a["pr"], json!(12));
     assert_eq!(a["head"], json!(h));
     assert_eq!(a["at"], json!(NOW));
-    assert_eq!(a["session_id"], json!("s"));
+    assert_eq!(a["cli_session_id"], json!("s"));
+    assert!(a["session"].as_str().is_some_and(|s| !s.is_empty()), "{a}");
     assert_eq!(a["tool_use_id"], json!("toolu_1"));
 }
 
@@ -493,4 +494,27 @@ fn a_corrupt_answers_file_is_not_used_and_not_reset() {
     ready(&fake, 12, &h);
     let v = list(&fake, r.path());
     assert_eq!(v["data"]["held"], json!([]), "{v}");
+}
+
+#[test]
+fn the_stored_session_is_the_bosun_identity_not_the_cli_uuid() {
+    let r = repo();
+    let h = head("abc1234");
+    let mut input = question(&[(12, &h)], "Approve #12 abc1234");
+    input["session_id"] = json!("3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d");
+    let out = bosun()
+        .current_dir(r.path())
+        .env("BOSUN_NOW", NOW)
+        .env("BOSUN_SESSION", "session_orch")
+        .args(["hook", "post-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let a = &stored(r.path())["12-abc1234-1792663200"];
+    assert_eq!(a["session"], json!("session_orch"), "{a}");
+    assert_eq!(
+        a["cli_session_id"],
+        json!("3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d")
+    );
 }

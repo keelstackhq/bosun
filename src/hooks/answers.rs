@@ -1,5 +1,5 @@
 //! The owner's AskUserQuestion answers: `<git common dir>/bosun/answers.json`, a map
-//! `question_id -> {answer, repo, pr, head, at, session_id, tool_use_id}` beside the lease cache (spec §8, approval batches).
+//! `question_id -> {answer, repo, pr, head, at, session, cli_session_id, tool_use_id}` beside the lease cache (spec §8, approval batches).
 //! Written by `bosun hook post-tool-use`; read by `approve --list` (holds) and `approve --chat`.
 
 use std::path::{Path, PathBuf};
@@ -11,8 +11,10 @@ use crate::time::parse_rfc3339;
 
 const MAX_AGE_SECS: i64 = 14 * 86_400;
 
-/// One stored answer: `answer` is `approve` or `hold`; `session_id` and `tool_use_id` come from
-/// the hook input (T5 needs the same session as the orchestrator running `approve --chat`).
+/// One stored answer: `answer` is `approve` or `hold`; `session` is the bosun identity the hook resolves like the
+/// CLI does (`BOSUN_SESSION`, else the remote session id; T5 needs the same session as the
+/// orchestrator running `approve --chat`); `cli_session_id` and `tool_use_id` come from the hook
+/// input (audit only: the CLI's own UUID never equals the bosun identity).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
     pub answer: String,
@@ -21,7 +23,8 @@ pub struct Answer {
     pub pr: u64,
     pub head: String,
     pub at: String,
-    pub session_id: String,
+    pub session: String,
+    pub cli_session_id: String,
     pub tool_use_id: String,
 }
 
@@ -60,7 +63,8 @@ fn answer_of(v: &Value) -> Option<Answer> {
         pr: v.get("pr")?.as_u64()?,
         head: text("head")?,
         at: text("at")?,
-        session_id: text("session_id").unwrap_or_default(),
+        session: text("session").unwrap_or_default(),
+        cli_session_id: text("cli_session_id").unwrap_or_default(),
         tool_use_id: text("tool_use_id").unwrap_or_default(),
     })
 }
@@ -93,7 +97,7 @@ pub fn held(dir: &Path, repo: &str, pr: u64, head: &str) -> bool {
 /// Store `(question_id, answer)` pairs, replacing earlier answers to the same ids. Entries older
 /// than 14 days and entries for another head of a stored PR are dropped. Atomic (tmp + rename).
 /// The file is a local hint, never proof (spec 14): a guard stops confused workers, not liars.
-/// An answer with no `session_id` or no `repo` is refused and nothing is stored; so is a corrupt
+/// An answer with no `session`, `cli_session_id` or `repo` is refused and nothing is stored; so is a corrupt
 /// file (it is not reset).
 pub fn store(dir: &Path, items: &[(String, Answer)]) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind};
@@ -102,11 +106,11 @@ pub fn store(dir: &Path, items: &[(String, Answer)]) -> std::io::Result<()> {
     };
     if items
         .iter()
-        .any(|(_, a)| a.session_id.is_empty() || a.repo.is_empty())
+        .any(|(_, a)| a.session.is_empty() || a.cli_session_id.is_empty() || a.repo.is_empty())
     {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "an answer needs the hook's session_id and the repo",
+            "an answer needs the bosun session, the hook's session_id and the repo",
         ));
     }
     let Some(mut map) = read(&file) else {
@@ -125,7 +129,7 @@ pub fn store(dir: &Path, items: &[(String, Answer)]) -> std::io::Result<()> {
     });
     for (id, a) in items {
         let v = json!({"answer": a.answer, "repo": a.repo, "pr": a.pr, "head": a.head, "at": a.at,
-            "session_id": a.session_id, "tool_use_id": a.tool_use_id});
+            "session": a.session, "cli_session_id": a.cli_session_id, "tool_use_id": a.tool_use_id});
         map.insert(id.clone(), v);
     }
     if let Some(parent) = file.parent() {
