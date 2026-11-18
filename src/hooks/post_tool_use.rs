@@ -17,7 +17,7 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if input.get("tool_name").and_then(Value::as_str) != Some("AskUserQuestion") {
         return None;
     }
-    let items = parse(input, &Timestamp::now().to_string());
+    let mut items = parse(input, &Timestamp::now().to_string());
     if items.is_empty() {
         return None;
     }
@@ -28,6 +28,13 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         eprintln!("bosun: warning: no cwd; the owner's answer is not stored");
         return None;
     };
+    let Some(repo) = crate::ctx::repo_at(&dir) else {
+        eprintln!("bosun: warning: cannot tell the repo; the owner's answer is not stored");
+        return None;
+    };
+    for (_, a) in &mut items {
+        a.repo = repo.to_string();
+    }
     if let Err(e) = answers::store(&dir, &items) {
         eprintln!("bosun: warning: cannot store the owner's answer: {e}");
     }
@@ -120,6 +127,7 @@ pub fn parse(input: &Value, at: &str) -> Vec<(String, Answer)> {
             };
             let a = Answer {
                 answer: answer.into(),
+                repo: String::new(),
                 pr,
                 head,
                 at: at.into(),
