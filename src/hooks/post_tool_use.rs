@@ -21,6 +21,10 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if items.is_empty() {
         return None;
     }
+    if let Err(why) = verify(input, &mut items) {
+        eprintln!("bosun: warning: the owner's answer is not stored: {why}");
+        return None;
+    }
     let Some(dir) = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())
@@ -48,6 +52,55 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         eprintln!("bosun: warning: cannot store the owner's answer: {e}");
     }
     None
+}
+
+/// Keep only the items the session transcript backs (`transcript_path` of the hook input): an
+/// assistant `tool_use` with this `tool_use_id`, named `AskUserQuestion`, whose question holds
+/// the same marker (id, PR and full head), and a `tool_result` for that id. The path must be a
+/// regular file, not a symlink. Anything else fails closed. A hint against forged hook input:
+/// it stops confused workers, not liars (spec 14).
+fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String> {
+    let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("");
+    let (path, id) = (Path::new(field("transcript_path")), field("tool_use_id"));
+    let regular = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
+    if field("transcript_path").is_empty() || id.is_empty() || !regular {
+        return Err("no transcript file (a symlink or missing path does not count)".into());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read transcript: {e}"))?;
+    let (mut asked, mut result) = (Vec::new(), false);
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let blocks = (v.pointer("/message/content")).and_then(Value::as_array);
+        for b in blocks.into_iter().flatten() {
+            let kind = b.get("type").and_then(Value::as_str);
+            if kind == Some("tool_result")
+                && b.get("tool_use_id").and_then(Value::as_str) == Some(id)
+            {
+                result = true;
+            }
+            let ours = b.get("id").and_then(Value::as_str) == Some(id)
+                && b.get("name").and_then(Value::as_str) == Some("AskUserQuestion");
+            if kind == Some("tool_use") && ours {
+                let qs = b.pointer("/input/questions").and_then(Value::as_array);
+                for q in qs.into_iter().flatten() {
+                    asked.extend(q.get("question").and_then(Value::as_str).map(markers));
+                }
+            }
+        }
+    }
+    items.retain(|(qid, a)| {
+        asked
+            .iter()
+            .flatten()
+            .any(|m| m.0 == *qid && m.1 == a.pr && m.3 == a.head)
+    });
+    match (items.is_empty(), result) {
+        (true, _) => Err("the transcript has no such AskUserQuestion with this marker".into()),
+        (_, false) => Err("the transcript has no tool_result for it".into()),
+        _ => Ok(()),
+    }
 }
 
 /// The marked PRs of `text`: `(question_id, pr, short, full head)`, one per line. Only a line's
