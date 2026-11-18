@@ -64,12 +64,8 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     let out = cmd("git")
         .arg("-C")
         .arg(root)
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-        ])
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(["-c", "core.fsmonitor=false"])
         .arg("--no-replace-objects")
         .args(args)
         .output()

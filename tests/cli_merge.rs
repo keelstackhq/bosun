@@ -146,6 +146,7 @@ fn run_as(fake: &FakeGithub, dir: &Path, session: &str, args: &[&str]) -> (i32, 
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_SESSION", session)
+        .env("BOSUN_GIT_URL", dir)
         .env("BOSUN_NOW", NOW)
         .arg("-C")
         .arg(dir)
@@ -727,6 +728,7 @@ fn merge_with(fake: &FakeGithub, dir: &Path, env: &[(&str, &str)]) -> (i32, Valu
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_SESSION", ORCH)
+        .env("BOSUN_GIT_URL", dir)
         .env("BOSUN_NOW", NOW)
         .envs(env.iter().copied())
         .arg("-C")
@@ -787,4 +789,48 @@ fn merge_overlays_the_pr_base_sha_not_the_branch() {
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
+}
+
+/// The commits come from the fetch URL only, never from the shared checkout's objects: with an
+/// empty source the merge stops (exit 5) although the checkout has both commits.
+#[test]
+fn merge_fetches_into_its_own_repo_and_fails_closed() {
+    let (fake, dir) = merge_ready("true");
+    let empty = tempfile::tempdir().unwrap();
+    git(empty.path(), &["init", "-q"]);
+    let src = empty.path().to_str().unwrap();
+    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_GIT_URL", src)]);
+    assert_eq!(code, 5, "{v}");
+    assert!(!fake.merged(20));
+}
+
+/// A fetch config planted in the shared checkout (an `uploadpack` command) never runs.
+#[test]
+fn merge_never_runs_the_checkouts_git_config() {
+    let (fake, dir) = merge_ready("true");
+    let marker = dir.path().join("ran");
+    let cmd = format!("touch {}; git-upload-pack", marker.display());
+    git(dir.path(), &["config", "remote.origin.uploadpack", &cmd]);
+    git(
+        dir.path(),
+        &["config", "remote.origin.url", dir.path().to_str().unwrap()],
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert!(!marker.exists());
+}
+
+/// A `.cargo` above the gates' temp repo could hold a runner: refuse (exit 5).
+#[test]
+fn merge_refuses_a_cargo_dir_above_the_temp_repo() {
+    let (fake, dir) = merge_ready("true");
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join(".cargo")).unwrap();
+    let t = tmp.path().to_str().unwrap();
+    let (code, v) = merge_with(&fake, dir.path(), &[("TMPDIR", t)]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains(".cargo"),
+        "{v}"
+    );
 }

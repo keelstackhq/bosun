@@ -1,6 +1,6 @@
 //! The no-CI gates (spec §4, D-019). What must pass is read from the default branch's config and
 //! profiles at its current sha, never from a checkout or from the PR. `bosun merge` runs those
-//! gates itself on a throwaway worktree of the exact PR head; stamp files are never trusted.
+//! gates itself on a private repo at the exact PR head; stamp files are never trusted.
 
 use std::path::{Path, PathBuf};
 
@@ -14,10 +14,7 @@ use crate::github::{Github, Pull};
 use crate::output::BosunError;
 
 fn io_err(what: &str, e: std::io::Error) -> BosunError {
-    BosunError::error(
-        format!("{what}: {e}"),
-        "check that the temp directory is writable",
-    )
+    BosunError::error(format!("{what}: {e}"), "make the temp dir writable")
 }
 
 /// Files that steer how the gates build and run; the base's version (or none) always wins.
@@ -129,21 +126,18 @@ fn non_empty(all: Vec<String>) -> Result<Vec<String>, BosunError> {
     Ok(all)
 }
 
-/// A fresh empty directory under the temp dir (`create_dir` fails on an existing one).
+/// A fresh empty directory (mode 0700) under the temp dir, with an unpredictable name.
 fn fresh_dir(tag: &str) -> Result<PathBuf, BosunError> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos());
-    for i in 0..20u32 {
-        let p =
-            std::env::temp_dir().join(format!("bosun-{tag}-{}-{nanos:x}{i}", std::process::id()));
-        match std::fs::create_dir(&p) {
-            Ok(()) => return Ok(p),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(io_err("temp dir", e)),
-        }
-    }
-    Err(io_err("temp dir", std::io::ErrorKind::AlreadyExists.into()))
+    let mut raw = [0u8; 12];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw)
+        .map_err(|_| BosunError::error("no random bytes for a temp dir", "retry"))?;
+    let rnd = raw.iter().fold(String::new(), |a, b| format!("{a}{b:02x}"));
+    let p = std::env::temp_dir().join(format!("bosun-{tag}-{rnd}"));
+    let mut dir = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+    dir.create(&p).map_err(|e| io_err("temp dir", e))?;
+    Ok(p)
 }
 
 /// The private temp tree of one run (repo, HOME, CARGO_HOME, TMPDIR), removed on every path.
@@ -154,6 +148,20 @@ impl Drop for Private {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Fetch settings: verify every object, https only (`file` just for a `BOSUN_GIT_URL` test source),
+/// no credential helper or prompt, give up on a stalled transfer.
+const FETCH_CONFIG: [&str; 9] = [
+    "transfer.fsckObjects=true",
+    "fetch.fsckObjects=true",
+    "protocol.allow=never",
+    "protocol.https.allow=always",
+    "protocol.file.allow=user",
+    "credential.helper=",
+    "core.askPass=/bin/false",
+    "http.lowSpeedLimit=1000",
+    "http.lowSpeedTime=60",
+];
 
 /// The gates a PR must pass, from the default branch's config at its current sha.
 pub fn required_gates(gh: &dyn Github) -> Result<Vec<String>, BosunError> {
@@ -169,55 +177,50 @@ fn sha40(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Run the required gates on a detached worktree of `pull`'s head (fetched when absent); exit 5
-/// with the failing gates unless all pass. The worktree is always removed. The gates execute the
+/// Run the required gates on a private repo holding only `pull`'s head and base, fetched by sha;
+/// exit 5 with the failing gates unless all pass. The repo is always removed. The gates execute the
 /// head's code (tests, build scripts): the signed verdict and the owner's approval are the control.
 pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
-    let (dir, head) = (app.ctx.dir.as_path(), pull.head_sha.as_str());
+    let head = pull.head_sha.as_str();
     if !sha40(head) || !sha40(&pull.base_sha) {
+        let n = pull.number;
         return Err(BosunError::needs_human(
-            format!(
-                "PR #{} head or base is not a 40-hex commit id, so its gates cannot run",
-                pull.number
-            ),
-            format!(
-                "rerun `bosun merge {}` once GitHub reports real commit ids",
-                pull.number
-            ),
+            format!("PR #{n} head or base is not a 40-hex commit id"),
+            format!("rerun `bosun merge {n}` once GitHub reports real commit ids"),
         ));
-    }
-    let have = |sha: &str| stamps::tree_of(dir, sha).is_some();
-    for (sha, spec) in [
-        (head, format!("pull/{}/head", pull.number)),
-        (&*pull.base_sha, pull.base_sha.clone()),
-    ] {
-        if !have(sha) {
-            let _ = gates::git(dir, &["fetch", "-q", "origin", &spec]);
-        }
-        if !have(sha) {
-            return Err(BosunError::needs_human(
-                format!(
-                    "commit {sha} of PR #{} is not in this checkout, so its gates cannot run",
-                    pull.number
-                ),
-                format!(
-                    "`git fetch origin {spec}`, then rerun `bosun merge {}`",
-                    pull.number
-                ),
-            ));
-        }
     }
     let private = Private(fresh_dir(&format!("merge-{}", pull.number))?);
     let repo = private.0.join("repo");
     std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
     gates::isolate(&private.0);
-    // A repo of its own, not a worktree: no shared config or replace refs; objects by alternates.
-    let common = gates::git(dir, &["rev-parse", "--git-common-dir"])?;
-    let objects = dir.join(common.trim()).join("objects");
-    let tree = gates::git(dir, &["rev-parse", &format!("{head}^{{tree}}")])?;
+    // cargo reads `.cargo/config.toml` of every parent directory: a runner planted there runs code.
+    let cargo = (repo.ancestors().map(|a| a.join(".cargo"))).find(|c| c.symlink_metadata().is_ok());
+    if let Some(bad) = cargo {
+        return Err(BosunError::needs_human(
+            format!("{} exists above the gates' temp repo", bad.display()),
+            "remove it or point TMPDIR at a clean directory, then rerun `bosun merge`",
+        ));
+    }
+    // Never the shared checkout (its config and objects are not trusted): fetch by sha, no token.
+    let host = format!("https://github.com/{}.git", app.ctx.repo);
+    let url = std::env::var("BOSUN_GIT_URL").unwrap_or(host);
     gates::git(&repo, &["init", "-q"])?;
-    let alt = repo.join(".git/objects/info/alternates");
-    std::fs::write(alt, objects.to_string_lossy().as_bytes()).map_err(|e| io_err("temp", e))?;
+    let mut args: Vec<&str> = FETCH_CONFIG.iter().flat_map(|c| ["-c", *c]).collect();
+    args.extend(["fetch", "-q", "--no-tags", &url, head, &pull.base_sha]);
+    let got = gates::git(&repo, &args).is_ok()
+        && [head, &pull.base_sha]
+            .iter()
+            .all(|s| stamps::tree_of(&repo, s).is_some());
+    if !got {
+        let n = pull.number;
+        return Err(BosunError::needs_human(
+            format!("cannot fetch the commits of PR #{n} anonymously, so its gates cannot run"),
+            format!(
+                "bosun merge needs a public repo; the owner merges PR #{n} on GitHub once the checks are green"
+            ),
+        ));
+    }
+    let tree = gates::git(&repo, &["rev-parse", &format!("{head}^{{tree}}")])?;
     gates::git(&repo, &["checkout", "-q", "--detach", head])?;
     run_gates(app, pull, &repo, tree.trim())
 }
