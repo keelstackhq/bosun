@@ -1,0 +1,1 @@
+- `bosun result --session-json` records spend; cloud sessions skip collaborator lookups; GET retried once on reset; any 403 on /graphql returns the MCP call in `next`; `migrate` HTTP budget 600 s.

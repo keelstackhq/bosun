@@ -432,6 +432,10 @@ pub struct ResultArgs {
     /// The PR of the work.
     #[arg(long)]
     pub pr: Option<u64>,
+    /// The get_session result of this session (file, or `-` for stdin): its spend so far is
+    /// recorded on the epic, as `bosun budget record <epic> --from`.
+    #[arg(long, value_name = "FILE|-")]
+    pub session_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

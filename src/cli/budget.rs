@@ -704,20 +704,34 @@ pub(super) fn usd_of(
 }
 
 fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
+    record_with(dir, a, None, false)
+}
+
+/// `record` with the get_session result already read (`bosun result --session-json`).
+pub(super) fn record_with(
+    dir: Option<&Path>,
+    a: &BudgetRecordArgs,
+    read: Option<Value>,
+    from_result: bool,
+) -> CmdResult {
     if !a.pr.is_empty() {
         return super::budget_pr::run(dir, a);
     }
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
-    kill_switch(gh)?;
+    // `result` reports even when halted and must not move the state it just set.
+    if !from_result {
+        kill_switch(gh)?;
+    }
     let at = match a.at.as_deref() {
         Some(s) => parse_at(s)?,
         None => ctx.now,
     };
     // A claude-sessions result is the session total so far: only what the registry ledger does
     // not hold yet for that session is new (no double count when recorded twice).
-    let input = match (a.provider.as_str(), a.from.as_deref()) {
-        ("claude-sessions", Some(from)) => Some(read_input(from)?),
+    let input = match (read, a.provider.as_str(), a.from.as_deref()) {
+        (Some(v), ..) => Some(v),
+        (None, "claude-sessions", Some(from)) => Some(read_input(from)?),
         _ => None,
     };
     let mut usd = match &input {
@@ -799,7 +813,7 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let total = spend_total(&crate::app::spend_notes(gh, n)?, None);
     let over = total > limits.budget.per_task_usd;
     let was_blocked = state_of(&issue.labels) == Some(State::Blocked);
-    let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
+    let blocked = over && !from_result && set_state(gh, n, &issue, State::Blocked).is_ok();
     // One lesson for "a task went over its cap" (the amounts and the task number do not enter
     // the signature: each task adds a hit). Only the record that blocks the task captures, so
     // later records on a blocked task add no hit; a task blocked for another reason first, or

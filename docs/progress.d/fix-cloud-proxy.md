@@ -1,0 +1,1 @@
+- 2026-11-17 · Cloud proxy · result --session-json spend, cloud skips collaborator reads, GET reset retry, migrate budget 600 s, any /graphql 403 hands back the MCP call · PR (fix/cloud-proxy)
