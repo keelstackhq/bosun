@@ -156,6 +156,8 @@ fn handoff_notes_are_normal_risk_but_instruction_files_there_stay_r_gov() {
         "docs/handoff/CLAUDE.md",
         "docs/handoff/AGENTS.md",
         "docs/handoff/claude.local.md",
+        "docs/handoff/.claude/skills/x/SKILL.md",
+        "src/.claude/settings.json",
     ] {
         let (code, v) = check(path);
         assert_eq!((code, rules(&v)), (5, vec!["R-gov"]), "{path}: {v}");
