@@ -7156,8 +7156,16 @@ mod tests {
         assert!(bash("bosun hook post-tool-use </tmp/f"));
         assert!(bash("bash -c 'bosun -C . hook post-tool-use'"));
         assert!(bash("eval \"bosun hook post-tool-use\""));
+        // Any command word (variable, substitution, quoted) before `hook post-tool-use`.
+        assert!(bash("\"bosun\" hook post-tool-use"));
+        assert!(bash("b=bosun; $b hook post-tool-use"));
+        assert!(bash("$b hook post-tool-use < f"));
+        assert!(bash("$(which bosun) hook post-tool-use"));
+        assert!(bash("`which bosun` -C . hook post-tool-use"));
+        assert!(bash("${BOSUN:-bosun} hook 'post-tool-use'"));
         // Path tricks.
         assert!(bash("echo x > .git/bosun//answers.json"));
+        assert!(bash("echo x > /r/.git//bosun///answers.json"));
         assert!(bash("echo x > ./.git/bosun/./answers.json"));
         assert!(bash("echo x > .git/bosun/x/../answers.json"));
         assert!(bash("echo x >.git/bosun/answers.json"));
