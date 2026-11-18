@@ -309,10 +309,9 @@ pub(crate) fn require_all_chunks(
     Err(BosunError::error(
         format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
         format!(
-            "review chunks {missing:?} of `bosun review-pack {}` (its `chunks`), then list every \
-             chunk in \"chunks_reviewed\": {:?} (its verdict_skeleton has the list) and post again",
-            verdict.pr,
-            (1..=count).collect::<Vec<_>>()
+            "review chunks {missing:?} of the {count} in `bosun review-pack {}` (its `chunks`), \
+             add each one you reviewed to \"chunks_reviewed\", then post again",
+            verdict.pr
         ),
     ))
 }
