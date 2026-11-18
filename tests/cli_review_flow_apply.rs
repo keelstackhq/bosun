@@ -82,20 +82,91 @@ fn a_listed_bot_verdict_with_the_reviewer_marker_counts() {
     assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
 }
 
+/// Post a verdict comment, then replace its body with a plain one (no bosun markers).
+fn plain(fake: &FakeGithub, user: &str, body: &str) -> u64 {
+    let id = comment(fake, &verdict("sha42", "approve", &[]), user);
+    fake.last_comment(|c| c.body = body.into());
+    id
+}
+
+fn bot_body(sha: &str) -> String {
+    format!(
+        "Reviewed.\n\n```json\n{{\"a\":1}}\n```\n\n```json\n{}\n```\n",
+        verdict(sha, "approve", &[])
+    )
+}
+
 #[test]
-fn a_listed_bot_verdict_without_the_marker_or_for_another_head_does_not_count() {
+fn a_listed_bot_verdict_without_markers_counts() {
     let fake = setup(BOTS);
-    let id = comment(&fake, &verdict("sha42", "approve", &[]), BOT);
-    fake.last_comment(|c| c.body = c.body.replace("<!-- bosun:reviewer session_r -->", ""));
+    let id = plain(&fake, BOT, &bot_body("sha42"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"].get("refused").is_none(), "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+    assert_eq!(fake.statuses_of("sha42")[0]["context"], "review-verdict");
+    let rec = fake.comments_of(42).last().unwrap().body.clone();
+    assert!(rec.contains(r#""session":"bot:claude[bot]""#), "{rec}");
+}
+
+#[test]
+fn an_unlisted_bot_or_a_bot_comment_with_no_verdict_is_refused_neutrally() {
+    let fake = setup("");
+    let id = plain(&fake, BOT, &bot_body("sha42"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["refused"].is_string(), "{v}");
+    let fake = setup(BOTS);
+    let id = plain(
+        &fake,
+        BOT,
+        "Looks fine, head_sha sha42.\n```json\n{\"a\":1}\n```",
+    );
     let (code, v) = apply(&fake, id);
     assert_eq!(code, 0, "{v}");
     assert!(
         v["data"]["refused"]
             .as_str()
             .unwrap()
-            .contains("reviewer marker"),
+            .contains("no single verdict"),
         "{v}"
     );
+    assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn a_bot_comment_with_two_verdicts_is_refused_neutrally() {
+    let fake = setup(BOTS);
+    let v = verdict("sha42", "approve", &[]);
+    let id = plain(
+        &fake,
+        BOT,
+        &format!("```json\n{v}\n```\n\n```json\n{v}\n```\n"),
+    );
+    let (code, out) = apply(&fake, id);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out["data"]["refused"]
+            .as_str()
+            .unwrap()
+            .contains("no single verdict"),
+        "{out}"
+    );
+    assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn a_writer_comment_without_the_marker_is_still_an_error() {
+    let fake = setup(BOTS);
+    let id = plain(&fake, "alice", &bot_body("sha42"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 1, "{v}");
+    assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn a_listed_bot_verdict_for_another_head_does_not_count() {
+    let fake = setup(BOTS);
     let id = comment(&fake, &verdict("sha42", "approve", &[]), BOT);
     fake.pull_set(42, "head", json!({"sha": "sha43", "ref": "claude/x"}));
     let (code, v) = apply(&fake, id);
@@ -253,4 +324,17 @@ fn a_newer_comment_of_the_same_bot_replaces_an_older_one_whatever_the_marker() {
     );
     assert_eq!(apply(&fake, b).0, 0);
     assert_eq!(fake.statuses_of("sha42")[0]["state"], "failure");
+}
+
+#[test]
+fn a_newer_marker_less_comment_of_the_same_bot_replaces_an_older_one() {
+    let fake = setup(BOTS);
+    let a = comment(&fake, &verdict("sha42", "approve", &[]), BOT);
+    plain(&fake, BOT, &bot_body("sha42"));
+    let (code, v) = apply(&fake, a);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("newer"),
+        "{v}"
+    );
 }

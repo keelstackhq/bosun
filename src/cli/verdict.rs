@@ -17,8 +17,8 @@ use crate::core::records::Record;
 use crate::core::risk::BOT_SESSION;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
-    comment_model, comment_session, effective, valid_model,
+    COMMENT_MARKER, Verdict, bot_verdict_json, closes_issue, comment_body, comment_chunks,
+    comment_json, comment_model, comment_session, effective, valid_model,
 };
 use crate::github::{Comment, Github, IssuePatch, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -138,7 +138,6 @@ fn apply(app: &App, id: u64) -> CmdResult {
     let c = gh
         .get_comment(id)?
         .ok_or_else(|| refuse("it does not exist".into()))?;
-    let text = comment_json(&c.body).ok_or_else(|| refuse(format!("no {COMMENT_MARKER}")))?;
     if !c.unedited() {
         return Err(refuse("it was edited".into()));
     }
@@ -146,25 +145,33 @@ fn apply(app: &App, id: u64) -> CmdResult {
     let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
     let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
     let writer = matches!(permission.as_str(), "admin" | "write");
+    // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
+    let bot = c.user_type == "Bot";
+    let fallback = || {
+        (bot && !writer)
+            .then(|| bot_verdict_json(&c.body))
+            .flatten()
+    };
+    let text = comment_json(&c.body).or_else(fallback);
     if !writer {
         let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
         let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
         // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
-        let head = || match Verdict::parse(text) {
+        let head = |text| match Verdict::parse(text) {
             Err(_) => "an invalid bot verdict".to_string(),
             Ok(n) => match gh.get_pull(n.pr) {
                 Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
                 _ => format!("a bot verdict for {}, not the head", n.head_sha),
             },
         };
-        let why = if !listed || c.user_type != "Bot" {
+        let why = if !listed || !bot {
             format!("{} has {permission} access, not write", c.user)
         } else if !on_default {
             "a bot verdict counts only on a PR into the default branch".into()
-        } else if comment_session(&c.body).is_none() {
-            "a bot verdict needs the reviewer marker".into()
+        } else if let Some(text) = text {
+            head(text)
         } else {
-            head()
+            "no single verdict in the comment".into()
         };
         if !why.is_empty() {
             eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
@@ -173,6 +180,7 @@ fn apply(app: &App, id: u64) -> CmdResult {
             ));
         }
     }
+    let text = text.ok_or_else(|| refuse(format!("no {COMMENT_MARKER}")))?;
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
     if verdict.chunks_reviewed.is_empty() {
         verdict.chunks_reviewed = comment_chunks(&c.body);
@@ -193,14 +201,13 @@ fn apply(app: &App, id: u64) -> CmdResult {
         bot_session.as_str()
     };
     // A bot's newer comment for the head replaces this one, whatever marker either carries.
-    let same = |o: &Comment| {
-        comment_session(&o.body).unwrap_or("unknown") == session
-            || (!writer && o.user.eq_ignore_ascii_case(&c.user))
-    };
+    let own = |o: &Comment| !writer && o.user.eq_ignore_ascii_case(&c.user);
+    let same = |o: &Comment| comment_session(&o.body).unwrap_or("unknown") == session || own(o);
     let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
         o.id > c.id
             && same(&o)
             && comment_json(&o.body)
+                .or_else(|| own(&o).then(|| bot_verdict_json(&o.body)).flatten())
                 .and_then(|t| Verdict::parse(t).ok())
                 .is_some_and(|v| v.head_sha == verdict.head_sha)
     });

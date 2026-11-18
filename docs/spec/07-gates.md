@@ -147,7 +147,9 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
 - Cloud sessions cannot write commit statuses (the agent proxy answers 403), so a reviewer there
   runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
   (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
-  `verdict` workflow (`issue_comment` created, comments with the marker only) runs
+  `verdict` workflow (`issue_comment` created, comments with the marker, or by a Bot account and
+  containing `"head_sha"` and a ```` ```json ```` fence, so bosun's own record comments never start
+  it, on a PR only) runs
   `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or
   admin) permission on the repo (an author without it, for example `claude[bot]` with `none`
@@ -156,9 +158,11 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   default branch only, like the signed keys and owners (an unreadable one lists none; an entry
   that does not end in `[bot]` is a config error), accepts a listed bot's comment only when the
   comment's `user.type` is `Bot`, its PR targets the default branch (a decoy PR into another
-  branch cannot mint a green verdict on a head later merged to main), it carries the
-  `<!-- bosun:reviewer … -->` marker and its `head_sha` is the current head (each miss is a
-  neutral refusal); its record names the session `bot:<login>`, whatever the marker says, and a
+  branch cannot mint a green verdict on a head later merged to main), it holds a verdict and its
+  `head_sha` is the current head (each miss is a neutral refusal); a listed bot's comment needs no
+  markers: without `<!-- bosun:verdict -->`, its verdict is the one top-level fenced ```json block that
+  is a valid verdict (a json block inside another fence is ignored; two valid ones are "no single
+  verdict", a neutral refusal); its record names the session `bot:<login>`, whatever the marker says, and a
   newer verdict comment of the same bot for the head replaces an older one whatever their markers;
   a bot verdict sets `review-verdict` only: a `bot:` session never counts toward two verdicts, a
   delegate's clean verdict, the D-017 autonomous verdict or a carried verdict, since it may be the
