@@ -567,7 +567,8 @@ fn merge_words(command: &str) -> Vec<String> {
 /// to merge and also exports, unsets, declares or assigns `BOSUN_*` or `CLAUDE_CODE_CHILD_SESSION`
 /// anywhere in it (a subshell, an earlier statement, `set -a`) is refused. The bosun word may be
 /// hidden in a variable or substitution (`b=bosun; $b merge 1`, `$(which bosun) merge 1`).
-/// Best effort: a file that is sourced, or a name built at run time, is missed.
+/// `${!name}` indirect expansion counts as tamper too. Best effort: a file that is sourced, or a
+/// name built at run time by other means, is missed.
 fn merge_env_tamper(command: &str) -> Option<String> {
     let words = merge_words(command);
     let runs_bosun = words
@@ -595,7 +596,10 @@ fn merge_env_tamper(command: &str) -> Option<String> {
                 .find(|w| !w.contains('=') || w.starts_with('$'))
                 .is_some_and(|w| w.starts_with('$') || w.starts_with('`'))
     });
-    (assigns || verb_names || set_a || indirect).then(|| {
+    // `${!name}` expands the variable `name` points to: the identity variable can be named at
+    // run time (`n=BOSUN_SESSION; export ${!n}=x`).
+    let by_name = command.contains("${!");
+    (assigns || verb_names || set_a || indirect || by_name).then(|| {
         "a command that runs `bosun merge` may not set, export or unset BOSUN_* or \
          CLAUDE_CODE_CHILD_SESSION: the merge checks the caller's own identity (D-019); run \
          `bosun merge <pr>` bare"
@@ -7318,6 +7322,8 @@ mod tests {
             "declare -x BOSUN_SESSION=x; bosun merge 1",
             "typeset -x BOSUN_SESSION=x; bosun merge 1",
             "set -a; bosun merge 1",
+            "n=BOSUN_SESSION; export ${!n}=x; bosun merge 1",
+            "echo ${!n}; bosun merge 1",
         ] {
             assert!(hit(c), "{c}");
         }
