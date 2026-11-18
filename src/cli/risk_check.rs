@@ -459,6 +459,15 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     ]
 }
 
+/// No-CI mode (spec §4): judge `pull` as the risk workflow would, with a writer that posts nothing.
+pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
+    judge(
+        app,
+        &GateWriter::statuses(app.gh.as_ref()).dry(true),
+        pull.clone(),
+    )
+}
+
 fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;

@@ -11,6 +11,7 @@ use super::PrArgs;
 use super::reap::{EpicScope, close_done_epics};
 use super::stamps;
 use crate::app::{App, default_branch, kill_switch, set_state, sync_merged, trusted_notes};
+use crate::config::CiProvider;
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
@@ -298,7 +299,11 @@ fn touch_check(
 
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
-pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(), BosunError> {
+pub(crate) fn check_local_gates(
+    app: &App,
+    rerun: &str,
+    pull: &Pull,
+) -> Result<Vec<String>, BosunError> {
     let (n, dir) = (pull.number, app.ctx.dir.as_path());
     let local = stamps::head_sha(dir).ok_or_else(|| {
         BosunError::error(
@@ -326,12 +331,13 @@ pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(
             "run bosun inside the repo checkout",
         )
     })?;
-    let missing: Vec<String> = stamps::ready_gates(dir)?
-        .into_iter()
+    let all = stamps::ready_gates(dir)?;
+    let missing: Vec<String> = (all.iter())
         .filter(|g| !stamps::has(dir, &tree, g))
+        .cloned()
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return Ok(all);
     }
     Err(BosunError::error(
         format!(
@@ -603,6 +609,9 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     "split the work, or plan it (`bosun plan import`) so it gets a sized task, then rerun",
                 ));
             }
+        }
+        if super::pr_no_ci::provider_at(gh, &pull.base_sha)? == CiProvider::None {
+            return super::pr_no_ci::ready(&app, n, &issue, pull);
         }
         check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;

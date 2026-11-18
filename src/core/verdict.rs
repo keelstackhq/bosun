@@ -1,6 +1,7 @@
 //! The reviewer's verdict (spec §7): shape, validation and the rule that decides approval.
 
 use crate::core::meta::linked_issues;
+use crate::core::risk::VERDICT_MIN_CONFIDENCE;
 use serde::{Deserialize, Serialize};
 
 /// A verdict approves only at or above this confidence.
@@ -243,6 +244,49 @@ pub fn comment_json(body: &str) -> Option<&str> {
         line_start && !after.starts_with('`')
     });
     Some(fenced[..end.unwrap_or(fenced.len())].trim())
+}
+
+/// No-CI mode: the reviewer sessions whose newest verdict comment on PR `pr` at `head` is clean
+/// (approve, confidence at least [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, every chunk
+/// `1..=chunks` listed), unedited, not `excluded`, with a session and, when `models` is set, one
+/// of those models. Any session whose newest verdict there is not clean blocks: then none count.
+/// `comments` are `(body, unedited)` oldest first, from writers only.
+pub fn comment_clean<'a>(
+    comments: impl IntoIterator<Item = (&'a str, bool)>,
+    pr: u64,
+    head: &str,
+    excluded: &[String],
+    models: Option<&[String]>,
+    chunks: usize,
+) -> Vec<String> {
+    let mut newest: Vec<(String, bool, bool)> = Vec::new();
+    for (body, unedited) in comments {
+        let Some(v) = comment_json(body).and_then(|t| Verdict::parse(t).ok()) else {
+            continue;
+        };
+        if v.pr != pr || v.head_sha != head {
+            continue;
+        }
+        let session = comment_session(body).unwrap_or("unknown");
+        let listed = |k: u32| v.chunks_reviewed.contains(&k) || comment_chunks(body).contains(&k);
+        let clean = effective(&v).approve
+            && !v.escalate_risk
+            && (chunks <= 1 || (1..=chunks as u32).all(listed))
+            && v.count("major") == 0
+            && v.confidence >= VERDICT_MIN_CONFIDENCE;
+        let model_ok =
+            models.is_none_or(|m| comment_model(body).is_some_and(|x| m.iter().any(|y| y == x)));
+        let counts =
+            unedited && model_ok && session != "unknown" && !excluded.iter().any(|e| e == session);
+        newest.retain(|(s, ..)| s != session);
+        newest.push((session.to_string(), clean, counts));
+    }
+    if newest.iter().any(|(_, clean, _)| !clean) {
+        return Vec::new();
+    }
+    (newest.into_iter())
+        .filter_map(|(s, _, counts)| counts.then_some(s))
+        .collect()
 }
 
 #[cfg(test)]

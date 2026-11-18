@@ -1,0 +1,1 @@
+- `bosun pr --ready` with `[ci] provider = "none"` checks stamps, risk, verdict and main-open locally and queues the task; `approve --list` reads the ready summary.
