@@ -28,7 +28,14 @@ fn ready(fake: &FakeGithub, n: u64, title: &str, head: &str) {
 }
 
 fn list(fake: &FakeGithub, origin: Option<&str>) -> Value {
+    list_in(fake, origin, None)
+}
+
+fn list_in(fake: &FakeGithub, origin: Option<&str>, dir: Option<&std::path::Path>) -> Value {
     let mut cmd = bosun();
+    if let Some(d) = dir {
+        cmd.current_dir(d);
+    }
     cmd.env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_OWNER_TOKEN", "canary-owner-token-7f3a")
         .env("BOSUN_HTTP_MAX_SLEEP_MS", "0")
@@ -164,4 +171,33 @@ fn question_ids_stable_per_now() {
     let b = list(&fake, None);
     assert_eq!(a["next"], b["next"]);
     assert_eq!(a["data"]["ready"][0]["ask"], b["data"]["ready"][0]["ask"]);
+}
+
+#[test]
+fn list_slack_origin_carries_configured_channel() {
+    let fake = FakeGithub::start();
+    ready(&fake, 12, "gov change", &head("abc1234"));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(
+        dir.path().join(".bosun/bosun.toml"),
+        "[slack]\nchannel = \" C9 \"\n",
+    )
+    .unwrap();
+    let v = list_in(&fake, Some("slack"), Some(dir.path()));
+    assert_eq!(v["next"][0]["args"]["channel"], json!("C9"), "{v}");
+}
+
+#[test]
+fn list_title_with_owner_token_is_not_printed() {
+    let fake = FakeGithub::start();
+    ready(
+        &fake,
+        12,
+        "leak canary-owner-token-7f3a here",
+        &head("abc1234"),
+    );
+    // `list` asserts the token is absent from stdout (data and next).
+    let v = list(&fake, None);
+    assert!(v["next"].as_array().is_some(), "{v}");
 }

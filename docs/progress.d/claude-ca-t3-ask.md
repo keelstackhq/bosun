@@ -1,1 +1,0 @@
-- Chat approval T3: `approve --list` returns `ask` + `next`.

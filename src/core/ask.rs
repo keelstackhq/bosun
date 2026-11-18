@@ -44,7 +44,7 @@ pub fn ask(repo: &str, item: &Item, unix: i64) -> Value {
 fn line(repo: &str, item: &Item) -> String {
     let risk = match item.risk {
         [] => "none named".to_string(),
-        r => r.join(", "),
+        r => shown(&r.join(", "), TITLE_MAX),
     };
     format!(
         "{repo}#{} {} (risk {risk}; head {} = {}; verdict: {})",
@@ -86,7 +86,7 @@ pub fn ask_user_question(repo: &str, items: &[Item], unix: i64) -> Option<Value>
         })
         .collect();
     options.push(json!({"label": "Hold",
-        "description": "Approve nothing now; not asked again for these heads"}));
+        "description": "Approve nothing now"}));
     Some(
         json!({"questions": [{"question": question, "header": "Approve",
         "multiSelect": multi, "options": options}]}),

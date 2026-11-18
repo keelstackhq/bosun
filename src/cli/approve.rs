@@ -82,7 +82,7 @@ const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on a
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; approve or hold; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const LIST_HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; only the orchestrator asks, a child session hands the question to the orchestrator; approve or hold; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 #[derive(Default)]
 pub(crate) struct Board {

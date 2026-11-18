@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T3 · approve --list: per-PR `ask` and the owner question in `next` (orchestrator-only) · this PR
