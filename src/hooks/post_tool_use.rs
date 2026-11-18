@@ -28,12 +28,21 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         eprintln!("bosun: warning: no cwd; the owner's answer is not stored");
         return None;
     };
-    let Some(repo) = crate::ctx::repo_at(&dir) else {
-        eprintln!("bosun: warning: cannot tell the repo; the owner's answer is not stored");
-        return None;
+    // The bosun identity, resolved exactly as the CLI resolves it (same environment), so
+    // `approve --chat` in this session finds it; the CLI's own UUID is kept for audit.
+    let ctx = match crate::ctx::Ctx::load(Some(&dir)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "bosun: warning: cannot tell the repo or session; the owner's answer is not stored: {}",
+                e.message
+            );
+            return None;
+        }
     };
     for (_, a) in &mut items {
-        a.repo = repo.to_string();
+        a.repo = ctx.repo.to_string();
+        a.session = ctx.session.clone();
     }
     if let Err(e) = answers::store(&dir, &items) {
         eprintln!("bosun: warning: cannot store the owner's answer: {e}");
@@ -131,7 +140,8 @@ pub fn parse(input: &Value, at: &str) -> Vec<(String, Answer)> {
                 pr,
                 head,
                 at: at.into(),
-                session_id: field("session_id"),
+                session: String::new(),
+                cli_session_id: field("session_id"),
                 tool_use_id: field("tool_use_id"),
             };
             out.push((id, a));
