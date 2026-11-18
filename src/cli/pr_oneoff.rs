@@ -110,18 +110,26 @@ fn check_touch(app: &App, touch: &[String]) -> Result<(), BosunError> {
     let allow = super::risk_check::autonomous_allow(gh, &base)?;
     let allow = autonomous_allow_globs(allow.as_deref());
     let gated = gated_from_default(gh)?;
+    // The owner's `[approvals] oneoff_allow`: such a glob may reach a gated path too (README,
+    // .github, Cargo.toml); risk-check still asks the owner for it.
+    let extra = super::risk_check::oneoff_allow(gh, &base)?;
+    let mut rest = Vec::new();
     for raw in touch {
         let g = Glob::parse(raw).map_err(|e| BosunError::usage(e, "pass plain path globs"))?;
+        if extra.iter().any(|a| a.covers(&g)) {
+            continue;
+        }
+        rest.push(raw.clone());
         if !allow.iter().any(|a| a.covers(&g)) {
             return Err(BosunError::conflict(
                 format!("--touch `{raw}` is outside the paths a one-off may edit on {base}"),
-                "a one-off covers only the autonomous allow set (src/**, tests/**, docs/**, changelog.d/**, .changeset/*.md, or the owner's `[approvals] autonomous_allow`): plan the work instead (`bosun plan import`)",
+                "a one-off covers only the autonomous allow set (src/**, tests/**, docs/**, changelog.d/**, .changeset/*.md, or the owner's `[approvals] autonomous_allow`) and the owner's `[approvals] oneoff_allow`: plan the work instead (`bosun plan import`)",
             ));
         }
     }
     // As a plan task: a gated glob over the touch, wildcards resolved against the base's files.
     let files = base_files(gh)?;
-    let hit = touch_gated_in(touch, &gated, files.as_deref())
+    let hit = touch_gated_in(&rest, &gated, files.as_deref())
         .map_err(|e| BosunError::conflict(e, "name the files the PR edits, without wildcards"))?;
     if hit {
         return Err(BosunError::conflict(

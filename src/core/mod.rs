@@ -34,6 +34,7 @@ pub mod refusal;
 pub mod render;
 pub mod repeat;
 pub mod review;
+pub mod review_loop;
 pub mod risk;
 pub mod shape;
 pub mod signature;

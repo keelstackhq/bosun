@@ -250,6 +250,11 @@ pub struct Approvals {
     /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_models: Option<Vec<String>>,
+    /// Bot logins (`claude[bot]`) whose verdict comments `verdict apply` accepts although they
+    /// lack write access: only with the reviewer marker and for the current head. Read from the
+    /// PR's base, never its head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict_bots: Option<Vec<String>>,
     /// Opt in to the CI signer (`bosun approve --as signer`, D-017 keyless lane, spec §8). Off by
     /// default; turning it on is R-weaken (any `[approvals]` change is). A pinned release older
     /// than the one that adds this key fails to parse it: pin first, then set it.
@@ -260,6 +265,10 @@ pub struct Approvals {
     /// the owner's (R-weaken).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autonomous_allow: Option<Vec<String>>,
+    /// Globs a task-less PR (`bosun pr --pr N`, `--one-off`) may change beside the governance
+    /// paths, gated ones included: risk-check still asks the owner for those. Read at the base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oneoff_allow: Option<Vec<String>>,
     /// `policy` came from the `[mode]` preset, not from this table.
     #[serde(skip)]
     pub policy_preset: bool,
@@ -483,6 +492,16 @@ impl Config {
                 ));
             }
         }
+        let bots = c.approvals.verdict_bots.iter().flatten();
+        if let Some(b) = bots
+            .into_iter()
+            .find(|b| !b.ends_with("[bot]") || b.len() <= 5)
+        {
+            return Err(BosunError::error(
+                format!("{file}: approvals.verdict_bots entry {b:?} is not a bot login"),
+                format!("edit {file}: list bot logins only, such as \"claude[bot]\""),
+            ));
+        }
         if c.routines.janitor && !valid_cron(&c.routines.janitor_cron) {
             return Err(BosunError::error(
                 format!(
@@ -510,6 +529,12 @@ impl Config {
             return Err(BosunError::error(
                 format!("{file}: policy is not a [mode] key"),
                 format!("edit {file}: set [approvals] policy, or remove mode.policy"),
+            ));
+        }
+        if c.mode.review_rounds == Some(0) {
+            return Err(BosunError::error(
+                format!("{file}: mode.review_rounds must be at least 1"),
+                format!("edit {file}: set review_rounds to 1 or more, or remove it"),
             ));
         }
         // The preset fills the policy only when `[approvals]` leaves it unset.

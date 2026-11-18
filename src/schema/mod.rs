@@ -229,8 +229,11 @@ pub fn envelope(command: Option<&str>, data: Value) -> Value {
         "anyOf": [
             {"properties": {"ok": {"const": true}, "exit_code": {"const": 0},
                 "data": data, "error": {"type": "null"}}},
-            {"properties": {"ok": {"const": false}, "exit_code": {"enum": [1, 2, 3, 4, 5, 6]},
+            {"properties": {"ok": {"const": false}, "exit_code": {"enum": [1, 2, 3, 4, 6]},
                 "error": error, "next": {"maxItems": 0}}},
+            // Only `bosun pr` on an already clean PR hands over a `send_message` (spec §1).
+            {"properties": {"ok": {"const": false}, "exit_code": {"const": 5},
+                "error": error, "next": {"maxItems": 1}}},
         ],
     })
 }

@@ -156,7 +156,7 @@ fn repo_session_rules_cover_the_own_task_loop() {
 #[test]
 fn owners_name_the_repo_owner() {
     let owners = parse_owners(&read("governance/owners.toml")).unwrap();
-    assert_eq!(owners[0].github, "urbanisierung");
+    assert_eq!(owners[0].github.as_deref(), Some("urbanisierung"));
     assert!(read(".github/CODEOWNERS").contains("/.bosun/ "));
 }
 

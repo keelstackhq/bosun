@@ -464,3 +464,18 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-16 · Close merge-lock ref gaps · symbolic-ref tags, brace refspecs, local fetch into main or from a variable, git subcommand in a variable · PR
 - 2026-11-16 · R-secrets gaps: unquoted yaml, php `=>` and Kubernetes env value literals now match, minus Laravel casts and rules, durations and paths; FP corpus (1.94M lines, outside this repo) 288 flags on main, 289 after (the one new flag is a real committed token) · PR
 - 2026-11-15 · Release 0.17.0 · version bump, CHANGELOG (audit hardening #589), tool pins unchanged (splice 0.5.1 hoist 0.5.1 berth 0.2.1) · release PR
+- 2026-11-16 · Pin bosun 0.18.0, splice 0.6.0 · .bosun/version, setup scripts (own and channel) version and sha512 pins, splice.yml action v0.6.0 · pin PR
+- 2026-11-16 · Spec 04: the merge-lock fetch and remote rules, misses and over-denials moved into a wrapped paragraph (docs only) · PR
+- 2026-11-16 · Close fetch-config and remote gaps in the merge-lock · exported and `git config` fetch refspecs, path remotes with `:`, unknown remotes, read-only brace sequences · PR
+- 2026-11-16 · Merge-lock reads resolved fetch config at hook time · configured refspecs, ext::/fd:: protocol config, git-core programs, known limits listed · PR
+- 2026-11-16 · Merge-lock: expansions and git-core programs in git option values · PR
+- 2026-11-16 · R-secrets: single-quoted `'$...'` arrow literals now match · FP corpus (8.01M lines, outside this repo) 1361 flags on main, 1361 after · PR
+- 2026-11-16 · Release 0.18.0 · version bump, fold, CHANGELOG (hoist 0.5.1 in release.yml #598, guard heredoc prose #599, R-secrets gaps #600, guard ref gaps #601) · release PR
+- 2026-11-17 · Pin bosun 0.19.0 · .bosun/version, docs/setup-script.sh version and sha512 pins · pin PR
+- 2026-11-17 · Release 0.19.0 · version bump, fold, CHANGELOG (guard fetch/pull allowlist #603 #607 #608, R-secrets single-quoted $ literals #604, spec wrap #609) · release PR
+- 2026-11-17 · Feat · agent ergonomics: clean-PR hand-over, metrics limits, global --full, doctor notify fallback and merge identity · feat/agent-ergonomics
+- 2026-11-17 · G3 docs-only stamp carry-over, G6 R-weaken test-code dead_code exemption, ASCII arrow, risk-check --local · src/cli/stamps.rs, src/core/weaken.rs, src/cli/risk_local.rs, docs/spec/07-gates.md, docs/spec/08-risk.md · gated PR
+- 2026-11-17 · G7 one governance path list · M5 `[approvals] oneoff_allow` · G10 `bosun owners set` (team entries) and migrate intake seed · gated PR
+- 2026-11-17 · review flow M7 M8 M10 M14 C11 · owner clears escalation, verdict bots, fix tasks, pack checks and stamps · review-flow PR
+- 2026-11-17 · C6 bosun rules --write + doctor step 18, G1 ci-minutes with the head pin · src/cli/rules.rs, src/hooks/session_rules.rs, src/cli/doctor.rs, .github/workflows/ci.yml, docs/spec/04-lifecycle.md, docs/spec/07-gates.md · gated PR
+- 2026-11-17 · Cloud proxy · result --session-json spend, cloud skips collaborator reads, GET reset retry, migrate budget 600 s, any /graphql 403 hands back the MCP call · PR (fix/cloud-proxy)

@@ -23,6 +23,15 @@ fn budget_secs(explicit: Option<&str>, ci: bool) -> u64 {
     }
 }
 
+/// `bosun migrate` makes many calls; its budget unless `BOSUN_HTTP_BUDGET_SECS` says otherwise.
+pub const MIGRATE_BUDGET_SECS: u64 = 600;
+
+/// The budget `migrate` sets: `None` when the variable is set or this is CI (both already decide).
+pub fn migrate_budget(explicit: Option<&str>, ci: bool) -> Option<u64> {
+    let set = explicit.is_some_and(|v| v.trim().parse::<u64>().is_ok());
+    (!set && !ci).then_some(MIGRATE_BUDGET_SECS)
+}
+
 /// Percent-encode a path segment or query value.
 pub fn enc(s: &str) -> String {
     let mut out = String::new();
@@ -385,12 +394,19 @@ impl Http {
             ));
         }
         let mut attempt = 1;
+        let mut reset_retried = false;
         loop {
             self.check_budget(method, path, 0)?;
             let t0 = Instant::now();
             let r = self.once(method, path, body);
             self.used_ms
                 .fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+            // A reset connection (a proxy dropping a kept-alive socket) is retried once, for
+            // reads only: a repeated write could post twice.
+            if r.is_err() && method == "GET" && !reset_retried {
+                reset_retried = true;
+                continue;
+            }
             let r = r?;
             let limited = r.status == 429
                 || (r.status == 403 && (r.retry_after.is_some() || r.rate_remaining_zero));
@@ -576,6 +592,51 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn migrate_gets_600_seconds_unless_set_or_ci() {
+        assert_eq!(migrate_budget(None, false), Some(600));
+        assert_eq!(migrate_budget(Some("30"), false), None);
+        assert_eq!(migrate_budget(Some("0"), false), None);
+        assert_eq!(migrate_budget(None, true), None);
+        assert_eq!(migrate_budget(Some("junk"), false), Some(600));
+    }
+
+    #[test]
+    fn a_reset_get_is_retried_once_but_a_post_is_not() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        let t = std::thread::spawn(move || {
+            let mut seen = 0;
+            for conn in l.incoming().take(3) {
+                let mut c = conn.unwrap();
+                seen += 1;
+                if seen == 1 || seen == 3 {
+                    continue; // drop: a reset before any response
+                }
+                let mut buf = [0u8; 1024];
+                let _ = c.read(&mut buf);
+                let body = "{\"ok\":1}";
+                let _ = write!(
+                    c,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+            seen
+        });
+        let http = Http::new(&url, "", 0);
+        assert!(
+            http.request("GET", "/x", None).is_ok(),
+            "one retry heals a reset"
+        );
+        assert!(
+            http.request("POST", "/x", Some(&serde_json::json!({})))
+                .is_err()
+        );
+        drop(t);
+    }
 
     #[test]
     fn an_empty_or_blank_api_url_counts_as_unset() {

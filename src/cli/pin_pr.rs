@@ -35,7 +35,7 @@ pub enum Pre {
     Go(Box<App>, String, String),
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     // A runner with no git identity still commits, as bosun.
     let id = [
         "-c",
@@ -70,7 +70,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
                 args.join(" "),
                 String::from_utf8_lossy(&out.stderr).trim()
             ),
-            "fix the git error above, then rerun `bosun pin --latest --pr`",
+            "fix the git error above, then rerun",
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())

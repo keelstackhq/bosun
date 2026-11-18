@@ -21,7 +21,8 @@ pub use cli::{Cli, Command};
 pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
-pub fn run(cli: Cli) -> CmdResult {
+pub fn run(mut cli: Cli) -> CmdResult {
+    cli.apply_full();
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => cli::join::run(dir, a),
@@ -39,11 +40,13 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::RiskCheck(a) => cli::risk_check::run(dir, a),
         Command::TestIntegrity(a) => cli::test_integrity::run(dir, a),
         Command::ReviewPack(a) => cli::review_pack::run(dir, a),
+        Command::ReviewLoop(a) => cli::review_loop::run(dir, a),
         Command::Verdict(a) => cli::verdict::run(dir, a),
         Command::Pr(a) => cli::pr::run(dir, a),
         Command::CiLog(a) => cli::ci_log::run(dir, a),
         Command::Status => cli::status::run(dir),
         Command::Mode => cli::mode::run(dir),
+        Command::Rules(a) => cli::rules::run(dir, a.write),
         Command::Heal(a) => cli::heal::run(dir, a),
         Command::Digest(a) => cli::digest::run(dir, a),
         Command::Metrics(a) => cli::metrics::run(dir, a),
@@ -75,6 +78,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Uninstall(a) => cli::uninstall::run(dir, a),
         Command::Pin(a) => cli::pin::run(dir, a),
         Command::Migrate(a) => cli::migrate::run(dir, a),
+        Command::Owners(a) => cli::owners::run(dir, a),
         Command::SetupSnippet => cli::setup_snippet::run(dir),
         Command::Schema(a) => cli::schema::run(a),
     }

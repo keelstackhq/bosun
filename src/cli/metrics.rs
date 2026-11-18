@@ -62,11 +62,88 @@ fn ci(gh: &dyn Github, sha: &str, excuse: bool) -> Result<Option<HeadCi>> {
     Ok(ci_head(&runs, excuse))
 }
 
-fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
+/// PRs read per run unless `--max-prs` says otherwise.
+const MAX_PRS: usize = 100;
+
+/// A wall-clock limit (`BOSUN_METRICS_TIMEOUT_SECS`, default 90, fractions allowed, 0 = none), so
+/// `metrics` ends with an error line instead of hanging behind a slow API. The HTTP budget
+/// (spec §1) caps the calls; this caps the whole walk, local work included.
+struct Clock {
+    start: std::time::Instant,
+    limit: Option<f64>,
+    quiet: bool,
+}
+
+impl Clock {
+    fn new() -> Result<Self> {
+        let limit = match std::env::var("BOSUN_METRICS_TIMEOUT_SECS") {
+            Err(_) => Some(90.0),
+            Ok(v) => match v.trim().parse::<f64>() {
+                Ok(s) if s.is_finite() && s >= 0.0 => (s > 0.0).then_some(s),
+                _ => {
+                    return Err(BosunError::usage(
+                        format!(
+                            "BOSUN_METRICS_TIMEOUT_SECS={:?} is not a number of seconds (0 or more)",
+                            v.trim()
+                        ),
+                        "set BOSUN_METRICS_TIMEOUT_SECS to seconds (default 90; 0 = no limit), or unset it",
+                    ));
+                }
+            },
+        };
+        Ok(Clock {
+            start: std::time::Instant::now(),
+            limit,
+            quiet: false,
+        })
+    }
+
+    /// No limit and no progress lines: for the brake that `heal` and `wave tick` read.
+    fn silent() -> Self {
+        Clock {
+            start: std::time::Instant::now(),
+            limit: None,
+            quiet: true,
+        }
+    }
+
+    fn check(&self, done: usize, total: usize, what: &str) -> Result<()> {
+        let spent = self.start.elapsed().as_secs_f64();
+        match self.limit {
+            Some(l) if spent > l => {
+                let message =
+                    format!("metrics timed out after {spent:.0}s ({done} of {total} {what} read)");
+                eprintln!("{message}");
+                Err(BosunError::error(
+                    message,
+                    "narrow it (`bosun metrics --days 1`, or `--max-prs 20`), or raise BOSUN_METRICS_TIMEOUT_SECS (0 = no limit)",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The PRs read, and how many newer-first PRs past the cap were left out.
+struct Collected {
+    facts: Vec<Facts>,
+    skipped: usize,
+}
+
+fn collect(app: &App, since: Timestamp, max_prs: usize, clock: &Clock) -> Result<Collected> {
     let gh = app.gh.as_ref();
     let repo = app.ctx.repo.to_string();
     let mut out = Vec::new();
-    for pull in gh.list_pulls_updated_since(&since.to_string())? {
+    let mut pulls = gh.list_pulls_updated_since(&since.to_string())?;
+    // Newest update first: the cap keeps the PRs that matter most to the window.
+    let skipped = pulls.len().saturating_sub(max_prs);
+    pulls.truncate(max_prs);
+    let total = pulls.len();
+    for (i, pull) in pulls.into_iter().enumerate() {
+        clock.check(i, total, "PRs")?;
+        if !clock.quiet {
+            eprintln!("metrics: PR {}/{total} (#{})", i + 1, pull.number);
+        }
         // A fork's heads are not ours to count; its merge into main is.
         let (mut heads, mut rate) = (Vec::new(), false);
         if pull.head_repo.eq_ignore_ascii_case(&repo) {
@@ -95,13 +172,17 @@ fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
             rate,
         });
     }
-    Ok(out)
+    Ok(Collected {
+        facts: out,
+        skipped,
+    })
 }
 
 /// The brake inputs over the last 7 days. Later commands call this, then `core::mode::brake`.
 pub fn window(app: &App) -> Result<BrakeWindow> {
     let since = app.ctx.now.minus_secs(i64::from(BRAKE_DAYS) * DAY);
-    brake_window(app, &collect(app, since)?, since)
+    let c = collect(app, since, usize::MAX, &Clock::silent())?;
+    brake_window(app, &c.facts, since)
 }
 
 fn brake_window(app: &App, facts: &[Facts], since: Timestamp) -> Result<BrakeWindow> {
@@ -228,7 +309,9 @@ fn trusted_blocks(gh: &dyn Github, all: &[Facts], start: Timestamp) -> Result<Ve
 /// Read-only; the curator Routine opens the PR (R-weaken, so the owner decides).
 fn propose(app: &App, days: u32) -> CmdResult {
     let start = app.ctx.now.minus_secs(i64::from(days) * DAY);
-    let all = trusted_blocks(app.gh.as_ref(), &collect(app, start)?, start)?;
+    let c = collect(app, start, MAX_PRS, &Clock::new()?)?;
+    let skipped = c.skipped;
+    let all = trusted_blocks(app.gh.as_ref(), &c.facts, start)?;
     // Only rules the base `.bosun/risk.toml` defines can be loosened there (not built-ins
     // such as R-bundle, not ids of a stale or forged note).
     let gh = app.gh.as_ref();
@@ -246,14 +329,25 @@ fn propose(app: &App, days: u32) -> CmdResult {
     let found = proposals(&all, &defined, days).into_iter().map(|p| {
         json!({"rule": p.rule, "blocks": p.blocks, "prs": p.prs, "title": p.title, "body": p.body})
     });
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "days": days, "since": start.to_string(), "curator_loosen": knob.as_str(),
         "proposals": found.collect::<Vec<_>>(),
-    })))
+    });
+    if skipped > 0 {
+        data["capped"] = json!({"max_prs": MAX_PRS, "skipped": skipped});
+    }
+    Ok(Outcome::data(data))
 }
 
 pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
-    if args.days == 0 {
+    if args.max_prs == 0 {
+        return Err(BosunError::usage(
+            "--max-prs must be at least 1",
+            "pass --max-prs 100",
+        ));
+    }
+    let days = args.days;
+    if days == 0 {
         return Err(BosunError::usage(
             "--days must be at least 1",
             "pass --days 30",
@@ -261,12 +355,16 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     }
     let app = App::load(dir)?;
     if args.propose {
-        return propose(&app, args.days);
+        return propose(&app, days);
     }
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
-    let start = now.minus_secs(i64::from(args.days) * DAY);
+    let start = now.minus_secs(i64::from(days) * DAY);
     let b7 = now.minus_secs(i64::from(BRAKE_DAYS) * DAY);
-    let all = collect(&app, start.min(b7))?;
+    let clock = Clock::new()?;
+    let Collected {
+        facts: all,
+        skipped,
+    } = collect(&app, start.min(b7), args.max_prs, &clock)?;
     let w = brake_window(&app, &all, b7)?;
     let eff = app.ctx.config.mode_effective();
     let state = brake(eff.mode, &w);
@@ -277,12 +375,15 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let mut paid: BTreeSet<u64> = BTreeSet::new();
     let mut epics: BTreeMap<u64, (Option<Timestamp>, Timestamp)> = BTreeMap::new();
     let mut threads: BTreeSet<u64> = BTreeSet::new();
+    let mut n_seen = 0;
     for f in all.iter().filter(|f| {
         ts(&f.pull.created_at).is_some_and(|t| t >= start)
             || in_days(&f.pull.merged_at)
             || in_days(&f.pull.closed_at)
     }) {
         threads.insert(f.pull.number);
+        n_seen += 1;
+        clock.check(n_seen, all.len(), "PRs")?;
         let task = closing_issues(&f.pull.body).first().copied();
         threads.extend(task);
         let Some(at) = ts(&f.pull.merged_at).filter(|t| *t >= start) else {
@@ -321,7 +422,8 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let owners = owner_logins(gh, &default_branch(gh)?)?;
     let keys = enrolled_keys(gh).unwrap_or_default();
     let mut touches = 0;
-    for n in &threads {
+    for (i, n) in threads.iter().enumerate() {
+        clock.check(i, threads.len(), "threads")?;
         for c in gh.list_comments(*n)? {
             // A body with a signature line is judged by its signature alone.
             let signed = c.body.lines().any(|l| l.trim().starts_with("bosun-sig "));
@@ -339,9 +441,10 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let (pushed, failing) = all.iter().fold((0, 0), |a, f| rate_add(f, start, a));
     let rate =
         (pushed > 0).then(|| (f64::from(failing) * 1000.0 / f64::from(pushed)).round() / 10.0);
-    Ok(Outcome::data(json!({
-        "days": args.days, "since": start.to_string(), "mode": eff.mode.as_str(),
+    let mut data = json!({
+        "days": days, "since": start.to_string(), "mode": eff.mode.as_str(),
         "brake": {"knob": eff.knobs.brake.value.as_str(), "on": state.on, "reasons": state.reasons,
+            "capped": skipped > 0,
             "window": {"days": w.days, "main_red": w.main_red, "reverts": w.reverts,
                 "failing_heads": w.failing_heads, "pushed_heads": w.pushed_heads}},
         "red_ci": {"failing_heads": failing, "pushed_heads": pushed, "rate_pct": rate},
@@ -350,7 +453,15 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
         "lead_time_p50_hours": p50(&mut hours).map(round2),
         "epics": hours.len(),
         "owner_touches": touches,
-        "owner_touches_per_day": round2(f64::from(touches) / f64::from(args.days)),
+        "owner_touches_per_day": round2(f64::from(touches) / f64::from(days)),
         "blocks": blocks.iter().map(|(r, (b, c, p))| json!({"rule": r, "blocks": b.len(), "caught": c, "passed": p})).collect::<Vec<_>>(),
-    })))
+    });
+    if skipped > 0 {
+        eprintln!(
+            "metrics: {skipped} older PRs left out (--max-prs {})",
+            args.max_prs
+        );
+        data["capped"] = json!({"max_prs": args.max_prs, "skipped": skipped});
+    }
+    Ok(Outcome::data(data))
 }

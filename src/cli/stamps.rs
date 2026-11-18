@@ -26,6 +26,17 @@ pub fn head_tree(dir: &Path) -> Option<String> {
     git_out(dir, &["rev-parse", "HEAD^{tree}"])
 }
 
+/// The tree of commit `sha`; `None` when the checkout does not have it.
+pub fn tree_of(dir: &Path, sha: &str) -> Option<String> {
+    let hex = !sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit());
+    hex.then(|| {
+        git_out(
+            dir,
+            &["rev-parse", "--verify", "-q", &format!("{sha}^{{tree}}")],
+        )
+    })?
+}
+
 /// The full sha of `HEAD`.
 pub fn head_sha(dir: &Path) -> Option<String> {
     git_out(dir, &["rev-parse", "HEAD"])
@@ -100,6 +111,41 @@ pub fn write(dir: &Path, gate: &str, skipped: bool) -> Result<PathBuf, String> {
 /// Whether `gate` is stamped for `tree`.
 pub fn has(dir: &Path, tree: &str, gate: &str) -> bool {
     stamp_file(dir, tree, gate).is_some_and(|p| p.is_file())
+}
+
+/// Whether `rev` is vouched for by an ancestor (at most 50 back) whose tree has every one of
+/// `gates` stamped, with only docs changed since (spec §7: stamps carry over docs-only diffs).
+/// `git` runs a git command in the pushing checkout. Not for a ts-pnpm stack (prettier checks
+/// Markdown): every stack must be `rust`, as CI's fast path.
+pub fn carried(
+    root: &Path,
+    rev: &str,
+    gates: &[String],
+    git: &dyn Fn(&[&str]) -> Option<String>,
+) -> bool {
+    let rust = Config::load(root).is_ok_and(|c| c.stack.iter().all(|s| s.profile == "rust"));
+    let Some(revs) = git(&["rev-list", "--max-count=50", rev]).filter(|_| rust) else {
+        return false;
+    };
+    for c in revs.lines().skip(1) {
+        let Some(tree) = git(&["rev-parse", &format!("{c}^{{tree}}")]) else {
+            return false;
+        };
+        if gates.iter().all(|g| has(root, &tree, g)) {
+            // A diff git cannot print vouches for nothing (the same tree needs no carry-over).
+            let diff = git(&[
+                "diff",
+                "--no-relative",
+                "--no-renames",
+                "--name-only",
+                c,
+                rev,
+                "--",
+            ]);
+            return diff.is_some_and(|d| d.lines().all(crate::core::stamps::docs_only));
+        }
+    }
+    false
 }
 
 /// The gates a PR must have passed before it leaves draft, for the repo's configured stacks.

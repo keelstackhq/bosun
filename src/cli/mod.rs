@@ -34,6 +34,7 @@ pub mod migrate;
 pub mod mode;
 pub mod msg;
 pub mod notify;
+pub mod owners;
 pub mod pin;
 pub mod pin_pr;
 pub mod plan;
@@ -50,8 +51,11 @@ pub mod release;
 pub mod result;
 pub mod resume;
 pub mod revert;
+pub mod review_loop;
 pub mod review_pack;
 pub mod risk_check;
+pub mod risk_local;
+pub mod rules;
 pub mod schema;
 pub mod spawn;
 pub mod spawn_relay;
@@ -92,8 +96,32 @@ pub struct Cli {
     /// Log API calls and child commands to stderr.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+    /// Print everything. Commands with a summary view (doctor, progress, plan import and
+    /// amend) list only what needs action by default; `--full` is the same flag for all of them,
+    /// before or after the command name, and a no-op elsewhere.
+    #[arg(long, global = true)]
+    pub full: bool,
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    /// The global `--full` turns on the command's own `--full` (the commands with a summary view).
+    pub fn apply_full(&mut self) {
+        if !self.full {
+            return;
+        }
+        match &mut self.command {
+            Command::Doctor(a) => a.full = true,
+            Command::Progress(a) => a.full = true,
+            Command::Plan(p) => match p {
+                PlanCmd::Import(a) => a.full = true,
+                PlanCmd::Amend(a) => a.full = true,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -129,6 +157,8 @@ pub enum Command {
     TestIntegrity(IntegrityArgs),
     /// Build the input of a review: diff, task, UCs, lessons, REVIEW.md.
     ReviewPack(PrArg),
+    /// The review loop of a PR: rounds counted from verdict comments, and the one next step.
+    ReviewLoop(ReviewLoopArgs),
     /// Verdict commands.
     #[command(subcommand)]
     Verdict(VerdictCmd),
@@ -140,6 +170,8 @@ pub enum Command {
     Status,
     /// Print the effective mode, its knobs and which source set each (offline).
     Mode,
+    /// Render the session rules into a marked block of CLAUDE.md or AGENTS.md (`--write`).
+    Rules(RulesArgs),
     /// Fix what is red on open PRs (and main) as the mode allows.
     Heal(HealArgs),
     /// The owner's daily digest; `--answer` parses the owner's reply into approvals.
@@ -207,6 +239,8 @@ pub enum Command {
     Pin(PinArgs),
     /// Move [mode] one rung (or straight to the target) in one PR: survey, pins, registry; `--finish` after the merge.
     Migrate(MigrateArgs),
+    /// The repo owners: `set` opens an owner PR that rewrites governance/owners.toml.
+    Owners(OwnersArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
     SetupSnippet,
     /// The output contract as JSON Schema or TypeScript: the envelope and each command's `data`.
@@ -229,6 +263,7 @@ pub const COMMANDS: &[&str] = &[
     "risk-check",
     "test-integrity",
     "review-pack",
+    "review-loop",
     "verdict",
     "pr",
     "ci-log",
@@ -289,6 +324,7 @@ impl Command {
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
+            Command::ReviewLoop(_) => "review-loop",
             Command::Verdict(VerdictCmd::Post(_)) => "verdict post",
             Command::Verdict(VerdictCmd::Comment(_)) => "verdict comment",
             Command::Verdict(VerdictCmd::Apply(_)) => "verdict apply",
@@ -296,6 +332,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Mode => "mode",
+            Command::Rules(_) => "rules",
             Command::Heal(_) => "heal",
             Command::Digest(_) => "digest",
             Command::Metrics(_) => "metrics",
@@ -331,6 +368,9 @@ impl Command {
             Command::Uninstall(_) => "uninstall",
             Command::Pin(_) => "pin",
             Command::Migrate(_) => "migrate",
+            Command::Owners(a) => match a.cmd {
+                OwnersCmd::Set(_) => "owners set",
+            },
             Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
@@ -432,6 +472,10 @@ pub struct ResultArgs {
     /// The PR of the work.
     #[arg(long)]
     pub pr: Option<u64>,
+    /// The get_session result of this session (file, or `-` for stdin): its spend so far is
+    /// recorded on the epic, as `bosun budget record <epic> --from`.
+    #[arg(long, value_name = "FILE|-")]
+    pub session_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -500,6 +544,9 @@ pub struct MetricsArgs {
     /// The window in days.
     #[arg(long, default_value_t = 30)]
     pub days: u32,
+    /// Read at most this many PRs (newest update first); the rest are counted in `data.capped`.
+    #[arg(long, default_value_t = 100)]
+    pub max_prs: usize,
     /// List the rules a curator could propose to loosen.
     #[arg(long)]
     pub propose: bool,
@@ -560,9 +607,33 @@ pub struct PrArg {
 }
 
 #[derive(Debug, Args)]
+pub struct ReviewLoopArgs {
+    /// The PR number.
+    #[arg(required_unless_present = "report")]
+    pub pr: Option<u64>,
+    /// Review rounds before the owner must answer (default and ceiling: `[mode] review_rounds` on the default branch, else 5; it can only lower it).
+    #[arg(long)]
+    pub max: Option<u32>,
+    /// Report only: the open PRs with a missing, stale, request-changes or escalated verdict.
+    #[arg(long, conflicts_with = "pr")]
+    pub report: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RulesArgs {
+    /// Write the block (else only report whether it would change).
+    #[arg(long)]
+    pub write: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct RiskCheckArgs {
     /// The PR number.
-    pub pr: u64,
+    #[arg(required_unless_present = "local")]
+    pub pr: Option<u64>,
+    /// Judge `git diff origin/main...HEAD` offline before a push (path rules and R-weaken).
+    #[arg(long, conflicts_with_all = ["pr", "dry_run"])]
+    pub local: bool,
     /// Print the judgment and write nothing (no status, check run or comment): for a cloud
     /// session, which cannot post statuses.
     #[arg(long)]
@@ -1035,6 +1106,25 @@ fn parse_source(s: &str) -> Result<String, String> {
         "" | "slack" | "lesson" | "flake" | "human" => Ok(s.to_string()),
         _ => Err("expected one of slack, lesson, flake, human".into()),
     }
+}
+
+#[derive(Debug, Args)]
+pub struct OwnersArgs {
+    #[command(subcommand)]
+    pub cmd: OwnersCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OwnersCmd {
+    /// Open an owner PR that sets governance/owners.toml to these logins and `<org>/<team>`s.
+    Set(OwnersSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct OwnersSetArgs {
+    /// GitHub logins and teams of the repo's org (`<org>/<slug>`); at least one login.
+    #[arg(required = true, value_name = "LOGIN|ORG/TEAM")]
+    pub entries: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]

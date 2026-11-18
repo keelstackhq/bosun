@@ -4,8 +4,8 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::ResultArgs;
 use super::reap::{EpicScope, close_done_epics};
+use super::{BudgetRecordArgs, ResultArgs};
 use crate::app::{
     App, default_branch, end_lease, halt_reason, merge_counts, set_state, sync_merged,
     task_pr_merged, trusted_notes,
@@ -22,6 +22,12 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     // No kill switch check: reporting a result is how a halted child hands back.
     let app = App::load(dir)?;
     let (gh, n, session) = (app.gh.as_ref(), args.epic, &app.ctx.session);
+    // Read before anything is posted: bad JSON must not leave a half-done result.
+    let spend_json = args
+        .session_json
+        .as_deref()
+        .map(super::budget::read_input)
+        .transpose()?;
     let Some(epic) = gh.get_issue(n)? else {
         return Err(BosunError::error(
             format!("epic #{n} does not exist"),
@@ -190,12 +196,51 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         None
     });
     data["parent"] = json!(parent);
+    // The spend so far goes on the epic by the existing budget path. The result is already
+    // posted, so a failure is reported, never fatal (a retry would post a second result).
+    let mut next_get_session = false;
+    match spend_json {
+        Some(v) => {
+            let a = BudgetRecordArgs {
+                issue: Some(n),
+                pr: Vec::new(),
+                usd: None,
+                session: Some(session.clone()),
+                at: None,
+                provider: "claude-sessions".into(),
+                from: None,
+                turns: None,
+                model: None,
+            };
+            data["budget"] = match super::budget::record_with(dir, &a, Some(v), true) {
+                Ok(o) => o.data,
+                Err(e) => {
+                    eprintln!("result: recording the spend failed: {e}");
+                    json!({"error": e.message, "fix": e.fix})
+                }
+            };
+        }
+        None => {
+            next_get_session = true;
+            data["budget"] = json!({
+                "recorded": false,
+                "record": format!("bosun budget record {n} --from -"),
+                "stdin": "the get_session result",
+            });
+        }
+    }
     let mut out = Outcome::data(data);
     if let Some(parent) = parent {
         let message = parent_message(session, n, &args.outcome, args.pr, &green);
         out = out.with_next(
             "send_message",
             json!({"session_id": parent, "message": message}),
+        );
+    }
+    if next_get_session {
+        out = out.with_next(
+            "mcp__claude-code-remote__get_session",
+            json!({"session_id": session}),
         );
     }
     Ok(out)
@@ -241,7 +286,7 @@ fn green_prs(app: &App, n: u64, pr: Option<u64>) -> crate::app::Result<Vec<(u64,
 
 /// The session that spawned this one (registry record); `None` for a root or a wave agent
 /// (which runs inside its orchestrator, so a message would reach itself).
-fn parent_session(app: &App) -> crate::app::Result<Option<String>> {
+pub(crate) fn parent_session(app: &App) -> crate::app::Result<Option<String>> {
     let (gh, session) = (app.gh.as_ref(), &app.ctx.session);
     if session.contains('/') {
         return Ok(None);
@@ -301,4 +346,28 @@ fn partial_refusal(app: &App, n: u64, state: Option<State>) -> crate::app::Resul
         return Ok(Some(format!("halted: {why}")));
     }
     Ok(None)
+}
+
+/// A PR GitHub reports already clean cannot get auto-merge and a child cannot merge it
+/// (D-008): the error names it `ready_to_merge` and hands the parent a `send_message`.
+/// Without a parent, or when the lookup fails, `next` stays empty.
+pub(crate) fn clean_handoff(app: &App, mut e: BosunError, pr: u64, sha: &str) -> BosunError {
+    let mut data = e.data.take().unwrap_or_else(|| json!({}));
+    data["ready_to_merge"] = json!([{"pr": pr, "head_sha": sha}]);
+    e.data = Some(data);
+    let parent = parent_session(app).unwrap_or_else(|err| {
+        eprintln!("bosun: cannot find the parent: {err}");
+        None
+    });
+    let Some(parent) = parent else { return e };
+    let short = sha.get(..7).unwrap_or(sha);
+    let m = format!(
+        "bosun pr from {}: PR #{pr} ({short}) is ready_to_merge: every required check is green and GitHub cannot auto-merge a clean PR. Merge it (I never merge), then run `bosun reap`.",
+        app.ctx.session
+    );
+    let message = crate::core::text::inert(&m, 500);
+    e.with_next(
+        "send_message",
+        json!({"session_id": parent, "message": message}),
+    )
 }

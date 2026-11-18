@@ -1,1 +1,0 @@
-- 2026-11-16 · R-secrets: single-quoted `'$...'` arrow literals now match · FP corpus (8.01M lines, outside this repo) 1361 flags on main, 1361 after · PR

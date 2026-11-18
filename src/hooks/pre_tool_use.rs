@@ -10,8 +10,8 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock,
-    prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
+    ChildTask, Script, bash_writes, child_task_create, config_fetch_risk, edit_lock, edited_path,
+    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -131,6 +131,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = push_config(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
+        if let Some(why) = fetch_config(&dir, command, &default) {
+            return Some(deny(&why));
+        }
         if let Some(why) = push_gates(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
@@ -217,6 +220,64 @@ fn push_config(
             Some(m) => {
                 return Some(format!(
                     "merge-lock: push.default = {m} can push `{default}`; {FIX}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Merge-lock (spec §4) for a fetch or pull: the `remote.<r>.fetch` refspecs it follows and the
+/// protocol and URL rewrites that run a command, asked of git where it runs (each earlier
+/// `cd`, then `git -C`). Git that cannot be asked (a missing directory) fails closed.
+fn fetch_config(dir: &Path, command: &str, default: &str) -> Option<String> {
+    const KEYS: &str = r"^(remote\..*\.(fetch|url|pushurl|uploadpack|receivepack|tagopt)|core\.sshcommand|protocol\..*allow|url\..*insteadof)$";
+    let unq = |w: &str| w.replace(['\'', '"', '\\'], "");
+    let base = |w: &str| unq(w).rsplit('/').next().unwrap_or("").to_string();
+    let mut at: Vec<String> = Vec::new();
+    for seg in command.split([';', '&', '|', '\n']) {
+        let w: Vec<String> = seg.split_whitespace().map(unq).collect();
+        if w.first().is_some_and(|c| c == "cd" || c == "pushd") {
+            at.extend(["-C".to_string(), w.get(1).cloned().unwrap_or_default()]);
+            continue;
+        }
+        // git's global options, in any order and attached or not, move where it reads config.
+        let (mut opts, mut i) = (at.clone(), 1);
+        while let Some(a) = w.get(i).filter(|a| a.starts_with('-')) {
+            let pair = [
+                "-C",
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--namespace",
+                "--config-env",
+            ];
+            let n = 1 + usize::from(pair.contains(&a.as_str()));
+            opts.extend(w[i..(i + n).min(w.len())].iter().cloned());
+            i += n;
+        }
+        let sub: Vec<&str> = w.iter().skip(i).map(String::as_str).collect();
+        // `git remote update` fetches every remote without a fetch word.
+        let fetches = sub.first() == Some(&"remote") && sub.contains(&"update")
+            || w.iter()
+                .any(|a| matches!(base(a).trim_start_matches("git-"), "fetch" | "pull"));
+        if !fetches {
+            continue;
+        }
+        let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+        all.extend(["config", "--null", "--get-regexp", KEYS]);
+        let Ok(set) = config_get(dir, &all) else {
+            return Some(
+                "merge-lock: the guard cannot read git config where this fetch runs".into(),
+            );
+        };
+        for entry in set.iter().flat_map(|s| s.split('\0')) {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            if config_fetch_risk(key, value, default) {
+                return Some(format!(
+                    "merge-lock: git config `{key} {value}` makes a fetch move `{default}`, \
+                     mirror, write tags or run a command; unset it (`git config --unset-all \
+                     {key}`) or ask the owner"
                 ));
             }
         }
@@ -405,7 +466,7 @@ fn push_gates(
                 .filter(|g| !stamps::has(root, &tree, g))
                 .cloned()
                 .collect();
-            if !missing.is_empty() {
+            if !missing.is_empty() && !stamps::carried(root, &src, &gates, &at) {
                 return Some(format!(
                     "push-gates (push_gates = \"push\"): the tree of `{src}` has no passing stamp \
                      for {}: commit your work, run `{}`, fix what fails, then push again",

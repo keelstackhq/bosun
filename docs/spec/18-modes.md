@@ -45,6 +45,8 @@ push_gates = "push"
 | `brake` | `off` | `on` | `on` | `on` |
 | `curator_loosen` | `off` | `off` | `propose` | `propose` |
 
+`review_rounds` (an integer of at least 1, set as `review_rounds = 3`; preset 5 in every mode, so a ladder move never changes it): the review rounds of one PR before the owner must answer (`bosun review-loop`, §7). A higher effective value is a weaken finding (R-weaken, `mode.review_rounds`), by an override or by any move that ends higher; the file is R-gov too.
+
 `budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5); a task the plan marks `mainfix` and the epic's bind lists is exempt.
 
 ### Brake
@@ -79,14 +81,16 @@ exact-inverse check.
 
 ### Commands
 
-- `bosun mode`: the effective mode and knobs with their sources; no GitHub call.
+- `bosun mode`: the effective mode and knobs (`review_rounds` included) with their sources; no GitHub call.
 - `bosun migrate --to <mode> [--direct] [--dry-run]`: survey (pinned version, mode, registry,
   epics without a marker, hull lock, a 30-day metrics baseline with a timeout that never blocks:
   `BOSUN_MIGRATE_METRICS_TIMEOUT`, default 20 s), then one draft governance PR on
   `bosun/migrate-<mode>` with every file step: the `.bosun/version` pin (through `bosun pin --latest
   --tool bosun` when the pin is older than 0.14.0; a bosun splice channel or an unpublished release
   exits 3 naming the pin step), the `.bosun/registry` pin (the live registry; two open and no pin
-  exits 3) and `[mode] name`. One rung per run, lighter; `--direct` goes to the target and the
+  exits 3), `[mode] name`, and in `.bosun/intake.toml` (when present) an empty `repo.owner` or
+  `repo.visibility` of the channel template set from `GET /repos` (`owner.login`; `private` or
+  `public` only). One rung per run, lighter; `--direct` goes to the target and the
   body records it as the owner's choice. A tighter target is one PR. It needs a clean tree on the default branch equal to
   origin's; any failure restores the tree. An open `bosun/migrate-<step>` PR for the same step is
   reused; one for another step exits 3. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only
@@ -101,10 +105,10 @@ exact-inverse check.
   `--no-ready` stops at the draft. Rerun the same command after the merge: with nothing left to change it
   runs `--finish` itself (`data.finish`). `--dry-run` needs no token: a local survey (version, mode, files,
   hull lock) with the registry and epics `unknown` in `survey.notes`; a real run without a token exits 1.
-- `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
+- `bosun metrics [--days N] [--max-prs N]` (PR 5, read-only; never silent or hanging): over `--days` (default 30), at most `--max-prs` PRs (default 100, newest update first; the rest are counted in `data.capped {max_prs, skipped}`, absent when nothing was left out; 0 is exit 2), with one `metrics: PR i/n (#N)` line per PR on stderr, and a wall-clock limit `BOSUN_METRICS_TIMEOUT_SECS` (seconds, default 90, fractions allowed, 0 = none; a negative or unparsable value is exit 2 with a `fix`) after which it exits 1 with `metrics timed out after Ns (i of n PRs read)`, the same message on stderr and a `fix` that narrows it (the HTTP budget of §1 still caps the calls): red-CI rate, cost per merged PR
   (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or
   answer, or a plain or after-review signature of an owner-role key) and owner-rule blocks;
-  `brake` over 7 days. `--propose` (PR 8) lists the rules a curator may propose to loosen (§6).
+  `brake` over 7 days (`brake.capped` is true when `--max-prs` left PRs out, so the brake may rest on part of its window; `heal` and `wave tick` read it uncapped). `--propose` reads the same cap and reports it as `data.capped`; the brake of `heal` and `wave tick` (`window`) reads all PRs of 7 days, quiet and with no timeout; `--propose` (PR 8) lists the rules a curator may propose to loosen (§6).
 - `bosun heal [--pr N]` (§9), `bosun digest [--answer --from F --sign-key PEM]` (§14) and
   `bosun wave tick <epic>` (§5): `heal` and `wave tick` do nothing while their knob is off
   (gatekeeper); `digest` does not read `approvals_batch`, the orchestrator runs it. Quickstart per mode and

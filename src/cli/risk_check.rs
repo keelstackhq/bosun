@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::CONTEXT as VERDICT;
+use super::verdict::{APPROVABLE, CONTEXT as VERDICT};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -21,7 +21,7 @@ use crate::core::records::Record;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
-    new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
+    new_dependencies, parse_owners_in, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
@@ -44,13 +44,13 @@ pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
         )
     })?;
-    Ok(owners.into_iter().map(|o| o.github).collect())
+    Ok(owners.into_iter().filter_map(|o| o.github).collect())
 }
 
 /// Slack IDs of the owners in `governance/owners.toml` at `git_ref`; empty when none is set.
@@ -58,7 +58,7 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
@@ -67,7 +67,7 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     Ok(owners.into_iter().filter_map(|o| o.slack).collect())
 }
 
-fn is_manifest(path: &str) -> bool {
+pub(crate) fn is_manifest(path: &str) -> bool {
     matches!(
         path.rsplit('/').next(),
         Some("Cargo.toml" | "package.json" | "pnpm-workspace.yaml")
@@ -75,9 +75,11 @@ fn is_manifest(path: &str) -> bool {
 }
 
 pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
+    let Some(n) = args.pr.filter(|_| !args.local) else {
+        return super::risk_local::run(dir);
+    };
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    let n = args.pr;
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
             format!("PR #{n} does not exist"),
@@ -205,12 +207,93 @@ pub(crate) fn is_one_off(
     Ok(true)
 }
 
+/// Where R-weaken reads files: GitHub (a PR) or the local git (`--local`).
+pub(crate) trait Files {
+    /// The text of `path` at `at`; `None` when it is not there.
+    fn read(&self, path: &str, at: &str) -> Result<Option<String>>;
+    /// Every file path at `at`; `None` when it cannot be listed whole.
+    fn paths(&self, at: &str) -> Option<Vec<String>>;
+}
+
+struct Remote<'a>(&'a dyn Github);
+
+impl Files for Remote<'_> {
+    fn read(&self, path: &str, at: &str) -> Result<Option<String>> {
+        self.0.file_at(path, at)
+    }
+    fn paths(&self, at: &str) -> Option<Vec<String>> {
+        let t = self.0.tree(at).ok()?.filter(|t| !t.truncated)?;
+        Some(
+            t.entries
+                .into_iter()
+                .filter(|e| e.kind == "blob")
+                .map(|e| e.path)
+                .collect(),
+        )
+    }
+}
+
 pub(crate) fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
     base: &str,
     head: &str,
 ) -> Result<Vec<String>> {
+    weaken_from(&Remote(gh), pr_files, base, head)
+}
+
+/// The changed Rust files that are test code, where a lone `dead_code` allow is no finding:
+/// a Cargo `tests/` file no `#[path]` pulls in, or a file only `#[cfg(test)] #[path]` mods pull
+/// in. The mods are read at `base` from every Rust file outside Cargo `tests/` (at most 300).
+/// None when the PR adds or changes a `#[path]` line or hides a Rust diff, or a read fails.
+fn test_code(src: &dyn Files, files: &[PrFile], base: &str) -> Vec<String> {
+    let adds = |f: &&PrFile| {
+        let ins = f.patch.as_deref().map(|p| weaken::split_patch(p).1);
+        ins.is_some_and(|i| i.iter().any(|l| weaken::dead_code_allow(l)))
+    };
+    let wanted: Vec<&str> = (files.iter().filter(adds))
+        .filter(|f| f.filename.ends_with(".rs"))
+        .map(|f| f.filename.as_str())
+        .collect();
+    let patches: Vec<(&str, Option<&str>)> = (files.iter())
+        .map(|f| (f.filename.as_str(), f.patch.as_deref()))
+        .collect();
+    if wanted.is_empty() || !risk::path_attributes(&patches).is_empty() {
+        return Vec::new();
+    }
+    let Some(paths) = src.paths(base) else {
+        return Vec::new();
+    };
+    let rs: Vec<&String> = (paths.iter())
+        .filter(|p| p.ends_with(".rs") && !weaken::cargo_test_file(p))
+        .collect();
+    let mut mods = Vec::new();
+    for p in rs.iter().take(if rs.len() > 300 { 0 } else { 300 }) {
+        match src.read(p, base) {
+            Ok(Some(t)) => mods.extend(weaken::path_mods(p, &t)),
+            _ => return Vec::new(),
+        }
+    }
+    if rs.len() > 300 || mods.iter().any(|(m, _)| m == "?") {
+        return Vec::new();
+    }
+    let by = |f: &str, test: bool| mods.iter().any(|(m, t)| m == f && *t == test);
+    (wanted.into_iter())
+        .filter(|f| match weaken::cargo_test_file(f) {
+            true => !by(f, true) && !by(f, false),
+            false => by(f, true) && !by(f, false),
+        })
+        .map(String::from)
+        .collect()
+}
+
+pub(crate) fn weaken_from(
+    src: &dyn Files,
+    pr_files: &[PrFile],
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>> {
+    let test_files = test_code(src, pr_files, base);
     let patches = || {
         pr_files
             .iter()
@@ -223,8 +306,12 @@ pub(crate) fn weaken_findings(
     for f in pr_files {
         let p = f.patch.as_deref();
         out.extend(
-            p.map(|p| weaken::patch_findings(&f.filename, p, &added))
-                .unwrap_or_default(),
+            p.map(|p| {
+                let n = &f.filename;
+                let test = test_files.contains(n);
+                weaken::code_findings(n, p, &added, test)
+            })
+            .unwrap_or_default(),
         );
         // Each side of a rename on its own: the path left behind falls back to its built-in (or
         // nothing), the new path is judged against what it replaces, never the moved file.
@@ -238,20 +325,21 @@ pub(crate) fn weaken_findings(
             }
             let at_base = f.status != "added" && !(here && prev.is_some());
             let old = match at_base {
-                true => gh.file_at(path, base)?,
+                true => src.read(path, base)?,
                 false => builtin_base(path).map(str::to_string),
             };
             let new = match here && f.status != "removed" {
-                true => gh.file_at(path, head)?,
+                true => src.read(path, head)?,
                 false => builtin_base(path).map(str::to_string),
             };
             out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
         }
     }
-    out.extend(test_findings(gh, pr_files, base, head)?);
+    out.extend(test_findings(src, pr_files, base, head)?);
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert(s.clone()));
-    Ok(out)
+    // ASCII arrows: `→` comes out garbled where a terminal or log is not UTF-8.
+    Ok(out.into_iter().map(|s| s.replace('→', "->")).collect())
 }
 
 /// The built-in file a new `.bosun/risk.toml` or `.bosun/profiles/<name>.toml` replaces.
@@ -269,7 +357,7 @@ fn builtin_base(path: &str) -> Option<&'static str> {
 /// files is no loss: tests, assertions, skips, `.only` and `cfg` switch-offs, as test-integrity
 /// counts them. A file counts only where it runs: a Rust test file under a `src/` or `tests/`
 /// root, a TS/JS test file. Also every deleted test file.
-fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
+fn test_findings(src: &dyn Files, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
     let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
     let mut lists: [std::collections::BTreeMap<String, Vec<String>>; 2] = Default::default();
     // A cap on reads: past it the owner judges, no quota is burnt and nothing errors.
@@ -293,7 +381,7 @@ fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> R
             if !exists || !code_file(path) {
                 continue;
             }
-            match gh.file_at(path, at) {
+            match src.read(path, at) {
                 Ok(Some(t)) if t.len() <= 1 << 20 => {
                     let r = test_counts(path, &t);
                     (0..5).for_each(|i| c[side][i] += r[i]);
@@ -647,6 +735,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     };
     let Found {
         mut approved_by,
+        owner_own,
         mut verdicts,
         mut delegate_verdicts,
         delegate_blocked,
@@ -706,10 +795,33 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     w.post_full(head, CONTEXT, state, &description, &summary)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
     let carried = carry_status(gh, w, &pull, &linked);
+    // An owner's approval of this exact head also clears an escalated verdict (spec §7).
+    // A low-risk head reads the owners' approval only when an escalation waits for it.
+    let signer = need.signer_on;
+    let cleared = clear_escalation(gh, w, head, &|| match &approved_by {
+        Some(who) if high && passed_on_head && owner_own => Ok(Some(who.clone())),
+        _ if high => Ok(None),
+        _ => {
+            let owners = owner_logins(gh, base)?;
+            let by = approver(
+                gh,
+                &app.ctx.repo,
+                n,
+                head,
+                &owners,
+                signed_ok,
+                (None, signer),
+            )?;
+            Ok(by.filter(|b| b.1).map(|b| b.0))
+        }
+    });
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
         "verdict_carried_from": carried, "approval_carried_from": carried_from});
+    if cleared.is_some() {
+        data["verdict_cleared_by"] = json!(cleared);
+    }
     if w.checks_skipped() {
         data["checks_skipped"] = json!(true);
     }
@@ -811,7 +923,11 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
 
 /// The risk rules at `base` (the built-in defaults when it has none).
 pub(crate) fn base_rules(gh: &dyn Github, base: &str) -> Result<Rules> {
-    Ok(match gh.file_at(RULES_PATH, base)? {
+    rules_from(&Remote(gh), base)
+}
+
+pub(crate) fn rules_from(src: &dyn Files, base: &str) -> Result<Rules> {
+    Ok(match src.read(RULES_PATH, base)? {
         Some(text) => Rules::parse(&text).map_err(|e| {
             BosunError::error(
                 format!("{RULES_PATH} at base {base}: {e}"),
@@ -954,6 +1070,8 @@ struct Need<'a> {
 #[derive(Default)]
 pub(crate) struct Found {
     pub(crate) approved_by: Option<String>,
+    /// `approved_by` is an owner's own approval of the head (review, comment, owner key).
+    pub(crate) owner_own: bool,
     pub(crate) verdicts: Vec<String>,
     delegate_verdicts: Vec<String>,
     delegate_blocked: Option<String>,
@@ -996,7 +1114,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         Form::Bootstrap
     };
     let bootstrap = bootstrap.map(|l| (l, form));
-    found.approved_by = approver(
+    let by = approver(
         gh,
         repo,
         pr,
@@ -1005,6 +1123,8 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         need.signed_ok,
         (bootstrap, need.signer_on),
     )?;
+    found.owner_own = by.as_ref().is_some_and(|b| b.1);
+    found.approved_by = by.map(|b| b.0);
     let open = found.approved_by.is_none() && !need.unlinked;
     // Two verdicts only matter when the owner has not approved and the class allows them.
     if open && need.requirement == Approval::TwoVerdicts {
@@ -1036,6 +1156,38 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         }
     }
     Ok(found)
+}
+
+/// Turn an escalated, otherwise approving `review-verdict` on `head` green once `owner` (asked
+/// only then) names an owner's own approval of that head. A request for changes, a low confidence
+/// or a blocker stays red. Never an error.
+fn clear_escalation(
+    gh: &dyn Github,
+    w: &GateWriter,
+    head: &str,
+    owner: &dyn Fn() -> Result<Option<String>>,
+) -> Option<String> {
+    let top = crate::github::gate::gate_statuses(gh, head)
+        .ok()?
+        .into_iter()
+        .find(is_verdict)?;
+    // Only the approvable form, judged unrounded when the verdict was recorded; an older
+    // release's `escalated to the owner; ` form is never cleared (it can hide a request for changes).
+    if !top.description.starts_with(APPROVABLE) {
+        return None;
+    }
+    let log = |e: BosunError| {
+        eprintln!(
+            "bosun: risk-check: cannot clear the escalation: {}",
+            e.message
+        )
+    };
+    let who = owner().map_err(log).ok()??;
+    let description = format!("owner cleared escalation ({who})");
+    w.post(head, VERDICT, "success", &description)
+        .map_err(log)
+        .ok()?;
+    Some(who)
 }
 
 /// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking
@@ -1201,6 +1353,8 @@ pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<St
 
 /// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
 /// an approval) or by an unedited PR comment `/bosun approve <head>`.
+/// The approver and whether it is the owner's own approval (not a bootstrap or autonomous
+/// signature).
 fn approver(
     gh: &dyn Github,
     repo: &RepoId,
@@ -1209,14 +1363,14 @@ fn approver(
     owners: &[String],
     signed_ok: bool,
     (bootstrap, signer_on): (Option<(&str, Form)>, bool),
-) -> Result<Option<String>> {
+) -> Result<Option<(String, bool)>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
     let by_review = owners
         .iter()
         .find(|o| state(o).as_deref() == Some("APPROVED"));
     if let Some(o) = by_review {
-        return Ok(Some(o.clone()));
+        return Ok(Some((o.clone(), true)));
     }
     let comments = gh.list_comments(pr)?;
     // Only a comment written with a plain user token counts: agent sessions act as the same
@@ -1234,7 +1388,7 @@ fn approver(
         _ => owner_comment(&comments, o, head).is_some(),
     });
     if let Some(o) = by_comment {
-        return Ok(Some(o.clone()));
+        return Ok(Some((o.clone(), true)));
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
     // owner's request for changes withdraws it. A v1 signature carries no time, so a re-posted
@@ -1262,13 +1416,13 @@ fn approver(
     if ids.is_empty() {
         // Bootstrap and autonomous signatures are not owner approvals.
         if let Some(id) = sign(&|f| matches!(f, Form::V1 | Form::V2(_)))? {
-            return Ok(Some(format!("key {id}")));
+            return Ok(Some((format!("key {id}"), true)));
         }
         let Some((label, form)) = bootstrap else {
             return Ok(None);
         };
         let boot = sign(&|f| f == form)?;
-        return Ok(boot.map(|id| format!("key {id} ({label})")));
+        return Ok(boot.map(|id| (format!("key {id} ({label})"), false)));
     }
     let mut by = None;
     for id in ids {
@@ -1284,7 +1438,7 @@ fn approver(
         };
         by.get_or_insert(key);
     }
-    Ok(by.map(|id| format!("key {id}")))
+    Ok(by.map(|id| (format!("key {id}"), true)))
 }
 
 /// A decisive review in this state withdraws the owner's approvals (anyone with write access can
@@ -1448,6 +1602,17 @@ pub(crate) fn autonomous_allow(gh: &dyn Github, base: &str) -> Result<Option<Vec
         },
         None => None,
     })
+}
+
+/// `[approvals] oneoff_allow` on `base`, parsed; a missing or bad config or glob allows nothing.
+pub(crate) fn oneoff_allow(gh: &dyn Github, base: &str) -> Result<Vec<crate::core::glob::Glob>> {
+    let c = gh.file_at(CONFIG_FILE, base)?;
+    let c = c.and_then(|t| Config::parse(&t, CONFIG_FILE).ok());
+    let globs = c.and_then(|c| c.approvals.oneoff_allow).unwrap_or_default();
+    Ok(globs
+        .iter()
+        .filter_map(|g| crate::core::glob::Glob::parse(g).ok())
+        .collect())
 }
 
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {

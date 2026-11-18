@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "keel-bosun"
-version = "0.18.0"
+version = "0.20.0"
 dependencies = [
  "assert_cmd",
  "clap",

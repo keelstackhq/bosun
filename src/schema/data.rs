@@ -15,12 +15,13 @@ keygen = {id: str, role: str, path: str, public_key: str, enrolled: bool, toml: 
 test-integrity = {base: str, files_checked: int, integrity: str, integrity_reason?: str,
     findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool}], allow?: [str],
     task?: int};
-review-pack = {pr: int, title: str, head_sha: str, base_sha: str, since_sha: str | null,
+review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, since_sha: str | null,
     changed_files: int, chunks: [[str]], delta_fallback: str | null, delta_not_in_pr: [str],
     delta_not_in_pr_count: int, drift: {actual: int, planned: int} | null, files: [{filename: str,
     status: str, additions: int, deletions: int, patch: str | null}], instructions: str,
     review_md: str | null, lessons: [str], ucs: [str], untrusted: [str], task: {..} | null,
-    bundle_tasks: [{..}], note?: str};
+    bundle_tasks: [{..}], note?: str, required_checks: [{context: str, state: str}] | null,
+    gate_stamps: {tree: str, present: [str], missing: [str]} | null};
 ci-log = {pr: int, head_sha: str, jobs: [{name: str, conclusion: str, url: str, log: str}]};
 ask = {issue: int, comment_id: int, owners: [str], drafted: [int], pr_draft_error: str | null};
 hold = {issue: int, id: str, checklist: {number: int, url: str}, released: bool, drafted: [int],
@@ -32,7 +33,7 @@ lesson hit = {id: str, hits: int, comment_id: int | null};
 lesson capture = {issue: int, kind: str, signature: str, created: bool, reopened: bool, hits: int};
 lesson triage = {issue: int, as: str, lesson?: str, process_red?: int, task?: int};
 doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{step: int, name: str, status: str, detail: str,
-    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str,
+    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
     skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
@@ -77,14 +78,15 @@ progress = {days?: int, since?: str, merged?: int, held?: int, reverted?: int, s
 result = {epic: int, outcome: str, pr: int | null, comment_id: int, task_state: str,
     tasks_merged: [int], lease_ended: bool, left: bool, epic_closed: bool,
     epic_already_closed: bool, partial_skipped: str | null, state_skipped: str | null,
-    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null};
+    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null,
+    budget: {recorded?: bool, record?: str, error?: str, fix?: str, ..}};
 main-triage = {good: str, bad: str, run: str, runs: int, candidates: int, first_bad: {pr: int,
     sha: str, subject: str} | null, note?: str};
 init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [str], risk: str,
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};
@@ -107,6 +109,8 @@ revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
     main_red: int | null, gate_missed: {created: bool, issue: int}, warning: str | null};
 trailers = {hook?: str, stamped?: bool, session?: str, revert?: str | null, commits?: [{sha: str,
     subject: str}]};
+owners set = {owners: [str], changed: bool, branch?: str, pr?: {number: int, head_sha: str},
+    then: [str]};
 intake = {issue: int, created: bool, plan: str, item: str | null, source: str};
 intake check = {goal: str, plan: str | null, repo: {owner: str, name: str, visibility: str},
     stack: [str], pieces: [str], bosun_pieces: [str], publish: [str], approvals: str, notify: str,
@@ -166,11 +170,17 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
-    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool};
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
+    verdict_cleared_by?: str};
+review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, findings: [{..}], reasons: [str],
+    reason: str | null}]}
+    | {pr: int, head_sha: str, step: str, rounds: int, max: int, findings: [{..}], reasons: [str], reason: str | null};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
-verdict apply = verdict post;
+verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
+    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}}
+    | {comment_id: int, author: str, refused: str, status: null};
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     task_state: str | null, ready?: bool | "pending", merged?: bool, epic_closed?: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
@@ -189,8 +199,9 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     budget_feature?: [{epic: int, spent_usd: num, budget_usd: num, level: str,
     raise_room_usd?: int}], budget_skipped?: [{epic: int | null, error: str}],
     archive_error?: str};
-mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
+mode = {mode: str, mode_source: str, knobs: {[str]: {value: str | int, source: str}}, brake: any,
     brake_note: str};
+rules = {file: str, changed: bool, written: bool, block: str};
 heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, head_sha: str,
     task: int, action: str, why: str}], main?: any};
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
@@ -199,12 +210,12 @@ digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha
     budget_warnings?: [{epic: int, spent_usd: num, budget_usd: num}], budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
     sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
-metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],
+metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str], capped?: bool,
     window: {days: int, main_red: int, reverts: int, failing_heads: int, pushed_heads: int}},
     red_ci: {failing_heads: int, pushed_heads: int, rate_pct: num | null}, merged: int,
     cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,
     owner_touches: int, owner_touches_per_day: num,
-    blocks: [{rule: str, blocks: int, caught: int, passed: int}]} | {days: int, since: str, curator_loosen: str, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
+    blocks: [{rule: str, blocks: int, caught: int, passed: int}], capped?: {max_prs: int, skipped: int}} | {days: int, since: str, curator_loosen: str, capped?: {max_prs: int, skipped: int}, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
 wave tick = {epic: int, mode: str, spawn_auto: str, brake: [str] | null, held_by: str | null,
     spawned: [{issue: int, title: str, record: str, budget_feature?: {epic: int,
     spent_usd: num, budget_usd: num, level: str, raise_room_usd?: int}}], stopped: {issue: int, exit: str, message: str,

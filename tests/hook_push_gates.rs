@@ -157,3 +157,63 @@ fn a_push_whose_checkout_cannot_be_told_is_refused_in_push_mode() {
         "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat:feat'])\"";
     assert_eq!(hook(plain.path(), py), None);
 }
+
+/// Commit `files` (path, body) on the current branch.
+fn commit(dir: &Path, files: &[(&str, &str)]) {
+    for (p, body) in files {
+        let f = dir.join(p);
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, body).unwrap();
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "c"]);
+}
+
+#[test]
+fn stamps_carry_over_a_docs_only_diff_since_the_last_stamped_tree() {
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    commit(
+        r.path(),
+        &[
+            ("docs/guide.md", "a"),
+            ("changelog.d/feat.md", "c"),
+            ("docs/progress.d/feat.md", "d"),
+        ],
+    );
+    assert_eq!(hook(r.path(), PUSH), None);
+    commit(r.path(), &[("docs/more.md", "f")]);
+    assert_eq!(hook(r.path(), PUSH), None);
+    // Code after the stamp, even under a later docs commit, needs gates again.
+    commit(r.path(), &[("src/lib.rs", "fn x() {}")]);
+    assert!(hook(r.path(), PUSH).is_some());
+    commit(r.path(), &[("docs/after.md", "g")]);
+    let why = hook(r.path(), PUSH).expect("code since the stamp");
+    assert!(why.contains("push-gates"), "{why}");
+    // A non-docs file outside docs/ (even text) is no docs-only change.
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    // Markdown the tests read (the spec, READMEs, root files, plans) is no docs-only change.
+    for f in [
+        "docs/notes.txt",
+        "README.md",
+        "src/a.md",
+        "docs/spec/x.md",
+        "docs/spec.md",
+        "changelog.d/README.md",
+        "CHANGELOG.md",
+        "plans/p.md",
+    ] {
+        commit(r.path(), &[(f, "x")]);
+        assert!(hook(r.path(), PUSH).is_some(), "{f}");
+    }
+    // `diff.relative` in a subdirectory push hides no path.
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    commit(
+        r.path(),
+        &[("src/lib.rs", "fn x() {}"), ("docs/docs/a.md", "x")],
+    );
+    git(r.path(), &["config", "diff.relative", "true"]);
+    assert!(hook(&r.path().join("docs"), PUSH).is_some());
+}

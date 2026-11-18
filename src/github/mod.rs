@@ -186,6 +186,8 @@ pub trait Github {
     fn job_log(&self, job_id: u64, head: usize, tail: usize) -> Result<String>;
     /// The repository itself; `None` when it is not readable (404).
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
+    /// The owner (user or org) of the repository this client talks to.
+    fn repo_owner(&self) -> &str;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
@@ -216,12 +218,28 @@ pub enum EnvBranches {
     Custom(Vec<(String, String)>),
 }
 
+/// Whether this is a Claude cloud session. Its proxy answers 403 for `/collaborators`, so the
+/// call is skipped from the start (no 403 noise) and `permission` degrades as after a refusal.
+fn cloud_proxy() -> bool {
+    crate::core::approve::in_cloud(
+        std::env::var("CCR_AGENT_PROXY_ENABLED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// What the Claude Code cloud proxy says when it refuses GraphQL.
 pub const CCR_GRAPHQL_REFUSAL: &str = "GraphQL is not available from Claude Code sessions";
 
 /// Whether the Claude Code cloud proxy refused a GraphQL call (403 with its fixed message).
 pub fn is_ccr_refusal(e: &BosunError) -> bool {
-    e.message.contains(" 403 ") && e.message.contains(CCR_GRAPHQL_REFUSAL)
+    // Any 403 on `/graphql` that is not a rate limit: the proxy's wording may change.
+    e.message.contains(" 403 ")
+        && (e.message.contains(CCR_GRAPHQL_REFUSAL)
+            || (cloud_proxy()
+                && e.message.contains("POST /graphql")
+                && !e.message.to_lowercase().contains("rate limit")))
 }
 
 /// Turn on squash auto-merge: GraphQL first, the CCR route when the proxy refuses GraphQL.
@@ -280,6 +298,16 @@ pub struct RepoInfo {
     /// Present with an authenticated token: what the token may do.
     #[serde(default)]
     pub permissions: Option<Value>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub owner: Option<Login>,
+}
+
+/// A GitHub account as the API nests it (`{"login": ...}`).
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Login {
+    pub login: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -339,7 +367,7 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
             login: std::sync::OnceLock::new(),
-            collab_blocked: std::sync::atomic::AtomicBool::new(false),
+            collab_blocked: std::sync::atomic::AtomicBool::new(cloud_proxy()),
         })
     }
 
@@ -350,7 +378,7 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
             login: std::sync::OnceLock::new(),
-            collab_blocked: std::sync::atomic::AtomicBool::new(false),
+            collab_blocked: std::sync::atomic::AtomicBool::new(cloud_proxy()),
         }
     }
 
@@ -421,6 +449,10 @@ impl LiveGithub {
 }
 
 impl Github for LiveGithub {
+    fn repo_owner(&self) -> &str {
+        &self.owner
+    }
+
     fn repo_info(&self) -> Result<Option<RepoInfo>> {
         match self.http.get_json(&self.path(""))? {
             Some(v) => Ok(Some(self.parse("repository", v)?)),
@@ -1066,5 +1098,23 @@ impl Github for LiveGithub {
             (field(b, "name").unwrap_or_default(), kind)
         });
         Ok(EnvBranches::Custom(policies.collect()))
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_non_rate_limit_403_on_graphql_is_a_refusal() {
+        let e = |m: &str| BosunError::error(m, "x");
+        assert!(is_ccr_refusal(&e(
+            "GitHub POST /graphql: 403 GraphQL is not available from Claude Code sessions"
+        )));
+        assert!(!is_ccr_refusal(&e(
+            "GitHub POST /graphql: 403 API rate limit exceeded"
+        )));
+        assert!(!is_ccr_refusal(&e("GitHub GET /pulls/1: 403 Forbidden")));
+        assert!(!is_ccr_refusal(&e("GitHub POST /graphql: 500 boom")));
     }
 }

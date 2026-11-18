@@ -262,3 +262,28 @@ fn excluded_paths_always_need_the_owner() {
         assert_eq!(check(&fake, IN).0, 0, "{file}");
     }
 }
+
+#[test]
+fn a_bootstrap_approval_does_not_clear_an_escalated_verdict() {
+    let k = key();
+    let fake = owner_pr(&k, Some(CONFIG));
+    fake.status(
+        HEAD,
+        "review-verdict",
+        "failure",
+        "escalated to the owner (approvable): approve 0.95 (approves at 0.85), 0 blocker, 0 major",
+    );
+    post(&fake, &bootstrap_body(&k));
+    let (code, v) = check(&fake, IN);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved_by"], "key k1 (bootstrap mode, D-012)");
+    assert!(v["data"].get("verdict_cleared_by").is_none(), "{v}");
+    assert_eq!(
+        fake.statuses_of(HEAD)
+            .into_iter()
+            .rev()
+            .find(|s| s["context"] == "review-verdict")
+            .unwrap()["state"],
+        "failure"
+    );
+}

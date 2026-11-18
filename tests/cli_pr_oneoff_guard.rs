@@ -90,6 +90,27 @@ fn the_owner_widens_the_one_off_allow_set_with_autonomous_allow_on_the_base() {
 }
 
 #[test]
+fn oneoff_allow_on_the_base_lets_a_one_off_touch_gated_task_less_paths() {
+    let cfg = "project = \"widget\"\n\n[approvals]\noneoff_allow = [\"README.md\", \".github/**\", \"Cargo.toml\"]\n";
+    for touch in ["README.md", ".github/workflows/ci.yml", "Cargo.toml"] {
+        let fake = FakeGithub::start();
+        let dir = repo("claude/quick-fix");
+        let (code, _) = one_off(&fake, dir.path(), &[touch]);
+        assert_ne!(code, 0, "{touch} without oneoff_allow");
+        let fake = FakeGithub::start();
+        fake.content(".bosun/bosun.toml", "main", cfg);
+        let (code, v) = one_off(&fake, dir.path(), &[touch]);
+        assert_eq!(code, 0, "{touch}: {v}");
+    }
+    // Outside both sets: still refused.
+    let fake = FakeGithub::start();
+    fake.content(".bosun/bosun.toml", "main", cfg);
+    let dir = repo("claude/quick-fix");
+    let (code, _) = one_off(&fake, dir.path(), &["scripts/x.sh"]);
+    assert_eq!(code, 3);
+}
+
+#[test]
 fn a_one_off_pr_over_300_changed_lines_is_not_made_ready() {
     let review = format!("bosun:{}/review", "state");
     for (lines, ok) in [(300, true), (301, false)] {

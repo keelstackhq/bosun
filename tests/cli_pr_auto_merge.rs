@@ -41,10 +41,15 @@ fn repo() -> tempfile::TempDir {
 }
 
 fn run(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+    run_as(fake, dir, "session_test")
+}
+
+fn run_as(fake: &FakeGithub, dir: &Path, session: &str) -> (i32, Value) {
     // `--ready` asks for the pushed head and the local gate stamps.
     stamps::ready_all(fake, dir);
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", session)
         .arg("-C")
         .arg(dir)
         .args(["pr", "7", "--auto-merge"])
@@ -127,6 +132,36 @@ fn a_graphql_clean_answer_goes_to_the_orchestrator_and_merges_nothing() {
     fake.already_clean();
     let (code, v) = run(&fake, dir.path());
     assert_clean_refusal(&fake, code, &v);
+}
+
+#[test]
+fn a_clean_pr_is_named_ready_to_merge_to_the_parent() {
+    let (fake, dir) = setup(&ALL);
+    fake.already_clean();
+    let join = ["join", "--parent", "session_root"];
+    let (code, v) = common::run(&fake, "session_child", "2026-10-23T10:00:00Z", &join);
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = run_as(&fake, dir.path(), "session_child");
+    assert_clean_refusal(&fake, code, &v);
+    assert_eq!(
+        v["data"]["ready_to_merge"],
+        json!([{"pr": 20, "head_sha": fake.pull_head(20)}])
+    );
+    let next = &v["next"][0];
+    assert_eq!(next["tool"], "send_message", "{v}");
+    assert_eq!(next["args"]["session_id"], "session_root");
+    let m = next["args"]["message"].as_str().unwrap();
+    assert!(m.contains("ready_to_merge") && m.contains("#20"), "{m}");
+    assert!(m.len() <= 500);
+}
+
+#[test]
+fn a_clean_pr_without_a_parent_has_no_next() {
+    let (fake, dir) = setup(&ALL);
+    fake.already_clean();
+    let (code, v) = run(&fake, dir.path());
+    assert_clean_refusal(&fake, code, &v);
+    assert_eq!(v["next"], json!([]));
 }
 
 #[test]

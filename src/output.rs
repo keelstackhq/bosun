@@ -63,6 +63,10 @@ pub struct BosunError {
     /// Overrides `error.kind` (the exit-code name) when a failure has a more specific one, for
     /// example `upstream` for a GitHub 5xx.
     pub kind: Option<&'static str>,
+    /// Tool calls the session makes even though the command failed (for example the hand-over
+    /// of a PR that is ready to merge).
+    /// Boxed: a failing `Result` must stay small (clippy `result_large_err`).
+    pub next: Option<Box<Vec<Next>>>,
 }
 
 impl std::fmt::Display for BosunError {
@@ -83,6 +87,7 @@ impl BosunError {
             fix,
             data: None,
             kind: None,
+            next: None,
         }
     }
 
@@ -117,6 +122,14 @@ impl BosunError {
 
     pub fn with_data(mut self, data: Value) -> Self {
         self.data = Some(data);
+        self
+    }
+
+    pub fn with_next(mut self, tool: impl Into<String>, args: Value) -> Self {
+        self.next.get_or_insert_with(Default::default).push(Next {
+            tool: tool.into(),
+            args,
+        });
         self
     }
 }
@@ -177,7 +190,10 @@ pub fn envelope(command: &str, result: &CmdResult) -> Value {
                 .map(|d| normalize(&d))
                 .unwrap_or_else(|| json!({})),
             json!({"kind": e.kind.unwrap_or(e.exit.name()), "message": e.message, "fix": e.fix}),
-            json!([]),
+            e.next.as_deref().map_or_else(
+                || json!([]),
+                |n| serde_json::to_value(n).unwrap_or_else(|_| json!([])),
+            ),
         ),
     };
     json!({
