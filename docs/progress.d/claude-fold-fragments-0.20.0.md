@@ -1,0 +1,1 @@
+- 2026-11-18 · Fold fragments · changelog.d and progress.d into CHANGELOG Unreleased and docs/progress-done.md · docs PR

@@ -1,1 +1,0 @@
-- One governance path list (`GOVERNANCE_PATHS`, R-gov's) for `bosun pr --pr N` and risk-check; `[approvals] oneoff_allow` lets task-less PRs and `--one-off` reach more paths (risk-check still asks the owner); `bosun owners set` opens an owner PR for `governance/owners.toml` with team entries; `migrate` fills the intake template's owner and visibility from the repo.
