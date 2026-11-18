@@ -1500,8 +1500,7 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         items.push(it);
     }
 
-    // Step 19: an adopted repo needs bosun's hooks in the user-scope Claude Code settings too (the
-    // pasted bootstrap installs them in the cloud; locally `bosun setup-snippet --install-hooks`).
+    // Step 19: an adopted repo needs bosun's hooks in the user-scope Claude Code settings too.
     if root.join(".bosun/version").exists()
         && let Some(home) = std::env::var_os("HOME")
     {

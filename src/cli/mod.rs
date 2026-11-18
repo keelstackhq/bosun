@@ -1351,8 +1351,7 @@ pub const WAIT_TIMEOUT_SECS: u64 = 1800;
 
 #[derive(Debug, Args)]
 pub struct SetupSnippetArgs {
-    /// Merge bosun's hooks (SessionStart, Stop, PreToolUse, PostToolUse, PreCompact) into the user-scope
-    /// Claude Code settings instead of printing the bootstrap; idempotent.
+    /// Merge bosun's hooks into the user-scope Claude Code settings instead of printing the bootstrap.
     #[arg(long)]
     pub install_hooks: bool,
     /// The settings file for --install-hooks (default: $HOME/.claude/settings.json).

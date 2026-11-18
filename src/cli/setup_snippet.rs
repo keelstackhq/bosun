@@ -106,22 +106,11 @@ fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static 
             Some((g, at))
         });
         if let Some((g, at)) = found {
-            let mut changed = false;
-            if g.get("matcher").and_then(Value::as_str) != matcher {
-                match matcher {
-                    Some(m) => g["matcher"] = json!(m),
-                    None => drop(g.as_object_mut().and_then(|o| o.remove("matcher"))),
-                }
-                changed = true;
-            }
+            let same = g.get("matcher").and_then(Value::as_str) == matcher;
+            let mut changed = set_key(g, "matcher", same, matcher.map(|m| json!(m)));
             let h = &mut g["hooks"][at];
-            if h.get("timeout").and_then(Value::as_u64) != timeout.map(u64::from) {
-                match timeout {
-                    Some(t) => h["timeout"] = json!(t),
-                    None => drop(h.as_object_mut().and_then(|o| o.remove("timeout"))),
-                }
-                changed = true;
-            }
+            let same = h.get("timeout").and_then(Value::as_u64) == timeout.map(u64::from);
+            changed |= set_key(h, "timeout", same, timeout.map(|t| json!(t)));
             if changed {
                 updated.push(event);
             }
@@ -140,6 +129,16 @@ fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static 
         added.push(event);
     }
     Ok((added, updated))
+}
+
+/// Unless `same`, set `o[key]` to `want` (remove it for `None`); whether it changed.
+fn set_key(o: &mut Value, key: &str, same: bool, want: Option<Value>) -> bool {
+    match want {
+        _ if same => {}
+        Some(v) => o[key] = v,
+        None => drop(o.as_object_mut().and_then(|m| m.remove(key))),
+    }
+    !same
 }
 
 fn install_hooks(settings: Option<PathBuf>) -> CmdResult {

@@ -18,17 +18,15 @@ fn output(text: &str) -> String {
 }
 
 /// True when bosun was never set up in the repo at `cwd`: no `.bosun/version` in the worktree AND
-/// none on the remote default branch (`origin/HEAD`, `origin/main`, `origin/master`). The
-/// worktree alone is not trusted: a branch that deleted the file must not switch the guards off.
-/// No `origin` remote plus an existing `.bosun/` directory counts as adopted (fail closed).
+/// none on the remote default branch (`origin/HEAD`, `origin/main`, `origin/master`): a branch
+/// that deleted the file must not switch the guards off. No `origin` remote plus a `.bosun/`
+/// directory counts as adopted (fail closed).
 pub fn unadopted(cwd: &Path) -> bool {
     let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
     if root.join(".bosun/version").exists() {
         return false;
     }
-    // No `origin` remote and a `.bosun/` directory: the remote was removed or renamed, so the
-    // remote check cannot speak; fail closed (adopted).
     let has_origin = crate::ctx::git_out(&root, &["remote"])
         .is_some_and(|r| r.lines().any(|l| l.trim() == "origin"));
     if !has_origin && root.join(".bosun").is_dir() {

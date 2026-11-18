@@ -519,10 +519,10 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
                 .any(|s| answers_in_command(s, depth + 1)))
 }
 
-/// Bosun-dir lock: `rm`, `mv` (source paths) and `git rm|mv` on `.bosun` or anything under it are
-/// refused in a Bash command (also inside `bash -c` and `eval`), since removing `.bosun/version`
-/// would switch the repo's guards off (`git rm --cached` too: it stages the deletion). So are
-/// the commands that drop the `origin` remote or its refs, which the adopted check reads. Best effort: a path built in a variable or a glob is missed.
+/// Bosun-dir lock: `rm`, `mv` (source paths) and `git rm|mv` (also `--cached`) on `.bosun` or
+/// under it are refused in a Bash command (also inside `bash -c` and `eval`): removing
+/// `.bosun/version` would switch the guards off. So are commands that drop the `origin` remote or
+/// its refs, which the adopted check reads. Best effort: a path built in a variable or glob is missed.
 pub fn bosun_dir_lock(tool: &str, input: &Value) -> Option<String> {
     let c = (tool == "Bash").then(|| input.get("command").and_then(Value::as_str))??;
     removes_bosun_dir(c, 0).then(|| {
