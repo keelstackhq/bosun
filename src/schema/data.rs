@@ -170,7 +170,8 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     ref?: str, ci_ok?: str};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
-    approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
+    approval_carried_from: str | null, verdict_carried_from: str | null, verdict_reapplied: int | null,
+    requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
     delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
     verdict_cleared_by?: str};

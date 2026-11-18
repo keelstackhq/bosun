@@ -169,7 +169,7 @@ pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, B
 
 /// Check a verdict comment (unedited, by a member, on its own PR, for the current head) and
 /// record its verdict.
-fn apply(app: &App, id: u64) -> CmdResult {
+pub(crate) fn apply(app: &App, id: u64) -> CmdResult {
     let gh = app.gh.as_ref();
     let refuse = |why: String| {
         BosunError::error(
@@ -183,42 +183,13 @@ fn apply(app: &App, id: u64) -> CmdResult {
     if !c.unedited() {
         return Err(refuse("it was edited".into()));
     }
-    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
-    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
-    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
-    let writer = matches!(permission.as_str(), "admin" | "write");
-    // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
-    // A marker-less comment of a Bot account is a bot verdict even with write access.
     let bot = c.user_type == "Bot";
-    let marked = comment_json(&c.body);
-    let bot_verdict = !writer || (bot && marked.is_none());
-    let text = marked.or_else(|| bot.then(|| bot_verdict_json(&c.body)).flatten());
-    if bot_verdict {
-        let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
-        let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
-        // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
-        let head = |text| match Verdict::parse(text) {
-            Err(_) => "an invalid bot verdict".to_string(),
-            Ok(n) => match gh.get_pull(n.pr) {
-                Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
-                _ => format!("a bot verdict for {}, not the head", n.head_sha),
-            },
-        };
-        let why = if !listed || !bot {
-            format!("{} has {permission} access, not write", c.user)
-        } else if !on_default {
-            "a bot verdict counts only on a PR into the default branch".into()
-        } else if let Some(text) = text {
-            head(text)
-        } else {
-            "no single verdict in the comment".into()
-        };
-        if !why.is_empty() {
-            eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
-            return Ok(Outcome::data(
-                json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
-            ));
-        }
+    let (why, text, bot_verdict, cfg) = neutral_refusal(gh, &c)?;
+    if let Some(why) = why {
+        eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
+        return Ok(Outcome::data(
+            json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
+        ));
     }
     let text = text.ok_or_else(|| refuse(format!("no {COMMENT_MARKER}")))?;
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
@@ -291,6 +262,52 @@ fn apply(app: &App, id: u64) -> CmdResult {
         };
     }
     Ok(out)
+}
+
+/// What `neutral_refusal` finds: why the comment is refused neutrally (if it is), its verdict
+/// text, whether it is a bot verdict, and the trusted config.
+pub(crate) type Neutral<'c> = (Option<String>, Option<&'c str>, bool, Config);
+
+/// Whether verdict comment `c` is refused neutrally, as verdict.yml ignores it: a bot verdict
+/// (no writer, or a Bot's marker-less ```json verdict) not by a listed Bot with a valid verdict
+/// for the head on a PR into the default branch. Its text is read as `verdict apply` reads it.
+pub(crate) fn neutral_refusal<'c>(
+    gh: &dyn Github,
+    c: &'c Comment,
+) -> Result<Neutral<'c>, BosunError> {
+    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
+    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
+    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
+    let writer = matches!(permission.as_str(), "admin" | "write");
+    // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
+    // A marker-less comment of a Bot account is a bot verdict even with write access.
+    let bot = c.user_type == "Bot";
+    let marked = comment_json(&c.body);
+    let bot_verdict = !writer || (bot && marked.is_none());
+    let text = marked.or_else(|| bot.then(|| bot_verdict_json(&c.body)).flatten());
+    if !bot_verdict {
+        return Ok((None, text, bot_verdict, cfg));
+    }
+    let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
+    let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
+    // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
+    let head = |text| match Verdict::parse(text) {
+        Err(_) => "an invalid bot verdict".to_string(),
+        Ok(n) => match gh.get_pull(n.pr) {
+            Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
+            _ => format!("a bot verdict for {}, not the head", n.head_sha),
+        },
+    };
+    let why = if !listed || !bot {
+        format!("{} has {permission} access, not write", c.user)
+    } else if !on_default {
+        "a bot verdict counts only on a PR into the default branch".into()
+    } else if let Some(text) = text {
+        head(text)
+    } else {
+        "no single verdict in the comment".into()
+    };
+    Ok(((!why.is_empty()).then_some(why), text, bot_verdict, cfg))
 }
 
 /// `.bosun/bosun.toml` on the default branch (as signed keys and owners), and whether the PR the
