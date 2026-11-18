@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::{APPROVABLE, CONTEXT as VERDICT, apply as apply_verdict};
+use super::verdict::{APPROVABLE, CONTEXT as VERDICT, apply as apply_verdict, neutral_refusal};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -25,7 +25,7 @@ use crate::core::risk::{
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
-use crate::core::verdict::{Verdict, comment_json};
+use crate::core::verdict::{Verdict, comment_json, effective};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -1226,12 +1226,13 @@ fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) ->
     settle(gh, w, head, &text).then_some(h)
 }
 
-/// The newest verdict comment for exactly the head (any session) that `bosun verdict apply`
-/// accepts, applied when the head has no `review-verdict` (a doubt counts as having one, our own
-/// withdrawal does not). A refused comment is ignored, as verdict.yml ignores it. After an apply
-/// the comments are read again and a newer verdict is applied instead, for at most
-/// `REAPPLY_ROUNDS` applies; an error, an unreadable list or a verdict still racing withdraws.
-/// Never an error.
+/// The newest verdict comment for exactly the head (any session), applied when it is an
+/// approval, bosun is not halted (and can tell) and the head has no `review-verdict` (a doubt
+/// counts as having one, our own withdrawal does not). A red verdict is left to verdict.yml. A
+/// neutrally refused comment is ignored, as verdict.yml ignores it (at most `MAX_IGNORED`).
+/// After each apply the comments are read again and a newer verdict is applied instead, for at
+/// most `REAPPLY_ROUNDS` applies; an unreadable list, a newer verdict that is no approval, or
+/// one still racing withdraws. Never an error.
 fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
     let gh = app.gh.as_ref();
     let head = pull.head_sha.as_str();
@@ -1241,23 +1242,18 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
             .and_then(|l| l.into_iter().find(is_verdict));
         !top.is_some_and(|s| s.description.starts_with(WITHDRAWN)) && has_verdict(gh, head)
     };
-    if w.is_dry() || blocked() {
+    if w.is_dry() || !matches!(halt_reason(gh), Ok(None)) || blocked() {
         return None;
     }
     // Verdict comments for exactly this PR and head newer than `after`, newest first.
     let newer = |after: u64| {
-        let comments = gh.list_comments(pull.number).ok()?;
-        let ours = |b: &str| {
-            let v = comment_json(b).and_then(|t| Verdict::parse(t).ok());
-            v.is_some_and(|v| v.head_sha == head && v.pr == pull.number)
-        };
-        let mut ids: Vec<u64> = comments
-            .into_iter()
-            .filter(|c| c.id > after && ours(&c.body))
-            .map(|c| c.id)
-            .collect();
-        ids.sort_unstable_by(|a, b| b.cmp(a));
-        Some(ids)
+        let mut comments = gh.list_comments(pull.number).ok()?;
+        comments.retain(|c| {
+            let v = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok());
+            c.id > after && v.is_some_and(|v| v.head_sha == head && v.pr == pull.number)
+        });
+        comments.sort_unstable_by_key(|c| std::cmp::Reverse(c.id));
+        Some(comments)
     };
     let withdraw = |why: &str| {
         eprintln!("bosun: risk-check: verdict re-apply withdrawn: {why}");
@@ -1271,34 +1267,58 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
     };
     let (mut cands, mut ignored, mut stands, mut rounds) = (newer(0)?, Vec::new(), None, 0);
     loop {
-        let Some(id) = cands.iter().copied().find(|i| !ignored.contains(i)) else {
-            return stands;
+        // An apply that failed (it may have posted) and was not replaced is withdrawn.
+        let done = |stands: Option<u64>| match stands {
+            None if rounds > 0 => withdraw("the last re-apply failed"),
+            s => s,
         };
+        let Some(c) = cands.iter().find(|c| !ignored.contains(&c.id)) else {
+            return done(stands);
+        };
+        let id = c.id;
         if rounds == REAPPLY_ROUNDS {
             return withdraw("newer verdicts kept racing it");
         }
-        if rounds == 0 && blocked() {
-            return None;
-        }
-        match apply_verdict(app, id) {
-            Ok(o) if o.data["status"].is_null() => {
+        let text = comment_json(&c.body).unwrap_or_default();
+        let applied = match neutral_refusal(gh, c, text) {
+            Ok((Some(_), ..)) => None,
+            Ok((None, ..)) => {
+                let v = Verdict::parse(text).ok();
+                if !v.is_some_and(|v| effective(&v).approve && !v.escalate_risk) {
+                    if rounds == 0 {
+                        return None; // verdict.yml owns red statuses and task moves
+                    }
+                    return withdraw("a newer verdict that is no approval raced it");
+                }
+                if rounds == 0 && blocked() {
+                    return None;
+                }
+                Some(apply_verdict(app, id).map(|o| !o.data["status"].is_null()))
+            }
+            Err(e) => Some(Err(e)),
+        };
+        match applied {
+            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED => return done(stands),
+            None | Some(Ok(false)) => {
                 ignored.push(id);
                 continue;
             }
-            Ok(_) => (stands, rounds) = (Some(id), rounds + 1),
-            Err(e) => {
+            Some(Ok(true)) => stands = Some(id),
+            Some(Err(e)) => {
                 eprintln!("bosun: risk-check: verdict comment {id}: {}", e.message);
-                return withdraw(&format!("applying comment {id} failed"));
+                stands = None;
             }
         }
-        match newer(id) {
-            Some(c) => cands = c,
+        rounds += 1;
+        cands = match newer(id) {
+            Some(c) => c,
             None => return withdraw("cannot confirm no newer verdict raced it"),
-        }
+        };
     }
 }
 
 const REAPPLY_ROUNDS: u32 = 3;
+const MAX_IGNORED: usize = 20;
 const WITHDRAWN: &str = "re-apply withdrawn: ";
 
 const CARRIED: &str = "carried from ";

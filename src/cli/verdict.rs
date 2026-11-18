@@ -142,36 +142,12 @@ pub(crate) fn apply(app: &App, id: u64) -> CmdResult {
     if !c.unedited() {
         return Err(refuse("it was edited".into()));
     }
-    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
-    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
-    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
-    let writer = matches!(permission.as_str(), "admin" | "write");
-    if !writer {
-        let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
-        let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
-        // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
-        let head = || match Verdict::parse(text) {
-            Err(_) => "an invalid bot verdict".to_string(),
-            Ok(n) => match gh.get_pull(n.pr) {
-                Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
-                _ => format!("a bot verdict for {}, not the head", n.head_sha),
-            },
-        };
-        let why = if !listed || c.user_type != "Bot" {
-            format!("{} has {permission} access, not write", c.user)
-        } else if !on_default {
-            "a bot verdict counts only on a PR into the default branch".into()
-        } else if comment_session(&c.body).is_none() {
-            "a bot verdict needs the reviewer marker".into()
-        } else {
-            head()
-        };
-        if !why.is_empty() {
-            eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
-            return Ok(Outcome::data(
-                json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
-            ));
-        }
+    let (why, writer, cfg) = neutral_refusal(gh, &c, text)?;
+    if let Some(why) = why {
+        eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
+        return Ok(Outcome::data(
+            json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
+        ));
     }
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
     if verdict.chunks_reviewed.is_empty() {
@@ -220,6 +196,43 @@ pub(crate) fn apply(app: &App, id: u64) -> CmdResult {
         };
     }
     Ok(out)
+}
+
+/// Why verdict comment `c` (JSON `text`) is refused neutrally, as verdict.yml ignores it: its
+/// author is no writer, and not a listed bot with a valid verdict for the head on a PR into the
+/// default branch. Also whether the author is a writer, and the trusted config.
+pub(crate) fn neutral_refusal(
+    gh: &dyn Github,
+    c: &Comment,
+    text: &str,
+) -> Result<(Option<String>, bool, Config), BosunError> {
+    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
+    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
+    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
+    let writer = matches!(permission.as_str(), "admin" | "write");
+    if writer {
+        return Ok((None, writer, cfg));
+    }
+    let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
+    let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
+    // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
+    let head = || match Verdict::parse(text) {
+        Err(_) => "an invalid bot verdict".to_string(),
+        Ok(n) => match gh.get_pull(n.pr) {
+            Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
+            _ => format!("a bot verdict for {}, not the head", n.head_sha),
+        },
+    };
+    let why = if !listed || c.user_type != "Bot" {
+        format!("{} has {permission} access, not write", c.user)
+    } else if !on_default {
+        "a bot verdict counts only on a PR into the default branch".into()
+    } else if comment_session(&c.body).is_none() {
+        "a bot verdict needs the reviewer marker".into()
+    } else {
+        head()
+    };
+    Ok(((!why.is_empty()).then_some(why), writer, cfg))
 }
 
 /// `.bosun/bosun.toml` on the default branch (as signed keys and owners), and whether the PR the

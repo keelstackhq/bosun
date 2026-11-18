@@ -95,9 +95,66 @@ fn a_refused_comment_is_ignored_and_never_an_error() {
     assert_eq!(verdicts(&fake).last().unwrap()["state"], "success");
 }
 
-fn body(verdict: &str, session: &str) -> String {
-    let text = format!(r#"{{"pr":1,"head_sha":"{HEAD}","verdict":"{verdict}","confidence":0.9}}"#);
+#[test]
+fn at_most_twenty_refused_comments_are_ignored_per_run() {
+    for (outsiders, applied) in [(20, true), (21, false)] {
+        let fake = pr();
+        let id = verdict_comment(&fake, HEAD, "rev", "session_r");
+        for _ in 0..outsiders {
+            verdict_comment(&fake, HEAD, "mallory", "session_m");
+        }
+        fake.permission("mallory", "read");
+        let v = check(&fake);
+        let want = if applied { json!(id) } else { Value::Null };
+        assert_eq!(v["data"]["verdict_reapplied"], want, "{outsiders}: {v}");
+        assert_eq!(verdicts(&fake).len(), usize::from(applied), "{outsiders}");
+    }
+}
+
+#[test]
+fn a_halted_or_unknown_halt_state_applies_nothing() {
+    for halted in [true, false] {
+        let fake = pr();
+        verdict_comment(&fake, HEAD, "rev", "session_r");
+        if halted {
+            fake.variable("BOSUN_HALT", "1");
+        } else {
+            fake.fail_path("/actions/variables/BOSUN_HALT", 500);
+        }
+        let v = check(&fake);
+        assert_eq!(v["data"]["verdict_reapplied"], Value::Null, "{v}");
+        assert!(verdicts(&fake).is_empty(), "{halted}");
+    }
+}
+
+fn body_with(verdict: &str, confidence: f64, session: &str) -> String {
+    let text = format!(
+        r#"{{"pr":1,"head_sha":"{HEAD}","verdict":"{verdict}","confidence":{confidence}}}"#
+    );
     comment_body(&Verdict::parse(&text).unwrap(), session, None)
+}
+
+fn body(verdict: &str, session: &str) -> String {
+    body_with(verdict, 0.95, session)
+}
+
+#[test]
+fn only_an_approval_is_re_applied() {
+    // A newest request-changes or a low-confidence approve: nothing, not even an older approve;
+    // verdict.yml owns red statuses and the task moves.
+    for text in [
+        body("request-changes", "session_r"),
+        body_with("approve", 0.1, "session_r"),
+    ] {
+        let fake = pr();
+        verdict_comment(&fake, HEAD, "rev", "session_q");
+        fake.comment_by(1, "rev", &text);
+        let v = check(&fake);
+        assert_eq!(v["data"]["verdict_reapplied"], Value::Null, "{v}");
+        assert!(verdicts(&fake).is_empty(), "{:?}", verdicts(&fake));
+        let task = fake.labels_of(7);
+        assert!(task.is_empty(), "{task:?}");
+    }
 }
 
 fn withdrawn(st: &[Value]) -> bool {
@@ -113,7 +170,7 @@ fn withdrawn(st: &[Value]) -> bool {
 fn an_erroring_newest_comment_withdraws_and_a_rerun_recovers() {
     let fake = pr();
     verdict_comment(&fake, HEAD, "rev", "session_q");
-    fake.comment_by(1, "rob", &body("request-changes", "session_r"));
+    fake.comment_by(1, "rob", &body("approve", "session_r"));
     // The newest apply errors before it posts any status.
     fake.fail_path("/collaborators/rob/permission", 500);
     let v = check(&fake);
@@ -131,9 +188,7 @@ fn an_erroring_newest_comment_withdraws_and_a_rerun_recovers() {
         .id;
     assert_eq!(check(&fake)["data"]["verdict_reapplied"], json!(rob));
     let st = verdicts(&fake);
-    let last = st.last().unwrap();
-    assert_eq!(last["state"], "failure", "{st:?}");
-    assert!(!withdrawn(&st), "{st:?}");
+    assert_eq!(st.last().unwrap()["state"], "success", "{st:?}");
 }
 
 /// A comment by `user` lands right after `n` statuses were posted on the head.
@@ -153,21 +208,28 @@ fn id_of(fake: &FakeGithub, session: &str) -> u64 {
 }
 
 #[test]
-fn newer_verdicts_that_raced_the_applies_stand_instead() {
+fn newer_approvals_that_raced_the_applies_stand_instead() {
     let fake = pr();
     verdict_comment(&fake, HEAD, "rev", "session_q");
     // risk-check posts 1, q's apply 2, s's apply 3, t's apply 4.
-    push(&fake, 2, "rev", body("request-changes", "session_s"));
+    push(&fake, 2, "rev", body("approve", "session_s"));
     push(&fake, 3, "rev", body("approve", "session_t"));
     let v = check(&fake);
-    assert_eq!(
-        v["data"]["verdict_reapplied"],
-        json!(id_of(&fake, "session_t")),
-        "{v}"
-    );
+    let t = id_of(&fake, "session_t");
+    assert_eq!(v["data"]["verdict_reapplied"], json!(t), "{v}");
     let st = verdicts(&fake);
     assert_eq!(st.last().unwrap()["state"], "success", "{st:?}");
     assert_eq!(st.len(), 3, "{st:?}");
+}
+
+#[test]
+fn a_racing_request_for_changes_withdraws() {
+    let fake = pr();
+    verdict_comment(&fake, HEAD, "rev", "session_q");
+    push(&fake, 2, "rev", body("request-changes", "session_s"));
+    let v = check(&fake);
+    assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+    assert!(withdrawn(&verdicts(&fake)));
 }
 
 #[test]
@@ -209,20 +271,43 @@ fn a_dry_run_applies_nothing() {
 }
 
 #[test]
-fn a_failed_write_after_the_status_never_lets_an_older_comment_replace_it() {
+fn a_failed_write_after_the_status_withdraws_unless_a_newer_verdict_landed() {
+    for newer in [false, true] {
+        let fake = pr();
+        verdict_comment(&fake, HEAD, "rev", "session_q");
+        // risk-check posts its status, q's apply posts its success, then its record comment
+        // fails, so its apply errors after the status stands.
+        fake.after_requests(&format!("/statuses/{HEAD}"), 2, move |s| {
+            s.fail = Some((500, 1));
+            if newer {
+                let id = common::fake::add_comment(s, 1, &body("approve", "session_s"));
+                s.comments.iter_mut().find(|c| c.id == id).unwrap().user = "rev".into();
+            }
+        });
+        let v = check(&fake);
+        let st = verdicts(&fake);
+        if newer {
+            let s = id_of(&fake, "session_s");
+            assert_eq!(v["data"]["verdict_reapplied"], json!(s), "{v}");
+            assert_eq!(st.last().unwrap()["state"], "success", "{st:?}");
+        } else {
+            assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+            assert!(withdrawn(&st), "{st:?}");
+        }
+    }
+}
+
+#[test]
+fn a_failed_apply_with_only_an_outsiders_newer_comment_withdraws() {
     let fake = pr();
     verdict_comment(&fake, HEAD, "rev", "session_q");
-    let text =
-        format!(r#"{{"pr":1,"head_sha":"{HEAD}","verdict":"request-changes","confidence":0.9}}"#);
-    let v = Verdict::parse(&text).unwrap();
-    fake.comment_by(1, "rev", &comment_body(&v, "session_r", None));
-    // risk-check posts its status, the newest verdict posts its failure, then its record
-    // comment fails, so its apply errors after the status stands.
-    fake.after_requests(&format!("/statuses/{HEAD}"), 2, |s| {
+    fake.permission("mallory", "read");
+    fake.after_requests(&format!("/statuses/{HEAD}"), 2, move |s| {
         s.fail = Some((500, 1));
+        let id = common::fake::add_comment(s, 1, &body("approve", "session_m"));
+        s.comments.iter_mut().find(|c| c.id == id).unwrap().user = "mallory".into();
     });
     let v = check(&fake);
     assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
-    let st = verdicts(&fake);
-    assert!(st.iter().all(|s| s["state"] == "failure"), "{st:?}");
+    assert!(withdrawn(&verdicts(&fake)), "{:?}", verdicts(&fake));
 }
