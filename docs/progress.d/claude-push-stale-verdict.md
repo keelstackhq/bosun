@@ -1,1 +1,0 @@
-- 2026-11-18 · push-gates stale-verdict warning · src/hooks/pre_tool_use.rs, spec §7 · this PR

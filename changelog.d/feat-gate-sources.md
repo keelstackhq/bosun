@@ -1,1 +1,0 @@
-- `bosun gate sources --pr N` (read-only): reports who posted `risk-check`, `review-verdict` and `main-open` on the PR head — status creator, the gate App's run, other Apps' runs — judged by `[checks] mode`; exit 3 unless every gate is posted by the gate App and no status disagrees (a forge sign).

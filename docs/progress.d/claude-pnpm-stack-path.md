@@ -1,1 +1,0 @@
-- 2026-11-18 · pnpm stack path · bosun.yml.jinja and CircleCI bosun-ok key pnpm steps off .bosun/bosun.toml ts-pnpm stack paths, no {} package.json, spec §3 · this PR

@@ -1,1 +1,0 @@
-- gates: in `[checks] mode = "dual"` every reader of risk-check, review-verdict and main-open takes the worse of the newest status and the gate App's newest check run, so a status forged by any workflow cannot outvote the App.
