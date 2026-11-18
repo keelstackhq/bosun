@@ -246,11 +246,9 @@ pub fn comment_json(body: &str) -> Option<&str> {
     Some(fenced[..end.unwrap_or(fenced.len())].trim())
 }
 
-/// No-CI mode: the reviewer sessions whose newest verdict comment on PR `pr` at `head` is clean
-/// (approve, confidence at least [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, every chunk
-/// `1..=chunks` listed), unedited, not `excluded`, with a session and, when `models` is set, one
-/// of those models. Any session whose newest verdict there is not clean blocks: then none count.
-/// `comments` are `(body, unedited)` oldest first, from writers only.
+/// No-CI mode: sessions whose newest verdict comment on `pr` at `head` is clean (approve, confidence
+/// at least [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, all `chunks` listed), unedited,
+/// not `excluded`, of an allowed model. Any unclean newest verdict blocks all. Writers' comments.
 pub fn comment_clean<'a>(
     comments: impl IntoIterator<Item = (&'a str, bool)>,
     pr: u64,

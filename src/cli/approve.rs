@@ -14,11 +14,11 @@ use serde_json::{Value, json};
 use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, default_ref, kill_switch, main_red};
-use crate::cli::pr_no_ci::provider_at;
 use crate::cli::risk_check::{
     autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
     owner_comment, owner_logins, review_models,
 };
+use crate::cli::{pr_no_ci::provider_at, risk_check::chat_counted};
 use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
@@ -148,10 +148,9 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// No-CI readiness of `p`: from its newest ready summary for the head (spec §4).
+/// No-CI readiness of `p`: its newest ready summary of the head by a writer (spec §4).
 fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
     let comments = gh.list_comments(p.number)?;
-    // The newest summary of the head by a repo writer (any other commenter could hide a PR).
     for c in comments.iter().rev() {
         if parse_ready_summary(&c.body, &p.head_sha)
             && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"))
@@ -169,6 +168,7 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
         if provider_at(gh, &p.base_sha)? == CiProvider::None {
             let (r, verdict) = summary_of(gh, &p)?;
             if let Readiness::Ready(risk) = r
+                && !chat_counted(gh, &p)?
                 && !hold(gh, &p, &mut board)?
             {
                 board.ready.push(ready_of(gh, p, risk, verdict)?);

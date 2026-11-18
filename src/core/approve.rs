@@ -662,10 +662,9 @@ pub fn ready_summary(
 
 /// `body` is a ready summary of `head`: its first line and its marker both name it.
 pub fn parse_ready_summary(body: &str, head: &str) -> bool {
-    body.lines().next() == Some(format!("/bosun ready {head}").as_str())
-        && body
-            .lines()
-            .any(|l| l == format!("{READY_MARKER}{head} -->"))
+    let mut lines = body.lines();
+    lines.next() == Some(format!("/bosun ready {head}").as_str())
+        && lines.any(|l| l == format!("{READY_MARKER}{head} -->"))
 }
 
 fn summary_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {

@@ -43,13 +43,20 @@ fn repo() -> tempfile::TempDir {
 /// Task 7 in review, its PR 20 leased by `session_w`, no CI at base; `high` adds a workflow
 /// change and an owner. Every gate is stamped on the local head, which is the PR head.
 fn setup(high: bool, ci: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
-    let fake = FakeGithub::start();
-    fake.issue(
-        7,
-        "the task",
-        &["bosun:state/review"],
+    let task = (
+        &["bosun:state/review"][..],
         "Do it.\n<!-- bosun:task {} -->",
     );
+    setup_with(high, ci, task)
+}
+
+fn setup_with(
+    high: bool,
+    ci: Option<&str>,
+    (labels, body): (&[&str], &str),
+) -> (FakeGithub, tempfile::TempDir) {
+    let fake = FakeGithub::start();
+    fake.issue(7, "the task", labels, body);
     fake.comment(7, &lease_note("session_w", LIVE, "**"));
     fake.pull(20, "t", "claude/t7", "Closes #7");
     fake.pull_as_issue(20, "t");
@@ -202,7 +209,6 @@ fn ready_no_ci_no_status_no_auto_merge() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["task_state"], "queued", "{v}");
     assert_eq!(v["data"]["merge_next"], "bosun merge 20", "{v}");
-    assert_eq!(v["data"]["auto_merge"], false);
     assert_eq!(status_posts(&fake), 0);
     assert_eq!(fake.auto_merge_enabled(20), None);
     assert!(fake.labels_of(7).contains(&"bosun:state/queued".into()));
@@ -258,11 +264,78 @@ fn approve_list_no_ci_uses_summary() {
     let ready = v["data"]["ready"].as_array().unwrap();
     assert_eq!(ready.len(), 1, "{v}");
     assert_eq!(ready[0]["pr"], 20);
-    // Approved in chat: the next summary names it, and the board no longer asks.
+    // Approved in chat: the board no longer asks, before and after the next summary.
     chat(&fake);
+    let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
+    assert_eq!(v["data"]["ready"], json!([]), "{v}");
     assert_eq!(self::ready(&fake, dir.path()).0, 0);
     let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
     assert_eq!(v["data"]["ready"], json!([]), "{v}");
+}
+
+fn rev_comment(fake: &FakeGithub, user: &str, edited: bool) {
+    let head = fake.pull_head(20);
+    let j = json!({"pr": 20, "head_sha": head, "verdict": "approve", "confidence": 0.95,
+        "findings": []});
+    let body = comment_body(
+        &Verdict::parse(&j.to_string()).unwrap(),
+        "session_rev",
+        None,
+    );
+    if edited {
+        fake.comment_edited(20, user, &body);
+    } else {
+        fake.comment_by(20, user, &body);
+    }
+}
+
+#[test]
+fn ready_no_ci_ignores_non_writer_and_edited_verdicts() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.permission("mallory", "read");
+    rev_comment(&fake, "mallory", false);
+    rev_comment(&fake, "rev", true);
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(summaries(&fake).is_empty());
+    rev_comment(&fake, "rev", false);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+}
+
+#[test]
+fn approve_list_no_ci_ignores_a_non_writer_summary() {
+    let (fake, dir) = setup(true, Some(NO_CI));
+    fake.allow_anonymous_reads();
+    let head = fake.pull_head(20);
+    fake.compare_file(BASE, &head, ".github/workflows/ci.yml", "@@ -0,0 +1 @@\n+x");
+    let body = ready_summary(&head, &[], "high: R-ci", "s", None);
+    fake.permission("mallory", "read");
+    fake.comment_by(20, "mallory", &body);
+    let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
+    assert_eq!(v["data"]["ready"], json!([]), "{v}");
+    fake.comment_by(20, "rev", &body);
+    let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
+    assert_eq!(v["data"]["ready"].as_array().unwrap().len(), 1, "{v}");
+}
+
+#[test]
+fn pr_without_a_task_is_refused_without_ci() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.pull(21, "gov", "claude/gov", "no task");
+    fake.pull_as_issue(21, "gov");
+    let (code, v) = run(&fake, dir.path(), &["pr", "--pr", "21", "--ready"]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(fake.auto_merge_enabled(21), None);
+}
+
+#[test]
+fn ready_no_ci_leaves_a_plain_issue_unlabelled() {
+    let (fake, dir) = setup_with(false, Some(NO_CI), (&[], "Do it."));
+    verdict(&fake, "session_rev", "approve");
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["task_state"], Value::Null, "{v}");
+    assert!(fake.labels_of(7).is_empty(), "{:?}", fake.labels_of(7));
 }
 
 const H: &str = "abcdef1234567890abcdef1234567890abcdef12";

@@ -611,7 +611,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
         }
         if super::pr_no_ci::provider_at(gh, &pull.base_sha)? == CiProvider::None {
-            return super::pr_no_ci::ready(&app, n, &issue, pull);
+            return super::pr_no_ci::ready(&app, n, &issue, plain, pull);
         }
         check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;

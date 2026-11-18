@@ -1,7 +1,5 @@
-//! `bosun pr <task> --ready` with `[ci] provider = "none"` (spec §4): bosun runs here what the
-//! CI workflows would: gate stamps, risk-check, a clean verdict from another session, the owner's
-//! chat approval when gated, and main-open. Then it posts one summary per head and queues the
-//! task for `bosun merge`. No status, no auto-merge.
+//! `bosun pr <task> --ready` with `[ci] provider = "none"` (spec §4): runs here what CI would, posts
+//! one summary per head and queues the task for `bosun merge`. No status, no auto-merge.
 
 use serde_json::{Value, json};
 
@@ -17,8 +15,7 @@ use crate::gates::main_open::judge_local;
 use crate::github::{Github, Issue, Pull, is_ccr_refusal};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 
-/// The CI provider in the config at `git_ref` (a PR never picks its own). No file, or one that
-/// does not parse, is `github`: the CI path then refuses as it always did.
+/// The CI provider in the config at `git_ref` (a PR never picks its own); `github` if unreadable.
 pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
     Ok(gh
         .file_at(CONFIG_FILE, git_ref)?
@@ -27,8 +24,7 @@ pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
         .unwrap_or_default())
 }
 
-/// Sessions with a clean verdict on the head, other than the author and this one; with no CI,
-/// writers' own verdict comments count too (nothing applies them).
+/// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
     let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
@@ -62,7 +58,7 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
 }
 
 /// `--ready` without CI for task `n` and its PR (the task is in review).
-pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
+pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let (pr, head) = (pull.number, pull.head_sha.clone());
     let rerun = format!("bosun pr {n} --ready");
@@ -75,13 +71,13 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
         }
         e
     })?;
-    let mut data =
-        json!({"pr": pr, "head_sha": head, "created": false, "draft": pull.draft, "stamps": gates});
+    let mut data = json!({"pr": pr, "head_sha": head, "created": false, "auto_merge": false, "draft": pull.draft, "stamps": gates});
     let with = |e: BosunError, data: &Value| {
         let mut d = data.clone();
-        if let (Some(extra), Some(obj)) = (e.data.clone(), d.as_object_mut()) {
-            obj.extend(extra.as_object().cloned().unwrap_or_default());
-        }
+        let extra = e.data.iter().filter_map(|x| x.as_object()).flatten();
+        d.as_object_mut()
+            .unwrap()
+            .extend(extra.map(|(k, v)| (k.clone(), v.clone())));
         e.with_data(d)
     };
     let risk = evaluate_local(app, &pull);
@@ -90,13 +86,13 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
         Err(e) if e.exit == Exit::NeedsHuman => e.data.clone().unwrap_or_default(),
         Err(e) => return Err(with(e.clone(), &data)),
     };
-    let ids: Vec<&str> = (risk_data["matches"].as_array().into_iter().flatten())
+    let ids = (risk_data["matches"].as_array().into_iter().flatten())
         .filter_map(|m| m["rule"].as_str())
-        .collect();
+        .collect::<Vec<_>>();
     let risk_line = if risk_data["level"] == "high" {
         format!("high: {}", ids.join(", "))
     } else {
-        "normal".to_string()
+        "normal".into()
     };
     data["risk"] = json!(risk_line);
     let verdicts = clean_by_other(app, &pull)?;
@@ -131,13 +127,10 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
     data["approval"] = json!(approval);
     let body = ready_summary(&head, &gates, &risk_line, &verdicts.join(", "), approval);
     let comments = gh.list_comments(pr)?;
-    // starts_with: the cloud proxy appends a footer; only a writer's copy counts.
     let mut posted = false;
-    for c in &comments {
-        if !posted && c.body.starts_with(&body) && parse_ready_summary(&c.body, &head) {
-            let p = gh.permission(&c.user)?;
-            posted = matches!(p.as_deref(), Some("admin" | "write"));
-        }
+    for c in comments.iter().filter(|c| c.body.starts_with(&body)) {
+        let ours = parse_ready_summary(&c.body, &head) && !posted;
+        posted |= ours && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"));
     }
     if !posted {
         gh.add_comment(pr, &body)?;
@@ -174,17 +167,20 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
         session: app.ctx.session.clone(),
         pr,
     };
-    let note = format!(
-        "PR #{pr} ready for `bosun merge` (no CI)\n\n{}",
-        record.to_line()
-    );
-    gh.add_comment(n, &note)?;
-    let fresh = gh.get_issue(n)?.unwrap_or_else(|| issue.clone());
-    set_state(gh, n, &fresh, State::Queued)?;
+    gh.add_comment(
+        n,
+        &format!(
+            "PR #{pr} ready for `bosun merge` (no CI)\n\n{}",
+            record.to_line()
+        ),
+    )?;
+    if !plain {
+        let fresh = gh.get_issue(n)?.unwrap_or_else(|| issue.clone());
+        set_state(gh, n, &fresh, State::Queued)?;
+    }
     data["ready"] = json!(true);
     data["draft"] = json!(false);
-    data["auto_merge"] = json!(false);
-    data["task_state"] = json!(State::Queued.name());
+    data["task_state"] = json!((!plain).then_some(State::Queued.name()));
     data["merge_next"] = json!(format!("bosun merge {pr}"));
     Ok(Outcome::data(data))
 }

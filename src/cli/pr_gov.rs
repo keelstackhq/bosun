@@ -117,7 +117,6 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             "trailers": trailers,
         })));
     }
-    // Auto-merge needs the ruleset's required checks; with no CI nothing would gate the merge.
     if super::pr_no_ci::provider_at(gh, &pull.base_sha)? == crate::config::CiProvider::None {
         return Err(BosunError::needs_human(
             format!(
