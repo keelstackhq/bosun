@@ -1343,7 +1343,13 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
             .unwrap()
             .to_string();
         // (base has a root package.json, PR change, gates, gate that fails) -> (passes, log, pr_gates)
-        let case = |base_root: bool, pr: &str, only: &str, fail: &str| {
+        // As `case`, on a given event and ref.
+        let case_on = |event: &str,
+                       git_ref: &str,
+                       base_root: bool,
+                       pr: &str,
+                       only: &str,
+                       fail: &str| {
             let dir = tempfile::tempdir().unwrap();
             let tmp = tempfile::tempdir().unwrap();
             let d = dir.path();
@@ -1388,13 +1394,25 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
                     ("GITHUB_SHA", "unused"),
                     ("GATES", "test-integrity deps fmt lint test"),
                     ("ONLY", only),
-                    ("EVENT", "pull_request"),
+                    ("EVENT", event),
+                    ("REF", git_ref),
+                    ("DEFAULT_BRANCH", "main"),
                     ("BASE", &base),
                 ],
             );
             let log = fs::read_to_string(log).unwrap_or_default();
             let out = fs::read_to_string(out).unwrap_or_default();
             (ok, log, out.trim().to_string())
+        };
+        let case = |base_root: bool, pr: &str, only: &str, fail: &str| {
+            case_on(
+                "pull_request",
+                "refs/pull/1/merge",
+                base_root,
+                pr,
+                only,
+                fail,
+            )
         };
         let pr = "echo '{\"name\":\"r\",\"pnpm\":{\"configDependencies\":{\"x\":\"1.0.0\"}}}' > package.json \
                   && printf 'packages:\\n  - packages/*\\npnpmfile: evil.cjs\\n' > pnpm-workspace.yaml \
@@ -1442,7 +1460,49 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
         let (ok, log, _) = case(true, &link, "", "");
         assert!(!ok && !log.contains("deps: "), "{log}");
         assert!(!outside.path().join("package.json").exists());
+        // A push to the default branch is merged: deps reads its own copies, so an approved
+        // auditConfig applies on the run of its own merge.
+        let (ok, log, _) = case_on("push", "refs/heads/main", true, pr, "", "");
+        assert!(ok, "{log}");
+        let deps = log.split_once("deps: ").expect(&log).1;
+        assert!(
+            deps.contains("configDependencies") && deps.contains("pnpmfile: evil.cjs"),
+            "{deps}"
+        );
+        assert!(deps.contains("{\"name\":\"b\""), "{deps}");
+        // The merge queue and a push elsewhere are not merged yet: the base's copies.
+        for (event, git_ref) in [
+            ("merge_group", "refs/heads/gh-readonly-queue/main/pr-1"),
+            ("push", "refs/heads/other"),
+        ] {
+            let (ok, log, _) = case_on(event, git_ref, true, pr, "", "");
+            assert!(ok, "{log}");
+            let deps = log.split_once("deps: ").expect(&log).1;
+            assert!(
+                !deps.contains("evil") && !deps.contains("configDependencies"),
+                "{event}: {deps}"
+            );
+        }
     }
+}
+
+/// deps learns the event and ref only through env, and names the base's copies only where it
+/// uses them (never on a push to the default branch).
+#[test]
+fn deps_names_the_base_copies_only_off_a_push_to_main() {
+    let files = variant(&["ts-pnpm"], "");
+    let yml = file(&files, BOSUN_YML);
+    assert!(yml.contains("REF: ${{ github.ref }}"), "{yml}");
+    assert!(
+        yml.contains("DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}"),
+        "{yml}"
+    );
+    let guard = yml
+        .find(r#"if [ "$EVENT" = push ] && [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then"#)
+        .expect("the push-to-main guard");
+    let other = yml[guard..].find("else").unwrap() + guard;
+    let notice = yml.find("uses the base's copies").unwrap();
+    assert!(other < notice, "the notice is in the else branch");
 }
 
 /// bosun-trusted installs the pnpm release the base's package.json names (the PR's while the
@@ -1458,7 +1518,8 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
         .unwrap()
         .to_string();
     // Some(installed spec) when the step passes.
-    let case = |base: Option<&str>, pr: &str| -> Option<String> {
+    // `push`: a push to the default branch, whose own package.json names the release.
+    let case_on = |base: Option<&str>, pr: &str, push: bool| -> Option<String> {
         let dir = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let d = dir.path();
@@ -1496,6 +1557,12 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
             fs::set_permissions(bin.join(f), fs::Permissions::from_mode(0o755)).unwrap();
         }
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let head = git_in(d, "git rev-parse HEAD");
+        let (event, sha) = if push {
+            ("push", head.as_str())
+        } else {
+            ("pull_request", "unused")
+        };
         let ok = bash_in(
             d,
             &run,
@@ -1503,7 +1570,10 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
                 ("PATH", &path),
                 ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
                 ("BASE", &base_sha),
-                ("GITHUB_SHA", "unused"),
+                ("GITHUB_SHA", sha),
+                ("EVENT", event),
+                ("REF", "refs/heads/main"),
+                ("DEFAULT_BRANCH", "main"),
             ],
         );
         let log = fs::read_to_string(log).unwrap_or_default();
@@ -1512,8 +1582,14 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
         }
         ok.then(|| log.trim().to_string())
     };
+    let case = |base: Option<&str>, pr: &str| case_on(base, pr, false);
     let pm = |v: &str| format!("{{\"packageManager\": {v}}}");
     let pnpm = |v: &str| Some(format!("install -g --ignore-scripts {v}"));
+    // A push to main is merged: its own package.json names the release, not the previous commit's.
+    assert_eq!(
+        case_on(Some(&pm("\"pnpm@9.0.0\"")), &pm("\"pnpm@10.28.0\""), true),
+        pnpm("pnpm@10.28.0")
+    );
     assert_eq!(
         case(
             Some(&pm("\"pnpm@10.28.0+sha512.abc\"")),
