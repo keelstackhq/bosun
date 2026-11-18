@@ -15,14 +15,18 @@ use crate::gates::main_open::judge_local;
 use crate::github::{Github, Issue, Pull, is_ccr_refusal};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 
-/// The CI provider of the repo: its config on the default branch, never the PR's base or head
-/// (a PR cannot pick its own provider); `github` if unreadable.
-pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
-    let text = gh.file_at(CONFIG_FILE, &crate::app::default_ref(gh)?)?;
+/// The CI provider in the config at `git_ref` (a PR never picks its own); `github` if unreadable.
+pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
+    let text = gh.file_at(CONFIG_FILE, git_ref)?;
     Ok(text
         .and_then(|t| Config::parse(&t, CONFIG_FILE).ok())
         .map(|c| c.ci_provider())
         .unwrap_or_default())
+}
+
+/// The CI provider of the repo: its config on the default branch, never the PR's base or head.
+pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
+    provider_at(gh, &crate::app::default_ref(gh)?)
 }
 
 /// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
