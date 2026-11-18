@@ -192,13 +192,13 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         }
     };
     let question = args.question.as_deref();
-    let sig = signature(app, &pull, question.unwrap_or_default(), args)?;
+    let sig = signature(app, &pull, (question.unwrap_or_default(), session), args)?;
     let body = chat_comment(
         head,
         session,
         &app.ctx.now.to_string(),
         question,
-        sig.as_ref().map(|(k, s)| (k.as_str(), s.as_str())),
+        sig.as_ref().map(|(k, at, s)| (k.as_str(), *at, s.as_str())),
     );
     let c = gh.add_comment(pr, &body)?;
     Ok(json!({"pr": pr, "head_sha": head, "comment_id": c.id, "question_id": question}))
@@ -240,16 +240,16 @@ fn stored_approve(ctx: &crate::ctx::Ctx, q: &str, pr: u64, head: &str) -> Result
 }
 
 /// Under `[approvals] chat_signed` (read at the PR's base) the record is signed with `--sign-key`:
-/// `(key id, base64 signature)`. Without that setting a key is not used. The key must be an
-/// enrolled owner key; it is never printed.
+/// `(key id, signing time, base64 signature)`. Without that setting a key is not used. The key
+/// must be an enrolled owner key; it is never printed.
 fn signature(
     app: &App,
     pull: &crate::github::Pull,
-    question: &str,
+    (question, session): (&str, &str),
     args: &ApproveArgs,
-) -> Result<Option<(String, String)>> {
+) -> Result<Option<(String, i64, String)>> {
     let gh = app.gh.as_ref();
-    if !chat_signed(gh, &pull.base_sha)? {
+    if !chat_signed(gh)? {
         return Ok(None);
     }
     let Some(path) = &args.sign_key else {
@@ -277,15 +277,15 @@ fn signature(
             )
         })?;
     let repo = &app.ctx.repo;
+    let at = app.ctx.now.0;
     let msg = signed_message_chat(
-        &repo.owner,
-        &repo.name,
-        pull.number,
+        (&repo.owner, &repo.name, pull.number),
         &pull.head_sha,
-        question,
+        (question, session, at),
     );
     Ok(Some((
         key.id,
+        at,
         b64::encode(pair.sign(msg.as_bytes()).as_ref()),
     )))
 }

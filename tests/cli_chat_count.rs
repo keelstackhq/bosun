@@ -388,6 +388,8 @@ mod signed {
 
     const MAIN: &str = "refs/heads/main";
     const Q: &str = "1-0123456-1";
+    /// 2026-10-22T10:00:00Z, when the fake posts its comments unless told otherwise.
+    const AT: i64 = 1_792_663_200;
 
     fn kp(seed: u8) -> Ed25519KeyPair {
         Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap()
@@ -395,7 +397,10 @@ mod signed {
 
     fn setup(cfg: &str) -> FakeGithub {
         let fake = high_pr(true);
-        fake.content(".bosun/bosun.toml", BASE, cfg);
+        // The default branch decides; the PR's base says the same here.
+        for r in [BASE, MAIN] {
+            fake.content(".bosun/bosun.toml", r, cfg);
+        }
         let k = b64::encode(kp(1).public_key().as_ref());
         let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{k}\"\n");
         fake.content(".bosun/approvers.toml", MAIN, &keys);
@@ -404,11 +409,21 @@ mod signed {
 
     /// A chat record for HEAD signed as `message` says, by the key `seed` under id `id`.
     fn record(seed: u8, id: &str, repo: &str, pr: u64, head: &str) -> String {
+        record_at(seed, id, (repo, pr, head), ("session_orch", AT))
+    }
+
+    /// As [`record`], signed for `session` at unix time `at`.
+    fn record_at(
+        seed: u8,
+        id: &str,
+        (repo, pr, head): (&str, u64, &str),
+        (session, at): (&str, i64),
+    ) -> String {
         let (o, r) = repo.split_once('/').unwrap();
-        let msg = signed_message_chat(o, r, pr, head, Q);
+        let msg = signed_message_chat((o, r, pr), head, (Q, session, at));
         let sig = b64::encode(kp(seed).sign(msg.as_bytes()).as_ref());
         format!(
-            "{}\n<!-- bosun:chat-sig v1 key={id} sig={sig} -->",
+            "{}\n<!-- bosun:chat-sig v1 key={id} at={at} sig={sig} -->",
             chat(HEAD, "session_orch")
         )
     }
@@ -532,8 +547,86 @@ mod signed {
         let (code, v) = check(&fake);
         assert_eq!(code, 5, "{v}");
         let fix = v["error"]["fix"].as_str().unwrap();
-        assert!(fix.contains("unsigned under chat_signed"), "{fix}");
+        assert!(fix.contains("it does not verify"), "{fix}");
         assert!(!fix.contains("orchestrator session left"), "{fix}");
+        // A wrong-key signature reads the same: it is the signature, not the orchestrator.
+        let fake = setup(ON);
+        app_comment(&fake, "ada", &record(2, "k1", "acme/widget", 1, HEAD));
+        let fix = fix_of(&fake);
+        assert!(
+            fix.contains("chat_signed") && fix.contains("does not verify"),
+            "{fix}"
+        );
+        assert!(!fix.contains("orchestrator session left"), "{fix}");
+    }
+
+    /// The signature binds the record's session and its time: another session or time fails.
+    #[test]
+    fn a_signature_for_another_session_or_time_does_not_count() {
+        let fake = setup(ON);
+        let other = record_at(1, "k1", ("acme/widget", 1, HEAD), ("session_other", AT));
+        app_comment(&fake, "ada", &other);
+        refused(&fake);
+        let fake = setup(ON);
+        // Signed at one time, claiming another in the line.
+        let moved =
+            record(1, "k1", "acme/widget", 1, HEAD).replace(&AT.to_string(), &(AT + 1).to_string());
+        app_comment(&fake, "ada", &moved);
+        refused(&fake);
+        // A line with no time (the v1 form) never counts for a PR chat record.
+        let fake = setup(ON);
+        let old = record(1, "k1", "acme/widget", 1, HEAD).replace(&format!(" at={AT}"), "");
+        app_comment(&fake, "ada", &old);
+        refused(&fake);
+    }
+
+    /// A signed record posted long after it was signed is stale: a copy of an old one never counts.
+    #[test]
+    fn a_stale_copy_of_a_signed_record_does_not_count() {
+        let fake = setup(ON);
+        let body = record(1, "k1", "acme/widget", 1, HEAD);
+        fake.comment_at(1, "ada", &body, "2026-10-22T11:00:00Z");
+        fake.last_comment(|c| c.via_app = Some("claude".into()));
+        refused(&fake);
+    }
+
+    /// After the owner's request for changes is dismissed, only a record signed after the
+    /// dismissal counts: neither the old record nor a copy of it posted later revives.
+    #[test]
+    fn a_replayed_record_never_revives_after_a_dismissal() {
+        let fake = setup(ON);
+        let old = record(1, "k1", "acme/widget", 1, HEAD);
+        app_comment(&fake, "ada", &old);
+        assert_eq!(approved(&fake), "ada");
+        fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+        fake.review(1, "ada", "DISMISSED", HEAD);
+        fake.dismiss_event(1, 2, "2026-10-22T10:30:00Z");
+        refused(&fake);
+        fake.comment_at(1, "ada", &old, "2026-10-22T10:35:00Z");
+        fake.last_comment(|c| c.via_app = Some("claude".into()));
+        refused(&fake);
+        let fresh = record_at(
+            1,
+            "k1",
+            ("acme/widget", 1, HEAD),
+            ("session_orch", AT + 2160),
+        );
+        fake.comment_at(1, "ada", &fresh, "2026-10-22T10:36:00Z");
+        fake.last_comment(|c| c.via_app = Some("claude".into()));
+        assert_eq!(approved(&fake), "ada");
+    }
+
+    /// `chat_signed` is read from the default branch: the PR's base cannot turn it off.
+    #[test]
+    fn the_pr_base_cannot_turn_chat_signed_off() {
+        let fake = setup(ON);
+        fake.content(
+            ".bosun/bosun.toml",
+            BASE,
+            "[approvals]\nchat_signed = false\n",
+        );
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        refused(&fake);
     }
 }
 

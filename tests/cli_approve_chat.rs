@@ -808,11 +808,13 @@ mod chat_signed {
         assert_eq!(code, 0, "{v}");
         let body = chat_comments(&fake).remove(0);
         let sig_line = body.lines().last().unwrap();
+        // Signed at the session's time, for this session: a copy posted later is stale.
         let sig = sig_line
-            .strip_prefix("<!-- bosun:chat-sig v1 key=k1 sig=")
+            .strip_prefix("<!-- bosun:chat-sig v1 key=k1 at=1794304800 sig=")
             .and_then(|s| s.strip_suffix(" -->"))
             .unwrap_or_else(|| panic!("{body}"));
-        let msg = format!("bosun-chat v1 acme/widget#1 {HEAD} {Q}");
+        let msg =
+            format!("bosun-chat v2 acme/widget#1 {HEAD} {Q} session=session_orch at=1794304800");
         let (pk, sig) = (b64::decode(&public).unwrap(), b64::decode(sig).unwrap());
         assert!(bosun::core::approve::verify_ed25519(
             &pk,
