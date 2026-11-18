@@ -571,6 +571,8 @@ pub struct ChatRecord {
     pub head: String,
     pub session: String,
     pub question: Option<String>,
+    /// `new` or `adopt` for an intake record; `None` for a PR record.
+    pub mode: Option<String>,
 }
 
 /// The PR comment that records the owner's chat approval of `head`.
@@ -588,37 +590,55 @@ pub fn chat_comment(head: &str, session: &str, at: &str, question: Option<&str>)
 /// `<!-- bosun:chat-approval v1 session=<id> head=<head>[ question=<id>] -->` (keys in this
 /// order, none unknown or repeated). The risk-check counter and the hook guard share this rule.
 pub fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
-    parse_chat(body, "approve", "head", head, 40)
+    parse_chat(body, "approve", "head", head, 40, false)
 }
 
 /// The intake comment that records the owner's chat yes to the intake whose bytes hash to
-/// `sha` (spec section 8): `/bosun approve-intake <sha> chat`, the same prose line, and the
-/// marker with `intake=<sha>` in place of `head=`.
-pub fn intake_chat_comment(sha: &str, session: &str, at: &str, question: Option<&str>) -> String {
+/// `sha` (spec section 8): `/bosun approve-intake <sha> <mode> chat`, the same prose line, and
+/// the marker with `intake=<sha> mode=<mode>` in place of `head=`.
+pub fn intake_chat_comment(
+    sha: &str,
+    mode: &str,
+    session: &str,
+    at: &str,
+    question: Option<&str>,
+) -> String {
     let q = question
         .map(|q| format!(" question={q}"))
         .unwrap_or_default();
     format!(
-        "/bosun approve-intake {sha} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} intake={sha}{q} -->"
+        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} intake={sha} mode={mode}{q} -->"
     )
 }
 
 /// The intake chat record in `body` for the intake sha256 `sha` (64 lowercase hex), by the
 /// rule of [`parse_chat_record`]; `ChatRecord.head` holds the sha.
 pub fn parse_intake_chat_record(body: &str, sha: &str) -> Option<ChatRecord> {
-    parse_chat(body, "approve-intake", "intake", sha, 64)
+    parse_chat(body, "approve-intake", "intake", sha, 64, true)
 }
 
-fn parse_chat(body: &str, verb: &str, key: &str, value: &str, len: usize) -> Option<ChatRecord> {
+fn parse_chat(
+    body: &str,
+    verb: &str,
+    key: &str,
+    value: &str,
+    len: usize,
+    with_mode: bool,
+) -> Option<ChatRecord> {
     let hex = |c: u8| c.is_ascii_digit() || (b'a'..=b'f').contains(&c);
     if value.len() != len || !value.bytes().all(hex) {
         return None;
     }
     // Untrimmed at the start: an indented line renders as code, not as the command.
     let first = body.lines().find(|l| !l.trim().is_empty())?.trim_end();
-    if first != format!("/bosun {verb} {value} chat") {
-        return None;
-    }
+    let mode_ok = |m: &str| matches!(m, "new" | "adopt");
+    let first_mode = if with_mode {
+        let m = first.strip_prefix(&format!("/bosun {verb} {value} "))?;
+        Some(m.strip_suffix(" chat").filter(|m| mode_ok(m))?)
+    } else {
+        (first == format!("/bosun {verb} {value} chat")).then_some(())?;
+        None
+    };
     let mut marked = body.lines().filter(|l| l.contains(CHAT_MARKER));
     let (Some(line), None) = (marked.next(), marked.next()) else {
         return None;
@@ -633,11 +653,19 @@ fn parse_chat(body: &str, verb: &str, key: &str, value: &str, len: usize) -> Opt
         .strip_prefix("session=")
         .filter(|s| !s.is_empty())?;
     (kv.next()?.strip_prefix(key)?.strip_prefix('=')? == value).then_some(())?;
+    let mode = match first_mode {
+        Some(m) => {
+            (kv.next()?.strip_prefix("mode=")? == m).then_some(())?;
+            Some(m.to_string())
+        }
+        None => None,
+    };
     let question = match kv.next() {
         None => None,
         Some(q) => Some(q.strip_prefix("question=").filter(|q| !q.is_empty())?),
     };
     kv.next().is_none().then(|| ChatRecord {
+        mode,
         head: value.into(),
         session: session.into(),
         question: question.map(Into::into),
@@ -687,14 +715,28 @@ mod tests {
     #[test]
     fn intake_chat_record_round_trips_and_is_distinct() {
         let sha = "ab".repeat(32);
-        let body = intake_chat_comment(&sha, "session_o", "2026-11-10T10:00:00Z", Some("q"));
+        let body = intake_chat_comment(
+            &sha,
+            "adopt",
+            "session_o",
+            "2026-11-10T10:00:00Z",
+            Some("q"),
+        );
         let r = parse_intake_chat_record(&body, &sha).unwrap();
         assert_eq!(
             (r.head.as_str(), r.session.as_str()),
             (sha.as_str(), "session_o")
         );
         assert_eq!(r.question.as_deref(), Some("q"));
+        assert_eq!(r.mode.as_deref(), Some("adopt"));
         assert!(parse_intake_chat_record(&body, &"cd".repeat(32)).is_none());
+        // The mode in the first line and in the marker must agree, and be new or adopt.
+        let split = body.replace("mode=adopt", "mode=new");
+        assert!(parse_intake_chat_record(&split, &sha).is_none());
+        let odd = body.replace("adopt", "other");
+        assert!(parse_intake_chat_record(&odd, &sha).is_none());
+        let none = body.replace(" mode=adopt", "");
+        assert!(parse_intake_chat_record(&none, &sha).is_none());
         assert!(parse_chat_record(&body, &sha[..40]).is_none());
         let pr = chat_comment(H, "session_o", "t", None);
         assert!(parse_intake_chat_record(&pr, H).is_none());
@@ -724,6 +766,7 @@ mod tests {
                 head: H.into(),
                 session: "session_o".into(),
                 question: Some("12-abcdef1-1".into()),
+                mode: None,
             })
         );
         let none = chat_comment(H, "session_o", "t", None);

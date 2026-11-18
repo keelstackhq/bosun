@@ -29,10 +29,14 @@ fn sha() -> String {
     intake_sha256(OK.as_bytes())
 }
 
-fn record(sha: &str, session: &str) -> String {
+fn record_mode(sha: &str, session: &str, mode: &str) -> String {
     format!(
-        "/bosun approve-intake {sha} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} intake={sha} question=7-abcdef0-1 -->"
+        "/bosun approve-intake {sha} {mode} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} intake={sha} mode={mode} question=7-abcdef0-1 -->"
     )
+}
+
+fn record(sha: &str, session: &str) -> String {
+    record_mode(sha, session, "new")
 }
 
 fn join(fake: &FakeGithub, session: &str, origin: &str, parent: Option<&str>, depth: u32) {
@@ -70,7 +74,7 @@ fn verify(fake: &FakeGithub, intake: &str, extra: &[&str]) -> (i32, Value) {
     std::fs::write(&file, intake).unwrap();
     let file = file.to_str().unwrap().to_string();
     let issue = ISSUE.to_string();
-    let mut args = vec!["intake", "verify", &file, "--chat", &issue];
+    let mut args = vec!["intake", "verify", &file, "--chat", &issue, "--mode", "new"];
     args.extend_from_slice(extra);
     common::run(fake, "session_ci", NOW, &args)
 }
@@ -101,6 +105,7 @@ fn chat_record_verifies_the_intake() {
     assert_eq!(d["repo"], "keelstackhq/app");
     assert_eq!(d["issue"], ISSUE);
     assert_eq!(d["intake_sha256"], sha());
+    assert_eq!(d["mode"], "new");
     assert_eq!(d["expires"], "2026-11-10T10:30:00Z");
     assert!(d["nonce"].as_str().unwrap().starts_with("chat-"), "{v}");
     assert_eq!(d["intake"]["repo"]["name"], "app");
@@ -231,6 +236,9 @@ fn sig_and_chat_conflict_and_one_is_required() {
     assert_eq!(code, 2, "{v}");
     let (code, v) = common::run(&fake, "s", NOW, &["intake", "verify", "intake.toml"]);
     assert_eq!(code, 2, "{v}");
+    // --chat needs --mode.
+    let args = ["intake", "verify", "intake.toml", "--chat", "7"];
+    assert_eq!(common::run(&fake, "s", NOW, &args).0, 2);
 }
 
 #[test]
@@ -249,7 +257,15 @@ fn join_expired_at_comment_time_refused() {
         &fake,
         "session_ci",
         "2026-11-10T11:30:00Z",
-        &["intake", "verify", file.to_str().unwrap(), "--chat", "7"],
+        &[
+            "intake",
+            "verify",
+            file.to_str().unwrap(),
+            "--chat",
+            "7",
+            "--mode",
+            "new",
+        ],
     );
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["reason"], "chat_not_orchestrator", "{v}");
@@ -262,4 +278,94 @@ fn owners_file_naming_nobody_gets_no_fallback() {
     fake.repo_set("owner", json!({"login": "ada", "type": "User"}));
     post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
     assert_ne!(verify(&fake, OK, &[]).0, 0);
+}
+
+#[test]
+fn record_for_the_other_mode_refused() {
+    let fake = setup(true);
+    post(
+        &fake,
+        "ada",
+        &record_mode(&sha(), "session_orch", "adopt"),
+        NOW,
+    );
+    refused(&fake, "chat_wrong_mode");
+    // `--mode` given twice is a usage error, so verify the adopt side by its own call.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("intake.toml");
+    std::fs::write(&file, OK).unwrap();
+    let args = [
+        "intake",
+        "verify",
+        file.to_str().unwrap(),
+        "--chat",
+        "7",
+        "--mode",
+        "adopt",
+    ];
+    let (code, v) = common::run(&fake, "session_ci", NOW, &args);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["mode"], "adopt");
+    // A record without a mode (the old form) never parses.
+    let old = record(&sha(), "session_orch")
+        .replace(" new chat", " chat")
+        .replace(" mode=new", "");
+    let fake = setup(true);
+    post(&fake, "ada", &old, NOW);
+    refused(&fake, "no_chat_record");
+}
+
+#[test]
+fn fallback_is_judged_for_the_issue_author_not_the_commenter() {
+    // User repo: the repo owner counts, whoever opened the issue.
+    let fake = setup(false);
+    fake.repo_set("owner", json!({"login": "ada", "type": "User"}));
+    fake.issue_by(ISSUE, "bob");
+    post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
+    assert_eq!(verify(&fake, OK, &[]).0, 0);
+    // Org repo: the issue author needs admin; a commenter with admin who did not open it does not count.
+    let fake = setup(false);
+    fake.repo_set("owner", json!({"login": "acme", "type": "Organization"}));
+    fake.issue_by(ISSUE, "ada");
+    fake.permission("ada", "admin");
+    fake.permission("bob", "admin");
+    post(&fake, "bob", &record(&sha(), "session_orch"), NOW);
+    refused(&fake, "chat_not_owner");
+}
+
+#[test]
+fn org_repo_admin_issue_author_counts() {
+    let fake = setup(false);
+    fake.repo_set("owner", json!({"login": "acme", "type": "Organization"}));
+    fake.issue_by(ISSUE, "ada");
+    fake.permission("ada", "admin");
+    post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
+    let (code, v) = verify(&fake, OK, &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved_by"], "ada");
+    let fake = setup(false);
+    fake.repo_set("owner", json!({"login": "acme", "type": "Organization"}));
+    fake.issue_by(ISSUE, "ada");
+    fake.permission("ada", "write");
+    post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
+    refused(&fake, "chat_not_owner");
+}
+
+#[test]
+fn a_failed_github_read_is_exit_1() {
+    let fake = setup(true);
+    post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
+    fake.fail_path("/comments", 500);
+    let (code, v) = verify(&fake, OK, &[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["ok"], false);
+}
+
+#[test]
+fn missing_registry_issue_is_not_an_orchestrator() {
+    let fake = FakeGithub::start();
+    fake.issue(ISSUE, "intake: app", &["bosun:kind/plan"], "");
+    fake.content("governance/owners.toml", MAIN, OWNERS);
+    post(&fake, "ada", &record(&sha(), "session_orch"), NOW);
+    refused(&fake, "chat_not_orchestrator");
 }

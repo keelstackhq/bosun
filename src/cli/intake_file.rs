@@ -187,7 +187,13 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
         std::fs::read_to_string(at(dir, &a.file)).map_err(|e| bad_intake(e.kind().to_string()))?;
     let intake = parse(&text).map_err(|e| bad_intake(e.message))?;
     if let Some(issue) = a.chat {
-        return verify_chat(dir, issue, &text, &intake);
+        let Some(mode) = &a.mode else {
+            return Err(BosunError::usage(
+                "--chat needs --mode",
+                "pass --mode new or --mode adopt",
+            ));
+        };
+        return verify_chat(dir, issue, mode, &text, &intake);
     }
     let (Some(sig), Some(approvers)) = (&a.sig, &a.approvers) else {
         return Err(BosunError::usage(
@@ -298,7 +304,13 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
 /// the no-owners fallback of risk-check), for an orchestrator session in the registry, and at
 /// most an hour old (spec section 8). `[approvals] chat = false` on the default branch turns it
 /// off. Failures are exit 5 with `data.reason`; a failed GitHub read errors (fail closed).
-fn verify_chat(dir: Option<&Path>, issue: u64, text: &str, intake: &Intake) -> CmdResult {
+fn verify_chat(
+    dir: Option<&Path>,
+    issue: u64,
+    mode: &str,
+    text: &str,
+    intake: &Intake,
+) -> CmdResult {
     let fix = "ask the orchestrator to record the owner's chat yes on the intake issue again, or sign the intake (`bosun intake sign`) and pass --sig";
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
@@ -323,28 +335,36 @@ fn verify_chat(dir: Option<&Path>, issue: u64, text: &str, intake: &Intake) -> C
         ));
     }
     found.sort_by_key(|(c, _)| std::cmp::Reverse(c.id));
-    let owners = owner_logins(gh, &main)?;
-    let no_owners_file = owners.is_empty() && gh.file_at(OWNERS_PATH, &main)?.is_none();
+    let mut owners = owner_logins(gh, &main)?;
+    if owners.is_empty() && gh.file_at(OWNERS_PATH, &main)?.is_none() {
+        // The no-owners fallback is judged for the intake issue's author, like T2 does for the
+        // PR author, not for whoever wrote the comment.
+        let author = gh
+            .get_issue(issue)?
+            .map(|i| i.user)
+            .ok_or_else(|| refuse("no_chat_record", "the intake issue does not exist", fix))?;
+        owners = fallback_owners(gh, &author)?;
+    }
     let members = crate::registry::load(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
     let now = Timestamp::now();
     let mut why = None;
     for (c, r) in found {
-        let owner = if owners.is_empty() && no_owners_file {
-            fallback_owners(gh, &c.user)?
-        } else {
-            owners.clone()
-        };
         let made = parse_rfc3339(&c.created_at);
         let reason = if !c.unedited() {
             ("chat_edited", "it was edited")
-        } else if !owner.iter().any(|o| o.eq_ignore_ascii_case(&c.user)) {
+        } else if !owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user)) {
             ("chat_not_owner", "its author is not an owner")
         } else if !is_orchestrator(&live_at(&members, &c.created_at), &r.session) {
             (
                 "chat_not_orchestrator",
                 "its session was not a live orchestrator in the registry",
+            )
+        } else if r.mode.as_deref() != Some(mode) {
+            (
+                "chat_wrong_mode",
+                "it approves the other mode (new or adopt)",
             )
         } else if made.is_none_or(|t| t > now.plus_secs(MAX_SKEW_SECS)) {
             ("issued_in_future", "it was written in the future")
@@ -354,7 +374,7 @@ fn verify_chat(dir: Option<&Path>, issue: u64, text: &str, intake: &Intake) -> C
             let made = made.expect("checked above");
             return Ok(Outcome::data(json!({"verified": true, "via": "chat",
                 "issue": issue, "comment": c.id, "approved_by": c.user, "session": r.session,
-                "repo": repo_of(intake), "mode": null, "nonce": format!("chat-{}", c.id),
+                "repo": repo_of(intake), "mode": mode, "nonce": format!("chat-{}", c.id),
                 "expires": made.plus_secs(MAX_EXPIRES_SECS as i64).to_string(),
                 "intake_sha256": sha, "intake": view(intake)})));
         };
