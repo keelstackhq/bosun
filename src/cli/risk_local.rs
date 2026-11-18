@@ -18,15 +18,10 @@ struct Local<'a>(&'a Path);
 
 impl Local<'_> {
     fn git(&self, args: &[&str]) -> Option<String> {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(self.0)
-            .args(args)
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        let mut git = Command::new("git");
+        let out = git.arg("-C").arg(self.0).args(args).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        out.status.success().then_some(text)
     }
 }
 
@@ -42,12 +37,8 @@ impl Files for Local<'_> {
         })
     }
     fn paths(&self, at: &str) -> Option<Vec<String>> {
-        Some(
-            self.git(&["ls-tree", "-r", "--name-only", at])?
-                .lines()
-                .map(String::from)
-                .collect(),
-        )
+        let list = self.git(&["ls-tree", "-r", "--name-only", at])?;
+        Some(list.lines().map(String::from).collect())
     }
 }
 
@@ -62,23 +53,17 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             "run it in a git checkout whose `origin/main` is fetched: `git fetch origin main`",
         )
     };
-    let base = src
-        .git(&["merge-base", "origin/main", "HEAD"])
-        .ok_or_else(|| fail("origin/main"))?;
+    let base = src.git(&["merge-base", "origin/main", "HEAD"]);
+    let base = base.ok_or_else(|| fail("origin/main"))?;
     let head = src
         .git(&["rev-parse", "HEAD"])
         .ok_or_else(|| fail("HEAD"))?;
     let (base, head) = (base.trim(), head.trim());
-    let names = src.git(&[
-        "diff",
-        "--no-ext-diff",
-        "-z",
-        "--name-status",
-        "-M",
-        base,
-        head,
-    ]);
-    let names = names.ok_or_else(|| fail("the diff"))?;
+    let mut names: Vec<&str> = "diff --no-ext-diff -z --name-status -M"
+        .split(' ')
+        .collect();
+    names.extend([base, head]);
+    let names = src.git(&names).ok_or_else(|| fail("the diff"))?;
     let mut parts = names.split('\0').filter(|s| !s.is_empty());
     let mut pr_files = Vec::new();
     while let Some(st) = parts.next() {
@@ -91,18 +76,8 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             "R" => "renamed",
             _ => "modified",
         };
-        let mut args = vec![
-            "diff",
-            "--no-color",
-            "--no-textconv",
-            "--no-ext-diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "-M",
-            base,
-            head,
-            "--",
-        ];
+        let diff = "diff --no-color --no-textconv --no-ext-diff --src-prefix=a/ --dst-prefix=b/ -M";
+        let mut args: Vec<&str> = diff.split(' ').chain([base, head, "--"]).collect();
         args.extend(prev);
         args.push(path);
         pr_files.push(PrFile {
@@ -126,11 +101,8 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let mut manifests = Vec::new();
     for f in pr_files.iter().filter(|f| is_manifest(&f.filename)) {
         let old = f.previous_filename.as_deref().unwrap_or(&f.filename);
-        manifests.push((
-            f.filename.clone(),
-            src.read(old, base)?,
-            src.read(&f.filename, head)?,
-        ));
+        let (old, new) = (src.read(old, base)?, src.read(&f.filename, head)?);
+        manifests.push((f.filename.clone(), old, new));
     }
     let findings = weaken_from(&src, &pr_files, base, head)?;
     let caps: Vec<String> = match findings.is_empty() {
