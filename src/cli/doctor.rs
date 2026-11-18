@@ -1500,6 +1500,28 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         items.push(it);
     }
 
+    // Step 18: hooks do not load in Claude in Slack, so the rules must be in CLAUDE.md/AGENTS.md.
+    if ctx.origin == crate::ctx::Origin::Slack {
+        let fix = "run `bosun rules --write` and commit the file in a PR";
+        let mut it = item(18, "session-rules", None, String::new(), fix);
+        let file = super::rules::target(root);
+        let block =
+            crate::hooks::session_rules::markdown(&crate::hooks::session_rules::load(Some(root)).0);
+        match super::rules::rendered(root, &block) {
+            Ok((_, false)) => it["detail"] = json!(format!("{file} has the current block")),
+            stale => {
+                it["status"] = json!("warn");
+                it["detail"] = json!(match stale {
+                    Err(e) => e.message,
+                    _ => format!(
+                        "{file} lacks the current session-rules block, and hooks do not load here"
+                    ),
+                });
+            }
+        }
+        items.push(it);
+    }
+
     let channel_repo = root.join(".splice/channels/bosun.toml").exists();
     let update = super::pin::update_check(root);
     // A repo with no tool pins and no channel has nothing to update: no step-17 line at all.

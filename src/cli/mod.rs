@@ -52,6 +52,7 @@ pub mod resume;
 pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
+pub mod rules;
 pub mod schema;
 pub mod spawn;
 pub mod spawn_relay;
@@ -164,6 +165,8 @@ pub enum Command {
     Status,
     /// Print the effective mode, its knobs and which source set each (offline).
     Mode,
+    /// Render the session rules into a marked block of CLAUDE.md or AGENTS.md (`--write`).
+    Rules(RulesArgs),
     /// Fix what is red on open PRs (and main) as the mode allows.
     Heal(HealArgs),
     /// The owner's daily digest; `--answer` parses the owner's reply into approvals.
@@ -320,6 +323,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Mode => "mode",
+            Command::Rules(_) => "rules",
             Command::Heal(_) => "heal",
             Command::Digest(_) => "digest",
             Command::Metrics(_) => "metrics",
@@ -456,6 +460,10 @@ pub struct ResultArgs {
     /// The PR of the work.
     #[arg(long)]
     pub pr: Option<u64>,
+    /// The get_session result of this session (file, or `-` for stdin): its spend so far is
+    /// recorded on the epic, as `bosun budget record <epic> --from`.
+    #[arg(long, value_name = "FILE|-")]
+    pub session_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -584,6 +592,13 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct RulesArgs {
+    /// Write the block (else only report whether it would change).
+    #[arg(long)]
+    pub write: bool,
 }
 
 #[derive(Debug, Args)]

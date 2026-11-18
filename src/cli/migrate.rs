@@ -450,6 +450,13 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
         Err(e) => return Err(e),
     };
     if let Some(gh) = gh {
+        let ci = ["CI", "GITHUB_ACTIONS"]
+            .iter()
+            .any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "false"));
+        let explicit = std::env::var("BOSUN_HTTP_BUDGET_SECS").ok();
+        if let Some(secs) = crate::github::http::migrate_budget(explicit.as_deref(), ci) {
+            gh.set_budget(Some(secs));
+        }
         kill_switch(gh)?;
     }
     if a.finish {
