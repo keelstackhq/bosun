@@ -42,7 +42,7 @@ fn high_pr(owners: bool) -> FakeGithub {
     let patch = Some("@@ -0,0 +1,1 @@\n+x");
     fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, patch);
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     fake
 }
 
@@ -261,7 +261,7 @@ fn chat_clears_low_risk_escalation() {
         Some("@@ -0,0 +1,1 @@\n+x"),
     );
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     fake.status(HEAD, "review-verdict", "failure", ESCALATED);
     app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
     let (code, v) = check(&fake);
@@ -332,7 +332,7 @@ fn chat_judged_by_the_join_in_force_at_record_time() {
     // The orchestrator rejoined (a new comment) after the record: the earlier join was in force.
     let fake = high_pr(true);
     app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     assert_eq!(approved(&fake), "ada");
     // A join only after the record does not vouch for it.
     let fake = FakeGithub::start();
@@ -344,7 +344,7 @@ fn chat_judged_by_the_join_in_force_at_record_time() {
     fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, patch);
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
     app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     refused(&fake);
 }
 
@@ -535,4 +535,46 @@ mod signed {
         assert!(fix.contains("unsigned under chat_signed"), "{fix}");
         assert!(!fix.contains("orchestrator session left"), "{fix}");
     }
+}
+
+fn fix_of(fake: &FakeGithub) -> String {
+    let (code, v) = check(fake);
+    assert_eq!(code, 5, "{v}");
+    v["error"]["fix"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn the_chat_note_names_the_cause() {
+    // Withdrawn by the owner's review.
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+    let fix = fix_of(&fake);
+    assert!(fix.contains("withdrawn by the owner's review"), "{fix}");
+    assert!(
+        !fix.contains("left or expired") && !fix.contains("unsigned"),
+        "{fix}"
+    );
+    // The orchestrator left.
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    fake.comment(
+        REG,
+        r#"{"bosun":"leave","session":"session_orch","reason":"done"}"#,
+    );
+    let fix = fix_of(&fake);
+    assert!(fix.contains("left or expired"), "{fix}");
+    assert!(
+        !fix.contains("withdrawn") && !fix.contains("unsigned"),
+        "{fix}"
+    );
+    // Posted by someone who is not an owner: unsigned.
+    let fake = high_pr(true);
+    app_comment(&fake, "mallory", &chat(HEAD, "session_orch"));
+    let fix = fix_of(&fake);
+    assert!(fix.contains("unsigned"), "{fix}");
+    assert!(
+        !fix.contains("withdrawn") && !fix.contains("left or expired"),
+        "{fix}"
+    );
 }
