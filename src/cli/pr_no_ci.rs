@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use crate::app::{App, Result, main_red, set_state};
+use crate::app::{App, Result, is_writer, main_red, set_state};
 use crate::cli::risk_check::{autonomous_clean, evaluate_local, review_models, verdict_inputs};
 use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{parse_ready_summary, ready_summary};
@@ -15,27 +15,20 @@ use crate::gates::main_open::judge_local;
 use crate::github::{Github, Issue, Pull, is_ccr_refusal};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 
-/// The CI provider in the config at `git_ref` (a PR never picks its own); `github` if unreadable.
-pub fn provider_at(gh: &dyn Github, git_ref: &str) -> Result<CiProvider> {
-    Ok(gh
-        .file_at(CONFIG_FILE, git_ref)?
+/// The CI provider of the repo: its config on the default branch, never the PR's base or head
+/// (a PR cannot pick its own provider); `github` if unreadable.
+pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
+    let text = gh.file_at(CONFIG_FILE, &crate::app::default_ref(gh)?)?;
+    Ok(text
         .and_then(|t| Config::parse(&t, CONFIG_FILE).ok())
         .map(|c| c.ci_provider())
         .unwrap_or_default())
 }
 
-/// The CI provider of the repo: its config on the default branch, never the PR's base or head
-/// (a PR cannot pick its own provider, and a retargeted base cannot either).
-pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
-    provider_at(gh, &crate::app::default_ref(gh)?)
-}
-
 /// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
-    // The author's own sessions are the lease holders of the linked tasks (the lookup D-017 and
-    // risk-check use): with no linked task that has a lease there is no way to tell who is
-    // independent, so nothing counts (fail closed).
+    // The author is the lease holder of a linked task (as in D-017); with none, nothing counts.
     let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
     let (comments, mut excluded) = verdict_inputs(gh, pull.number, &linked)?;
     if excluded.is_empty() {
@@ -50,21 +43,19 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     }
     let mut kept = Vec::new();
     for c in comments.iter().filter(|c| c.body.contains(COMMENT_MARKER)) {
-        let p = gh.permission(&c.user)?.unwrap_or_default();
-        if matches!(p.as_str(), "admin" | "write") {
+        if is_writer(gh, &c.user)? {
             kept.push((c.body.as_str(), c.unedited()));
         }
     }
     // An approval must list every chunk of the review pack, as `verdict apply` requires.
     let pack = super::review_pack::build(gh, &app.ctx.repo.to_string(), pull.number, false)?;
     let chunks = pack["chunks"].as_array().map_or(0, Vec::len);
-    let models = models.as_deref();
     Ok(comment_clean(
         kept,
         pull.number,
         head,
         &excluded,
-        models,
+        models.as_deref(),
         chunks,
     ))
 }
@@ -98,13 +89,11 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
         Err(e) if e.exit == Exit::NeedsHuman => e.data.clone().unwrap_or_default(),
         Err(e) => return Err(with(e.clone(), &data)),
     };
-    let ids = (risk_data["matches"].as_array().into_iter().flatten())
-        .filter_map(|m| m["rule"].as_str())
-        .collect::<Vec<_>>();
-    let risk_line = if risk_data["level"] == "high" {
-        format!("high: {}", ids.join(", "))
-    } else {
-        "normal".into()
+    let ids =
+        (risk_data["matches"].as_array().into_iter().flatten()).filter_map(|m| m["rule"].as_str());
+    let risk_line = match risk_data["level"] == "high" {
+        true => format!("high: {}", ids.collect::<Vec<_>>().join(", ")),
+        false => "normal".into(),
     };
     data["risk"] = json!(risk_line);
     let verdicts = clean_by_other(app, &pull)?;
@@ -141,8 +130,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let comments = gh.list_comments(pr)?;
     let mut posted = false;
     for c in comments.iter().filter(|c| c.body.starts_with(&body)) {
-        let ours = parse_ready_summary(&c.body, &head) && !posted;
-        posted |= ours && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"));
+        posted = posted || (parse_ready_summary(&c.body, &head) && is_writer(gh, &c.user)?);
     }
     if !posted {
         gh.add_comment(pr, &body)?;

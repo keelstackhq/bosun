@@ -148,20 +148,18 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// No-CI readiness of `p`: its newest ready summary of the head by a writer (spec §4).
+/// No-CI readiness of `p`: its newest ready summary of the head by a writer.
 fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
     let comments = gh.list_comments(p.number)?;
     for c in comments.iter().rev() {
-        if parse_ready_summary(&c.body, &p.head_sha)
-            && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"))
-        {
+        if parse_ready_summary(&c.body, &p.head_sha) && crate::app::is_writer(gh, &c.user)? {
             return Ok(summary_readiness(Some(&c.body)));
         }
     }
     Ok(summary_readiness(None))
 }
 
-/// The board of `pulls`, in their order. A PR whose base has no CI is read from its ready summary.
+/// The board of `pulls`, in their order (no CI: read from the ready summary).
 fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
@@ -199,22 +197,13 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
             Readiness::Ready(_) if hold(gh, &p, &mut board)? => {}
-            Readiness::Ready(risk) => board.ready.push(Ready {
-                verdict: (statuses.iter())
+            Readiness::Ready(risk) => {
+                let verdict = (statuses.iter())
                     .find(|s| s.context == "review-verdict" && s.creator == TRUSTED_CREATOR)
                     .map(|s| s.description.clone())
-                    .unwrap_or_default(),
-                pr: p.number,
-                title: p.title.clone(),
-                files: gh
-                    .compare_files(&p.base_sha, &p.head_sha)?
-                    .into_iter()
-                    .map(|f| f.filename)
-                    .collect(),
-                head_sha: p.head_sha,
-                base_sha: p.base_sha,
-                risk,
-            }),
+                    .unwrap_or_default();
+                board.ready.push(ready_of(gh, p, risk, verdict)?);
+            }
         }
     }
     Ok(board)
