@@ -584,22 +584,47 @@ pub fn chat_identity_override(command: &str) -> bool {
 /// Whether a command drops or overrides the child-session flag next to a `bosun` word: an
 /// unset of it, a cleared environment, or an assignment to it. Best effort (lexical, like the
 /// rest of the chat-lock): refused for everyone, since no honest command needs to hide that it
-/// runs as a child.
+/// runs as a child. `-u`, `-i` and `-` count only as options of an `env` word (its options end
+/// at the first word that is neither an option nor `NAME=value`), and `unset` only as the first
+/// word of a command, so `grep -i x && bosun status` is not tamper.
 pub fn child_flag_tamper(command: &str) -> bool {
     let words = dequoted_words(command);
     if !words.iter().any(|w| base(w) == "bosun") {
         return false;
     }
     let flag = |w: &String| w.contains("CLAUDE_CODE_CHILD_SESSION");
-    let unsets = words
-        .iter()
-        .any(|w| matches!(w.as_str(), "unset" | "-u") || w.starts_with("--unset"))
-        && words.iter().any(flag);
-    let clears = words
-        .iter()
-        .any(|w| matches!(w.as_str(), "-i" | "--ignore-environment" | "-"))
-        && words.iter().any(|w| base(w) == "env");
-    unsets || clears || words.iter().any(|w| flag(w) && w.contains('='))
+    if words.iter().any(|w| flag(w) && w.contains('=')) {
+        return true;
+    }
+    command
+        .split(|c: char| ";&|\n()`".contains(c))
+        .map(dequoted_words)
+        .any(|seg| {
+            let named = seg.iter().any(flag);
+            if seg.first().is_some_and(|w| w == "unset") && named {
+                return true;
+            }
+            let Some(at) = seg.iter().position(|w| base(w) == "env") else {
+                return false;
+            };
+            let (mut unsets, mut clears, mut skip) = (false, false, false);
+            for w in &seg[at + 1..] {
+                if std::mem::take(&mut skip) {
+                    continue;
+                }
+                if w == "-u" {
+                    unsets = true;
+                    skip = true;
+                } else if w.starts_with("-u") || w.starts_with("--unset") {
+                    unsets = true;
+                } else if matches!(w.as_str(), "-i" | "--ignore-environment" | "-") {
+                    clears = true;
+                } else if !w.starts_with('-') && !w.contains('=') {
+                    break;
+                }
+            }
+            (unsets && named) || clears
+        })
 }
 
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
@@ -7303,6 +7328,8 @@ mod tests {
             "CLAUDE_CODE_CHILD_SESSION=0 bosun status",
             "env --unset=CLAUDE_CODE_CHILD_SESSION /usr/bin/bosun status",
             "env -u 'CLAUDE_CODE_CHILD_SESSION' bos''un status",
+            "cd /r && env -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@h --chat",
+            "env FOO=1 -i bosun status",
         ] {
             assert!(child_flag_tamper(c), "{c}");
         }
@@ -7311,6 +7338,12 @@ mod tests {
             "env FOO=1 bosun status",
             "unset FOO",
             "env -i ls",
+            "grep -i x && bosun status",
+            "grep -u x; bosun status",
+            "ls - && bosun status",
+            "grep -i CLAUDE_CODE_CHILD_SESSION notes && bosun status",
+            "bosun status | grep -i x",
+            "bosun comment unset CLAUDE_CODE_CHILD_SESSION",
         ] {
             assert!(!child_flag_tamper(c), "{c}");
         }
