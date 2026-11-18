@@ -39,10 +39,10 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
     let cwd = dir
         .map(Path::to_path_buf)
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
-    // The hooks may be installed user-wide: in a repo bosun never set up they stay silent
-    // (no GitHub call, nothing refused). SessionStart says how to adopt.
-    if !matches!(cmd, HookCmd::SessionStart)
-        && !redirects_elsewhere(&input)
+    // The hooks may be installed user-wide: in a repo bosun never set up these stay silent and
+    // make no GitHub call. SessionStart says how to adopt; PreToolUse still runs its pure
+    // rules there (it skips only the lease and registry checks).
+    if !matches!(cmd, HookCmd::SessionStart | HookCmd::PreToolUse)
         && cwd
             .clone()
             .or_else(|| std::env::current_dir().ok())
@@ -57,20 +57,6 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
         HookCmd::PreCompact => compact::pre_compact(cwd.as_deref()),
         HookCmd::Stop => stop::run(cwd.as_deref(), &input),
     }
-}
-
-/// A Bash command that names another directory (`cd`, `git -C`, `--git-dir`, `--work-tree`) may
-/// act on an adopted repo from an un-adopted cwd: judge it normally (fail closed).
-fn redirects_elsewhere(input: &Value) -> bool {
-    input.get("tool_name").and_then(Value::as_str) == Some("Bash")
-        && input
-            .pointer("/tool_input/command")
-            .and_then(Value::as_str)
-            .is_none_or(|c| {
-                ["cd ", "pushd ", " -C", "--git-dir", "--work-tree"]
-                    .iter()
-                    .any(|k| c.contains(k))
-            })
 }
 
 /// The `lib::run` entry: print the hook's stdout (if any); `main` prints no envelope for hooks.

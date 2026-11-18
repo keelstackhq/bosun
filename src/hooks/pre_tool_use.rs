@@ -576,6 +576,9 @@ fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> 
 /// writes (a claim has touch paths), in a comment of a repo writer (`trusted_notes`, not any
 /// comment). An MCP call must also target this repo. Any doubt (no repo, no GitHub) is no.
 fn registered_child(dir: &Path, write: &ChildTask) -> bool {
+    if super::session_start::unadopted(dir) {
+        return false; // no registry here: no GitHub call
+    }
     let Ok(app) = App::load(Some(dir)) else {
         return false;
     };
@@ -616,6 +619,9 @@ fn plan_tick_edit(tool: &str, path: &str, input: &Value) -> bool {
 }
 
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
+    if super::session_start::unadopted(dir) {
+        return Ok(None); // no leases here: no GitHub call
+    }
     let app = App::load(Some(dir)).map_err(|e| e.message)?;
     let Some(rel) = repo_relative(&app.ctx.dir, dir, path) else {
         return Ok(None); // outside the repo: not a claimable path

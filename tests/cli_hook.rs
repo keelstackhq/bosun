@@ -910,26 +910,29 @@ fn session_start_unadopted_no_network() {
 }
 
 #[test]
-fn other_hooks_are_no_ops_in_an_unadopted_repo() {
+fn unadopted_repo_keeps_pure_guards_and_makes_no_github_call() {
     let (fake, tmp) = (FakeGithub::start(), bare_repo());
     let cwd = tmp.path().to_str().unwrap();
-    let push = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash",
-        "tool_input":{"command":"git push origin main"}});
-    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &push);
+    let bash = |c: &str| {
+        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "git push origin main",
+        "gh pr merge 3 -R o/r",
+        "cd / && git push origin main",
+    ] {
+        assert!(bash(c).stdout.contains("deny"), "{c}");
+    }
+    let edit = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Edit",
+        "tool_input":{"file_path": tmp.path().join("a.rs").to_str().unwrap()}});
+    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &edit);
     assert_eq!((o.code, o.stdout.trim()), (0, ""), "{}", o.stderr);
     for (sub, ev) in [("stop", "Stop"), ("pre-compact", "PreCompact")] {
         let input = json!({"hook_event_name":ev,"cwd":cwd});
         let o = hook(Some(&fake), tmp.path(), T0, sub, &input);
         assert_eq!((o.code, o.stdout.trim()), (0, ""), "{sub}: {}", o.stderr);
     }
-    let cd = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash",
-        "tool_input":{"command":"cd /nonexistent && git push origin main"}});
-    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &cd);
-    assert!(
-        o.stdout.contains("deny"),
-        "a cd is still judged: {}",
-        o.stdout
-    );
     let post = json!({"hook_event_name":"PostToolUse","cwd":cwd,"tool_name":"AskUserQuestion"});
     hook(Some(&fake), tmp.path(), T0, "post-tool-use", &post);
     assert!(fake.requests().is_empty(), "{:?}", fake.requests());
