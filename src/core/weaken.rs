@@ -968,11 +968,11 @@ pub fn dead_code_allow(line: &str) -> bool {
     t == "#![allow(dead_code)]" || t == "#[allow(dead_code)]"
 }
 
-/// The files the Rust file `file` (text `text`) pulls in as test modules: a `mod x;` whose
-/// attributes, right above it, include `#[cfg(test)]` and `#[path = ".."]` (a plain string),
-/// resolved against the file's directory. Comments and literals are masked first, so lines in
-/// a string declare nothing. A path that leaves the repo is skipped.
-pub fn test_modules(file: &str, text: &str) -> Vec<String> {
+/// The files the Rust file `file` (text `text`) pulls in by `#[path = ".."] mod x;`, resolved
+/// against the file's directory, each with whether `#[cfg(test)]` is among the attributes right
+/// above it. Comments and literals are masked first, so lines in a string declare nothing. A
+/// path that cannot be read or leaves the repo is `?` (the caller trusts nothing then).
+pub fn path_mods(file: &str, text: &str) -> Vec<(String, bool)> {
     let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
     let (masked, lits) = mask_literals(text);
     let (mut test, mut path, mut out) = (false, None, Vec::new());
@@ -985,16 +985,20 @@ pub fn test_modules(file: &str, text: &str) -> Vec<String> {
         if t == "#[cfg(test)]" {
             test = true;
         } else if let Some(l) = lit {
-            path = (l.strip_prefix('"').and_then(|l| l.strip_suffix('"')))
-                .filter(|p| !p.contains('\\'))
-                .map(String::from);
+            let raw = l.strip_prefix('r').map(|r| r.trim_matches('#'));
+            path = (raw
+                .unwrap_or(l)
+                .strip_prefix('"')
+                .and_then(|l| l.strip_suffix('"')))
+            .filter(|p| raw.is_some() || !p.contains('\\'))
+            .map_or(Some("\0".to_string()), |p| Some(p.to_string()));
         } else if !t.starts_with("#[") && !t.is_empty() {
             let item = line
                 .trim()
                 .trim_start_matches("pub(crate)")
                 .trim_start_matches("pub");
             let is_mod = item.trim_start().starts_with("mod ") && t.ends_with(';');
-            if let (true, true, Some(p)) = (is_mod, test, path.take()) {
+            if let (true, Some(p)) = (is_mod, path.take()) {
                 let mut parts: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
                 let ok = p.split('/').all(|s| match s {
                     "" | "." => true,
@@ -1004,9 +1008,12 @@ pub fn test_modules(file: &str, text: &str) -> Vec<String> {
                         true
                     }
                 });
-                if ok {
-                    out.push(parts.join("/"));
-                }
+                let p = if ok && !p.contains('\0') {
+                    parts.join("/")
+                } else {
+                    "?".into()
+                };
+                out.push((p, test));
             }
             (test, path) = (false, None);
         }
@@ -1029,7 +1036,21 @@ mod tests {
                     #[path = \"b.rs\"]\nmod b;\n#[cfg(test)]\nfn x() {}\n#[path = \"c.rs\"]\nmod c;\n\
                     #[cfg(test)]\n#[path = \"../../../x.rs\"]\nmod d;\n\
                     const S: &str = r#\"\n#[cfg(test)]\n#[path = \"e.rs\"]\nmod e;\n\"#;\n";
-        assert_eq!(test_modules("src/core/a.rs", text), ["src/t/a_tests.rs"]);
+        let m = |p: &str, t| (p.to_string(), t);
+        assert_eq!(
+            path_mods("src/core/a.rs", text),
+            [
+                m("src/t/a_tests.rs", true),
+                m("src/core/b.rs", false),
+                m("src/core/c.rs", false),
+                m("?", true)
+            ]
+        );
+        let raw = "#[path = r#\"../tests/x.rs\"#]\nmod x;\n#[path = \"a\\\\b.rs\"]\nmod y;\n";
+        assert_eq!(
+            path_mods("src/a.rs", raw),
+            [m("tests/x.rs", false), m("?", false)]
+        );
     }
 
     fn t(path: &str, base: &str, head: &str) -> Vec<String> {

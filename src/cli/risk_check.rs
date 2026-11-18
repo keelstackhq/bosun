@@ -242,29 +242,48 @@ pub(crate) fn weaken_findings(
     weaken_from(&Remote(gh), pr_files, base, head)
 }
 
-/// The Rust files that a `#[cfg(test)] #[path]` module pulls in at `base` (a declaration the PR
-/// adds vouches for nothing), read from the Rust files in the directory, and the one above, of
-/// each changed file that adds a `dead_code` allow (at most 20 reads; a failed read or listing
-/// exempts nothing).
-fn test_modules(src: &dyn Files, files: &[PrFile], base: &str) -> Vec<String> {
-    let dir = |p: &str| p.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-    let near: std::collections::BTreeSet<String> = (files.iter())
-        .filter(|f| f.filename.ends_with(".rs") && !weaken::cargo_test_file(&f.filename))
-        .filter(|f| {
-            let ins = f.patch.as_deref().map(|p| weaken::split_patch(p).1);
-            ins.is_some_and(|i| i.iter().any(|l| weaken::dead_code_allow(l)))
-        })
-        .flat_map(|f| [dir(&f.filename), dir(&dir(&f.filename))])
-        .collect();
-    let paths = match near.is_empty() {
-        true => None,
-        false => src.paths(base),
+/// The changed Rust files that are test code, where a lone `dead_code` allow is no finding:
+/// a Cargo `tests/` file no `#[path]` pulls in, or a file only `#[cfg(test)] #[path]` mods pull
+/// in. The mods are read at `base` from every Rust file outside Cargo `tests/` (at most 300).
+/// None when the PR adds or changes a `#[path]` line or hides a Rust diff, or a read fails.
+fn test_code(src: &dyn Files, files: &[PrFile], base: &str) -> Vec<String> {
+    let adds = |f: &&PrFile| {
+        let ins = f.patch.as_deref().map(|p| weaken::split_patch(p).1);
+        ins.is_some_and(|i| i.iter().any(|l| weaken::dead_code_allow(l)))
     };
-    (paths.unwrap_or_default().iter())
-        .filter(|p| p.ends_with(".rs") && near.contains(&dir(p)))
-        .take(20)
-        .filter_map(|p| Some(weaken::test_modules(p, &src.read(p, base).ok()??)))
-        .flatten()
+    let wanted: Vec<&str> = (files.iter().filter(adds))
+        .filter(|f| f.filename.ends_with(".rs"))
+        .map(|f| f.filename.as_str())
+        .collect();
+    let patches: Vec<(&str, Option<&str>)> = (files.iter())
+        .map(|f| (f.filename.as_str(), f.patch.as_deref()))
+        .collect();
+    if wanted.is_empty() || !risk::path_attributes(&patches).is_empty() {
+        return Vec::new();
+    }
+    let Some(paths) = src.paths(base) else {
+        return Vec::new();
+    };
+    let rs: Vec<&String> = (paths.iter())
+        .filter(|p| p.ends_with(".rs") && !weaken::cargo_test_file(p))
+        .collect();
+    let mut mods = Vec::new();
+    for p in rs.iter().take(if rs.len() > 300 { 0 } else { 300 }) {
+        match src.read(p, base) {
+            Ok(Some(t)) => mods.extend(weaken::path_mods(p, &t)),
+            _ => return Vec::new(),
+        }
+    }
+    if rs.len() > 300 || mods.iter().any(|(m, _)| m == "?") {
+        return Vec::new();
+    }
+    let by = |f: &str, test: bool| mods.iter().any(|(m, t)| m == f && *t == test);
+    (wanted.into_iter())
+        .filter(|f| match weaken::cargo_test_file(f) {
+            true => !by(f, true) && !by(f, false),
+            false => by(f, true) && !by(f, false),
+        })
+        .map(String::from)
         .collect()
 }
 
@@ -274,7 +293,7 @@ pub(crate) fn weaken_from(
     base: &str,
     head: &str,
 ) -> Result<Vec<String>> {
-    let test_mods = test_modules(src, pr_files, base);
+    let test_files = test_code(src, pr_files, base);
     let patches = || {
         pr_files
             .iter()
@@ -289,7 +308,7 @@ pub(crate) fn weaken_from(
         out.extend(
             p.map(|p| {
                 let n = &f.filename;
-                let test = weaken::cargo_test_file(n) || test_mods.contains(n);
+                let test = test_files.contains(n);
                 weaken::code_findings(n, p, &added, test)
             })
             .unwrap_or_default(),

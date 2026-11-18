@@ -122,7 +122,15 @@ pub fn carried(
         };
         if gates.iter().all(|g| has(root, &tree, g)) {
             // A diff git cannot print vouches for nothing (the same tree needs no carry-over).
-            let diff = git(&["diff", "--no-renames", "--name-only", c, rev, "--"]);
+            let diff = git(&[
+                "diff",
+                "--no-relative",
+                "--no-renames",
+                "--name-only",
+                c,
+                rev,
+                "--",
+            ]);
             return diff.is_some_and(|d| d.lines().all(crate::core::stamps::docs_only));
         }
     }

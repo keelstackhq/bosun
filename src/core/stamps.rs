@@ -39,14 +39,16 @@ pub fn gate_loop(gates: &[String]) -> String {
     )
 }
 
-/// A path whose change needs no gate run (spec §7), as CI's docs-only fast path: a `*.md`
-/// under `docs/`, `plans/` or `changelog.d/`, or at the root except `README.md` (doctests).
-/// Push stamps carry over a diff of only such paths.
+/// A path whose change needs no local gate run before a push (spec §7): a `*.md` under `docs/`
+/// or `changelog.d/`, except the spec (`docs/spec.md`, `docs/spec/`) and any `README.md`, which
+/// bosun's tests read. Push stamps carry over a diff of only such paths; CI still runs every gate.
 pub fn docs_only(path: &str) -> bool {
-    let under = ["docs/", "plans/", "changelog.d/"]
+    let under = ["docs/", "changelog.d/"]
         .iter()
         .any(|d| path.starts_with(d));
-    path.ends_with(".md") && path != "README.md" && (under || !path.contains('/'))
+    let spec = path == "docs/spec.md" || path.starts_with("docs/spec/");
+    let readme = path.rsplit('/').next() == Some("README.md");
+    path.ends_with(".md") && under && !spec && !readme
 }
 
 #[cfg(test)]
@@ -55,12 +57,7 @@ mod tests {
 
     #[test]
     fn docs_only_paths() {
-        for p in [
-            "docs/a/b.md",
-            "CHANGELOG.md",
-            "plans/p.md",
-            "changelog.d/f.md",
-        ] {
+        for p in ["docs/a/b.md", "docs/progress.d/f.md", "changelog.d/f.md"] {
             assert!(docs_only(p), "{p}");
         }
         for p in [
@@ -71,6 +68,11 @@ mod tests {
             "Cargo.toml",
             "x.md.rs",
             "mydocs/a.md",
+            "CHANGELOG.md",
+            "plans/p.md",
+            "docs/spec/a.md",
+            "docs/spec.md",
+            "docs/progress.d/README.md",
         ] {
             assert!(!docs_only(p), "{p}");
         }

@@ -189,10 +189,12 @@ changes. A clean tree with no record, or a tree equal to the record, is silent.
 Gates before push (`[mode] push_gates`, default `ready`; `push` from `steady` up): under `push`
 the PreToolUse hook refuses a Bash `git push` when the tree of a pushed ref lacks a stamp for
 a ready gate (the stamps `bosun pr --ready` reads, §4), unless an ancestor commit (at most 50
-back) has every ready gate stamped and the diff from it touches only docs as CI's docs-only fast
-path reads them (a `*.md` under `docs/`, `plans/` or `changelog.d/`, or at the root but not
-`README.md`; never with a `ts-pnpm` stack, whose prettier checks Markdown; a diff git cannot
-print vouches for nothing), so a docs-only commit needs no clippy or test run; the reason names the missing gates and
+back) has every ready gate stamped and the diff from it (`--no-relative`, whatever the git
+config) touches only docs: a `*.md` under `docs/` or `changelog.d/`, except `docs/spec.md`,
+`docs/spec/` and any `README.md`, which bosun's tests read; never with a `ts-pnpm` stack, whose
+prettier checks Markdown; a diff git cannot print vouches for nothing. This only saves the local
+run before a push (no clippy or tests for a docs-only commit): CI still runs every gate, so a
+test that reads another such file fails there; the reason names the missing gates and
 the `for g in ..; do bosun gate $g || break; done` loop. Pushes are found by the merge-lock's
 walk (`core::guard::pushes`: nested commands, `sh -c`, the shell scripts it runs) and read
 where git runs: the hook directory moved by `cd dir &&` and `git -C dir`. Each pushed ref is a

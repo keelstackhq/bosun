@@ -349,21 +349,44 @@ fn a_grown_or_swapped_allowed_list_is_a_weakening() {
 #[test]
 fn dead_code_allows_in_test_code_are_no_weakening() {
     let add = "@@ -1,1 +1,2 @@\n+#![allow(dead_code)]\n use x;";
-    // Cargo integration tests and a module a `#[cfg(test)] #[path]` pulls in.
-    let fake = pr();
-    fake.pull_file(1, "tests/common/mod.rs", "modified", 1, 0, Some(add));
-    fake.pull_file(1, "src/core/foo_tests.rs", "modified", 1, 0, Some(add));
-    let decl = "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n";
-    fake.content("src/core/foo.rs", BASE, decl);
     let blob = |p| (p, "100644", "blob", "b");
-    fake.git_tree(
-        BASE,
-        &[blob("src/core/foo.rs"), blob("src/core/foo_tests.rs")],
-        false,
-    );
-    let (code, v) = check(&fake);
+    let decl = "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n";
+    // A base where src/core/foo.rs pulls in foo_tests.rs under cfg(test); `extra` is a third
+    // src file's text at base.
+    let setup = |extra: &str| {
+        let fake = pr();
+        fake.pull_file(1, "tests/common/mod.rs", "modified", 1, 0, Some(add));
+        fake.pull_file(1, "src/core/foo_tests.rs", "modified", 1, 0, Some(add));
+        fake.content("src/core/foo.rs", BASE, decl);
+        fake.content("src/core/foo_tests.rs", BASE, "use x;\n");
+        fake.content("src/lib.rs", BASE, extra);
+        let files = [
+            blob("src/core/foo.rs"),
+            blob("src/core/foo_tests.rs"),
+            blob("src/lib.rs"),
+            blob("tests/common/mod.rs"),
+        ];
+        fake.git_tree(BASE, &files, false);
+        fake
+    };
+    let (code, v) = check(&setup("pub mod core;\n"));
     assert_eq!(code, 0, "{v}");
-    // Still a finding: an allow in src, another lint in tests, a `#[path]` without cfg(test).
+    // A tests/ file that src pulls in by `#[path]` (cfg(test) or not) is no test code; neither
+    // is a file a plain `mod` pulls in too.
+    for extra in [
+        "#[path = \"../tests/common/mod.rs\"]\nmod c;\n",
+        "#[cfg(test)]\n#[path = \"../tests/common/mod.rs\"]\nmod c;\n",
+        "#[path = \"core/foo_tests.rs\"]\nmod t;\n",
+    ] {
+        let (code, v) = check(&setup(extra));
+        assert_eq!(code, 5, "{extra}: {v}");
+    }
+    // A PR that adds a `#[path]` line exempts nothing.
+    let fake = setup("pub mod core;\n");
+    let p = "@@ -1,1 +1,3 @@\n+#[path = \"x.rs\"]\n+mod x;\n pub mod core;";
+    fake.pull_file(1, "src/lib.rs", "modified", 2, 0, Some(p));
+    assert_eq!(check(&fake).0, 5);
+    // Still a finding: an allow in src, another lint in tests.
     for (path, line) in [
         ("src/lib.rs", "#[allow(dead_code)]"),
         ("tests/common/mod.rs", "#![allow(unused)]"),
@@ -376,13 +399,4 @@ fn dead_code_allows_in_test_code_are_no_weakening() {
         let ev = v["data"]["matches"][0]["evidence"].to_string();
         assert!(ev.contains("lint allow/expect 0 -> 1"), "{ev}");
     }
-    let fake = pr();
-    fake.pull_file(1, "src/core/foo_tests.rs", "modified", 1, 0, Some(add));
-    fake.content(
-        "src/core/foo.rs",
-        HEAD,
-        "#[path = \"foo_tests.rs\"]\nmod tests;\n",
-    );
-    fake.git_tree(HEAD, &[blob("src/core/foo.rs")], false);
-    assert_eq!(check(&fake).0, 5);
 }

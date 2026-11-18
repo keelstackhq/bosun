@@ -94,6 +94,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         let mut args = vec![
             "diff",
             "--no-color",
+            "--no-textconv",
             "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
