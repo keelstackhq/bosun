@@ -127,7 +127,8 @@ key goes only to the token step, the token only to the bosun step. main-health's
   same-name runs by any other App (Actions included; they never count), the judged `state`
   (`checks`: the App run; `dual`: the worse of both, error > failure > pending > success;
   `statuses`: the status), `trusted` (the App posted, never in `statuses`) and `disagree` (status
-  and App run differ: a forge sign). `verified` = all trusted, none disagree: exit 0; else exit 3
+  and App run differ: a forge sign). `verified` = all trusted and, in `dual`, none disagree (in `checks` a status counts for
+  nothing, so a disagreement is only reported): exit 0; else exit 3
   naming the contexts, with the data, and a fix (statuses: set `mode = "dual"`; else re-run the
   gate workflow and treat the status as unverified).
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and

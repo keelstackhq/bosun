@@ -90,7 +90,8 @@ pub fn run(dir: Option<&Path>, pr: Option<u64>) -> CmdResult {
             app_run: mine.map(|r| (as_status(r.clone()).state, r.id)),
         };
         let j = judge(checks.mode, &seen);
-        if !j.trusted || j.disagree {
+        // In `checks` mode a status counts for nothing, so one that disagrees is only reported.
+        if !j.trusted || (j.disagree && checks.mode == CheckMode::Dual) {
             bad.push(context);
         }
         let status = (seen.status.as_ref()).map(|(s, c)| json!({"state": s, "creator": c}));

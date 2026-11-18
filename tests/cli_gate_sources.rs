@@ -12,7 +12,7 @@ const HEAD: &str = "sha1";
 const GATES: [&str; 3] = ["risk-check", "review-verdict", "main-open"];
 
 fn repo(mode: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::git_tempdir();
     std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
     let text = match mode {
         "statuses" => "[checks]\nmode = \"statuses\"\n".to_string(),
@@ -144,7 +144,8 @@ fn checks_mode_ignores_statuses() {
         fake.app_run(HEAD, g, "success", "ok", SLUG, APP_ID);
     }
     let (code, v) = run(&fake, &repo("checks"), &["gate", "sources", "--pr", "1"]);
-    assert_eq!(code, 3, "statuses still disagree: {v}");
+    assert_eq!(code, 0, "a status counts for nothing in checks mode: {v}");
+    assert_eq!(v["data"]["verified"], true);
     let g = gate(&v, "main-open");
     assert_eq!(g["state"], "success", "{g}");
     assert_eq!(g["trusted"], true);
