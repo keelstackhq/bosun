@@ -90,11 +90,6 @@ fn stamp_file(dir: &Path, tree: &str, gate: &str) -> Option<PathBuf> {
     Some(common_dir(dir)?.join(rel_path(tree, gate)))
 }
 
-/// Whether the working state has untracked files that git does not ignore.
-pub fn has_untracked(dir: &Path) -> bool {
-    git_out(dir, &["ls-files", "--others", "--exclude-standard"]).is_some()
-}
-
 /// Write the stamp of a passing `gate` for the current working state; the path written. A gate
 /// that skipped (nothing to check on this tree) is stamped `skipped`: it counts as done.
 /// Errors are for stderr only: a gate never fails because it could not stamp.
