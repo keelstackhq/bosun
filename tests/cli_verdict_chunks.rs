@@ -175,3 +175,29 @@ fn an_approval_must_list_its_chunks_not_count_them() {
         nothing_written(&fake);
     }
 }
+
+#[test]
+fn apply_refuses_an_approval_that_counts_its_chunks() {
+    // A hand-made writer comment whose JSON carries a count: no legacy expansion.
+    let fake = setup(3);
+    let one = setup(1);
+    let (code, v) = call(&one, "comment", &verdict("[]"));
+    assert_eq!(code, 0, "{v}");
+    let body = one.comments_of(42)[0].body.replace(
+        "\"confidence\":0.95",
+        "\"confidence\":0.95,\"chunks_reviewed\":3",
+    );
+    assert!(body.contains("\"chunks_reviewed\":3"), "{body}");
+    let id = fake.comment(42, &body);
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = run(
+        &fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    );
+    assert_eq!(code, 1, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("lists the chunks it reviewed"), "{v}");
+    assert!(fake.statuses_of("sha42").is_empty());
+}
