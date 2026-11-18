@@ -222,3 +222,13 @@ fn carries_or_passes(fake: &FakeGithub) -> bool { let (code, _, _) = go(fake); c
     assert!(v["data"].get("verdict_cleared_by").is_none(), "{v}");
     assert_eq!(fake.statuses_of(H2).into_iter().rev().find(|s| s["context"] == "review-verdict").unwrap()["state"], "failure");
 }
+#[test] fn chat_not_carried_over_main_merge() {
+    let fake = world(); // control: an owner review of h carries
+    fake.review(1, "ada", "APPROVED", H); assert!(carries(&fake));
+    let fake = world(); // a chat record of h does not: it belongs to the head it names
+    fake.issue(50, "bosun registry", &["bosun:registry"], "");
+    fake.comment(50, r#"{"bosun":"join","session":"session_orch","origin":"spawned","depth":1,"expires":"2026-10-22T11:00:00Z"}"#);
+    let rec = format!("/bosun approve {H} chat\nApproved by the owner in chat (session session_orch, 2026-10-22T09:00:00Z).\n<!-- bosun:chat-approval v1 session=session_orch head={H} question=1-a000000-1 -->");
+    fake.comment_at(1, "ada", &rec, "2026-10-22T09:00:00Z"); fake.last_comment(|c| c.via_app = Some("claude".into()));
+    assert!(!carries(&fake));
+}

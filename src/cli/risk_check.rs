@@ -820,7 +820,18 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
                 signed_ok,
                 (None, signer),
             )?;
-            Ok(by.filter(|b| b.1).map(|b| b.0))
+            if let Some(b) = by.filter(|b| b.1) {
+                return Ok(Some(b.0));
+            }
+            // A chat record (D-018) counts under every policy, low-risk heads included.
+            if !chat_enabled(gh, base)? {
+                return Ok(None);
+            }
+            let chat = Chat {
+                author: pull.user.as_str(),
+                base,
+            };
+            chat_approver(gh, n, head, &owners, &chat)
         }
     });
 

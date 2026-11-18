@@ -235,3 +235,81 @@ fn chat_record_after_session_expired_not_counted() {
     });
     refused(&fake);
 }
+
+const ESCALATED: &str =
+    "escalated to the owner (approvable): approve 0.95 (approves at 0.85), 0 blocker, 0 major";
+
+fn last_status(fake: &FakeGithub, ctx: &str) -> Value {
+    (fake.statuses_of(HEAD).into_iter().rev())
+        .find(|s| s["context"] == ctx)
+        .unwrap()
+}
+
+#[test]
+fn chat_clears_low_risk_escalation() {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "");
+    fake.pull_as_issue(1, "change");
+    fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
+    fake.content("governance/owners.toml", BASE, OWNERS);
+    fake.pull_file(
+        1,
+        "docs/notes.md",
+        "modified",
+        1,
+        0,
+        Some("@@ -0,0 +1,1 @@\n+x"),
+    );
+    fake.issue(REG, "bosun registry", &["bosun:registry"], "");
+    join(&fake, "session_orch", "spawned", None, 1);
+    fake.status(HEAD, "review-verdict", "failure", ESCALATED);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["level"], "normal", "{v}");
+    assert_eq!(v["data"]["verdict_cleared_by"], "ada", "{v}");
+    assert_eq!(last_status(&fake, "review-verdict")["state"], "success");
+}
+
+#[test]
+fn chat_after_orchestrator_left_not_counted() {
+    // Fail closed: the registry is read at check time, so a Leave of the session makes its records stop counting.
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    assert_eq!(approved(&fake), "ada");
+    fake.comment(
+        REG,
+        r#"{"bosun":"leave","session":"session_orch","reason":"done"}"#,
+    );
+    refused(&fake);
+}
+
+#[test]
+fn chat_counts_under_owner_gated_and_autonomous_policy() {
+    for policy in ["owner-gated", "autonomous"] {
+        let fake = high_pr(true);
+        let cfg = format!("[approvals]\npolicy = \"{policy}\"\n");
+        fake.content(".bosun/bosun.toml", BASE, &cfg);
+        app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+        assert_eq!(approved(&fake), "ada", "{policy}");
+    }
+}
+
+#[test]
+fn chat_counts_on_trust_file_pr() {
+    let fake = high_pr(true);
+    let patch = Some("@@ -1,1 +1,2 @@\n [[owner]]\n+github = \"eve\"");
+    fake.pull_file(1, "governance/owners.toml", "modified", 1, 0, patch);
+    // A signature would not count here; the chat record does.
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    assert_eq!(approved(&fake), "ada");
+}
+
+#[test]
+fn chat_record_withdrawn_by_newer_changes_requested() {
+    let fake = high_pr(true);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    assert_eq!(approved(&fake), "ada");
+    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+    refused(&fake);
+}
