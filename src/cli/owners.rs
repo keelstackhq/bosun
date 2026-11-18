@@ -9,7 +9,7 @@ use serde_json::json;
 use super::pin_pr::git;
 use super::{OwnersArgs, OwnersCmd};
 use crate::app::{App, default_branch, kill_switch};
-use crate::core::risk::{owner_entries_error, parse_owners, render_owners};
+use crate::core::risk::{owner_entries_error, parse_owners_in, render_owners};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const OWNERS: &str = "governance/owners.toml";
@@ -38,10 +38,10 @@ pub fn run(dir: Option<&Path>, a: &OwnersArgs) -> CmdResult {
         ));
     }
     let old = std::fs::read_to_string(root.join(OWNERS)).unwrap_or_default();
-    let old = parse_owners(&old).unwrap_or_default();
+    let old = parse_owners_in(&old, org).unwrap_or_default();
     let text = render_owners(&s.entries, &old);
     let mut data = json!({"owners": s.entries, "changed": false, "then": []});
-    if parse_owners(&text).is_ok_and(|new| new == old) {
+    if parse_owners_in(&text, org).is_ok_and(|new| new == old) {
         return Ok(Outcome::data(data));
     }
     let stamp: String = (crate::time::Timestamp::now().to_string().chars())

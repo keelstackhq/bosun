@@ -1652,6 +1652,22 @@ pub fn owner_entries_error(entries: &[String], repo_owner: &str) -> Option<Strin
     })
 }
 
+/// [`parse_owners`] for the repo of `org`: a team of another org is a parse error too (spec §16).
+pub fn parse_owners_in(text: &str, org: &str) -> Result<Vec<Owner>, String> {
+    let owners = parse_owners(text)?;
+    let other = |t: &&str| {
+        !t.split('/')
+            .next()
+            .is_some_and(|o| o.eq_ignore_ascii_case(org))
+    };
+    match owners.iter().filter_map(|o| o.team.as_deref()).find(other) {
+        Some(t) => Err(format!(
+            "governance/owners.toml: team `{t}` is not of the repo's org {org}"
+        )),
+        None => Ok(owners),
+    }
+}
+
 /// `governance/owners.toml` for `entries` (logins, or `<org>/<slug>` teams), keeping the Slack ID
 /// a login has in `old` (compared case-insensitively).
 pub fn render_owners(entries: &[String], old: &[Owner]) -> String {
@@ -2300,6 +2316,9 @@ catalogs:\n  legacy:\n    \"@scope/x\": 1.0.0 # pinned\n";
         ] {
             assert!(parse_owners(bad).is_err(), "{bad}");
         }
+        let other = "[[owner]]\ngithub = \"a\"\n[[owner]]\nteam = \"else/core\"";
+        assert!(parse_owners_in(other, "acme").is_err());
+        assert!(parse_owners_in(&other.replace("else", "ACME"), "acme").is_ok());
     }
 
     #[test]

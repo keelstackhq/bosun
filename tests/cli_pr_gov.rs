@@ -317,3 +317,17 @@ fn a_tick_only_plan_file_is_refused_since_risk_check_skips_it() {
         "{v}"
     );
 }
+
+#[test]
+fn a_governance_path_the_base_r_gov_misses_or_does_not_gate_for_the_owner_is_refused() {
+    for rules in [
+        "[[rule]]\nid = \"R-gov\"\nwhy = \"old\"\npaths = [\".bosun/**\"]\n",
+        "[[rule]]\nid = \"R-gov\"\nwhy = \"weak\"\npaths = [\"docs/agents/**\"]\napproval = \"two-verdicts\"\n",
+    ] {
+        let (fake, dir) = setup();
+        fake.content(".bosun/risk.toml", "main", rules);
+        fake.pull_file(30, "docs/agents/project.md", "modified", 1, 1, None);
+        let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+        assert_eq!(code, 3, "{rules}: {v}");
+    }
+}

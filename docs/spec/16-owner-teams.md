@@ -9,7 +9,9 @@ Until it is, a team entry counts no member (fail closed): only user entries are 
 rewrites `governance/owners.toml` to these entries, keeping a listed login's `slack`. Each entry
 is a login or a team of the repo's owner, no duplicates, at least one login; else exit 2 before
 anything is written. Owners equal to the current ones change nothing (`data.changed` false).
-`data.then` names `bosun pr --pr <n> --ready` and the owner's approval: the file is R-gov.
+`data.then` names `bosun pr --pr <n> --ready` and the owner's approval: the file is R-gov. Known
+limit: a failed push rolls back, but a PR creation that fails after the push leaves the pushed
+branch and the local checkout on it (open the PR by hand or delete the branch).
 
 **Bus factor.** One human owner is a bus-factor-1 risk. When the only owner is unavailable,
 nothing that needs an owner merges: high-risk PRs stay red, a delegate cannot stand in on the

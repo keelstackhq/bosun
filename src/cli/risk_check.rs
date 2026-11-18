@@ -21,7 +21,7 @@ use crate::core::records::Record;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
-    new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
+    new_dependencies, parse_owners_in, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
@@ -44,7 +44,7 @@ pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
@@ -58,7 +58,7 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
         return Ok(Vec::new());
     };
-    let owners = parse_owners(&text).map_err(|e| {
+    let owners = parse_owners_in(&text, gh.repo_owner()).map_err(|e| {
         BosunError::error(
             e,
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),

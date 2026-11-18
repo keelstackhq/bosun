@@ -13,7 +13,7 @@ use super::pr::{check_local_gates, enforced_checks, merge_gates, not_green, upda
 use crate::app::{App, default_branch, is_writer, kill_switch};
 use crate::core::glob::Glob;
 use crate::core::meta::linked_issues_in;
-use crate::core::risk::{GOVERNANCE_PATHS, matches_globs};
+use crate::core::risk::{Approval, GOVERNANCE_PATHS, matches_globs};
 use crate::core::touch::plan_tick_file;
 use crate::github::{Pull, enable_auto_merge_any, is_already_clean, is_ccr_refusal, is_unstable};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -82,13 +82,22 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             pull.user
         )));
     }
-    // The governance paths (R-gov's own list) plus the owner's `[approvals] oneoff_allow` on the
-    // base; risk-check still asks the owner for any gated one.
-    let mut globs: Vec<Glob> = (GOVERNANCE_PATHS.iter())
+    // A governance path (R-gov's built-in list) that the base's own R-gov also gates with the
+    // owner's approval: risk-check judges by the base rules, so a path they miss would merge with
+    // no owner (fail closed). Plus the owner's `[approvals] oneoff_allow` on the base; risk-check
+    // still asks the owner for any gated one.
+    let builtin: Vec<Glob> = (GOVERNANCE_PATHS.iter())
         .map(|g| Glob::parse(g).expect("static glob"))
         .collect();
-    globs.extend(super::risk_check::oneoff_allow(gh, &base)?);
-    let outside = |f: &str| !matches_globs(&globs, f);
+    let rules = super::risk_check::base_rules(gh, &base)?;
+    let gov: Vec<Glob> = (rules.rules.iter())
+        .filter(|r| r.id == "R-gov" && r.approval == Approval::Owner)
+        .flat_map(|r| r.paths.clone())
+        .collect();
+    let extra = super::risk_check::oneoff_allow(gh, &base)?;
+    let outside = |f: &str| {
+        !(matches_globs(&builtin, f) && matches_globs(&gov, f) || matches_globs(&extra, f))
+    };
     for f in gh.pull_files(n)? {
         let moved = f.previous_filename.as_deref();
         // risk-check skips a tick-only plan file, so here it would merge with no owner.
@@ -98,7 +107,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
         }
         if outside(&f.filename) || moved.is_some_and(&outside) {
             return Err(not_governance(format!(
-                "it changes {}, outside the governance paths (R-gov) and `[approvals] oneoff_allow`",
+                "it changes {}, outside the governance paths the base R-gov gates for the owner and `[approvals] oneoff_allow`",
                 f.filename
             )));
         }
