@@ -39,8 +39,7 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
     let cwd = dir
         .map(Path::to_path_buf)
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
-    // Hooks may be installed user-wide: in a repo bosun never set up they stay silent and make no
-    // GitHub call (SessionStart says how to adopt; PreToolUse still runs its pure rules).
+    // User-wide hooks stay silent and make no GitHub call in a repo bosun never set up.
     if !matches!(cmd, HookCmd::SessionStart | HookCmd::PreToolUse)
         && cwd
             .clone()

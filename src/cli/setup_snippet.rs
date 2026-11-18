@@ -31,8 +31,8 @@ const ENV_PASTE: &str = "claude.ai/code > Environments > <environment> > Environ
 /// Cloud sessions set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE themselves (Claude Code cloud docs).
 const PCT_NOTE: &str = "autocompact_pct is for local sessions only: a cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself and ignores an environment value; use autocompact_window for cloud";
 
-/// The hooks bosun wants in every repo: (event, matcher, command). They equal the repo's own
-/// `.claude/settings.json` entries (a test checks), so Claude Code runs each command once.
+/// The hooks bosun wants in every repo: (event, matcher, command, timeout); a test checks they
+/// equal the repo's own `.claude/settings.json`, so Claude Code runs each command once.
 pub const HOOKS: [(&str, Option<&str>, &str, Option<u32>); 5] = [
     ("SessionStart", None, "bosun hook session-start", None),
     (
@@ -78,9 +78,8 @@ pub fn missing_events(settings: &Value) -> Vec<&'static str> {
         .collect()
 }
 
-/// Add each missing hook to `settings`, matched by exact command string; an entry with the
-/// command but another matcher or timeout is updated in place (never duplicated); other keys and
-/// entries stay. Returns the events added to and the events updated.
+/// Add each missing hook, matched by exact command; an entry with another matcher or timeout is
+/// updated in place. Returns the events added to and the events updated.
 fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
     let root = settings
         .as_object_mut()
@@ -147,8 +146,7 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
         })
         .ok_or_else(|| BosunError::error("HOME is not set", "pass --settings <path>"))?;
-    // A symlinked settings file is written through: the link stays and the target is rewritten.
-    // A dangling link is an error and is left untouched.
+    // A symlinked file is written through; a dangling link is an error.
     let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
     let path = match std::fs::canonicalize(&path) {
         Ok(p) => p,
@@ -182,8 +180,7 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::fs::create_dir_all(dir).map_err(|e| bad(e.to_string()))?;
         }
         let text = serde_json::to_string_pretty(&doc).map_err(|e| bad(e.to_string()))?;
-        // Write beside, then rename: a crash never leaves half a settings file. The temp file is
-        // created private (0600) before any content is written, then takes the target's mode.
+        // Write a private (0600) temp file beside, then rename: no half-written settings.
         let mut name = path.file_name().unwrap_or_default().to_os_string();
         name.push(format!(".bosun-tmp-{}", std::process::id()));
         let tmp = path.with_file_name(name);
