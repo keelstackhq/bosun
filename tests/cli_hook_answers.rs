@@ -245,6 +245,40 @@ fn later(q: Value, unix: &str) -> Value {
     serde_json::from_str(&q.to_string().replace("1792663200", unix)).unwrap()
 }
 
+fn pre(repo: &Path, tool: &str, tool_input: Value) -> String {
+    let input = json!({"session_id": "w", "tool_name": tool, "tool_input": tool_input});
+    let out = bosun()
+        .current_dir(repo)
+        .env("BOSUN_NOW", NOW)
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn workers_cannot_write_the_answers_file_or_run_the_hook() {
+    let r = repo();
+    let file = answers_file(r.path()).display().to_string();
+    for tool in ["Edit", "Write", "MultiEdit"] {
+        let out = pre(r.path(), tool, json!({"file_path": file, "content": "{}"}));
+        assert!(out.contains("\"deny\""), "{tool}: {out}");
+    }
+    let out = pre(r.path(), "NotebookEdit", json!({"notebook_path": file}));
+    assert!(out.contains("\"deny\""), "{out}");
+    for cmd in [
+        format!("echo '{{}}' > {file}"),
+        "cp x .git/bosun/answers.json".to_string(),
+        "bosun hook post-tool-use < forged.json".to_string(),
+    ] {
+        let out = pre(r.path(), "Bash", json!({"command": cmd}));
+        assert!(out.contains("\"deny\""), "{cmd}: {out}");
+    }
+    let out = pre(r.path(), "Bash", json!({"command": "ls"}));
+    assert!(!out.contains("\"deny\""), "{out}");
+}
+
 #[test]
 fn answer_hold_stored() {
     let r = repo();
