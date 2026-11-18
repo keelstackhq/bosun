@@ -57,7 +57,7 @@ fn setup(owners: bool) -> FakeGithub {
         fake.content("governance/owners.toml", MAIN, OWNERS);
     }
     fake.issue(REG, "bosun registry", &["bosun:registry"], "");
-    join(&fake, "session_orch", "spawned", None, 1);
+    join(&fake, "session_orch", "local", None, 1);
     join(&fake, "session_kid", "spawned", Some("session_orch"), 2);
     fake
 }
