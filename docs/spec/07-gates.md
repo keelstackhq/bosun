@@ -150,7 +150,9 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   may instead be a verdict comment body as `comment` writes it (a relay): its JSON, reviewer,
   model and chunks lines are kept; when its reviewer is another session, the posted comment adds
   `<!-- bosun:relayed_by <session> -->` before the marker (an audit hint, self-declared like the
-  reviewer tag). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
+  reviewer tag; its model line is kept and never replaced by the relaying session's model).
+  Relaying a relayed comment keeps the reviewer and replaces `relayed_by` (only the last
+  relayer is named). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
   `relayed_by` too and records the reviewer. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
   `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`

@@ -226,8 +226,10 @@ pub fn comment_chunks(body: &str) -> Vec<u32> {
 }
 
 /// The reviewer session a verdict comment names, if any.
+/// Only the head before the marker counts, so a tag inside the JSON evidence is ignored.
 pub fn comment_session(body: &str) -> Option<&str> {
-    let (_, rest) = body.split_once(SESSION_TAG)?;
+    let head = body.split_once(COMMENT_MARKER).map_or(body, |(h, _)| h);
+    let (_, rest) = head.split_once(SESSION_TAG)?;
     let (s, _) = rest.split_once(" -->")?;
     (!s.is_empty() && !s.contains(char::is_whitespace)).then_some(s)
 }
@@ -398,6 +400,9 @@ mod tests {
         let tail = format!("{COMMENT_MARKER}\n<!-- bosun:relayed_by x -->");
         assert_eq!(comment_relayed_by(&tail), None);
         assert_eq!(comment_relayed_by("<!-- bosun:relayed_by a b -->"), None);
+        // Likewise a reviewer tag after the marker is not the reviewer line.
+        let tail = format!("{COMMENT_MARKER}\n<!-- bosun:reviewer x -->");
+        assert_eq!(comment_session(&tail), None);
     }
 
     #[test]

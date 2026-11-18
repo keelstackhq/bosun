@@ -91,7 +91,11 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
             let relayed_by = (reviewer != me).then_some(me);
-            let model = model.map(str::to_string).or_else(env_model);
+            // A relay keeps the body's model only: the relaying session's env is not the reviewer's.
+            let model = match relayed_by {
+                Some(_) => model.map(str::to_string),
+                None => model.map(str::to_string).or_else(env_model),
+            };
             let body = relayed_comment_body(&verdict, reviewer, model.as_deref(), relayed_by);
             let c = gh.add_comment(verdict.pr, &body)?;
             let mut data = json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
