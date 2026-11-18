@@ -42,7 +42,8 @@ fn answer(dir: &Path, id: &str, answer: &str, pr: u64, head: &str) {
         .join(git(dir, &["rev-parse", "--git-common-dir"]))
         .join("bosun/answers.json");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    let v = json!({id: {"answer": answer, "pr": pr, "head": head, "at": NOW}});
+    let v = json!({id: {"answer": answer, "pr": pr, "head": head, "at": NOW,
+        "session_id": "session_orch", "tool_use_id": "tu"}});
     std::fs::write(file, v.to_string()).unwrap();
 }
 
@@ -141,6 +142,32 @@ fn chat_works_in_cloud() {
     let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &env);
     assert_eq!(code, 0, "{v}");
     assert_eq!(chat_comments(&fake).len(), 1);
+}
+
+#[test]
+fn chat_answer_from_other_session_refused() {
+    let (fake, tmp) = (setup(), repo());
+    for sid in ["session_other", ""] {
+        let file = tmp
+            .path()
+            .join(git(tmp.path(), &["rev-parse", "--git-common-dir"]))
+            .join("bosun/answers.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let v = json!({Q: {"answer": "approve", "pr": 1, "head": HEAD, "at": NOW,
+            "session_id": sid, "tool_use_id": "tu"}});
+        std::fs::write(file, v.to_string()).unwrap();
+        let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+        refused(&fake, r, 5);
+    }
+}
+
+#[test]
+fn chat_spawned_origin_refused() {
+    let (fake, tmp) = (setup(), repo());
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let env = [("CLAUDE_CODE_CHILD_SESSION", "1")];
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &env);
+    refused(&fake, r, 5);
 }
 
 #[test]

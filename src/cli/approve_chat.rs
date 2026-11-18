@@ -60,6 +60,12 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         ));
     }
     let session = &app.ctx.session;
+    if app.ctx.origin == Origin::Spawned {
+        return Err(BosunError::needs_human(
+            "this session is a spawned child (CLAUDE_CODE_CHILD_SESSION=1 or BOSUN_ORIGIN=spawned); only an orchestrator records a chat approval",
+            "hand the PR to the orchestrator with `bosun handoff-pr`; it asks the owner and records the answer",
+        ));
+    }
     // Every comment, not only writers': in a cloud session the permission lookup is hidden, so
     // the session's own join would not count as trusted. Only risk-check's trusted read counts a
     // record; this check guards a confused worker.
@@ -111,7 +117,7 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         }
         None => {
             let q = args.question.as_deref().unwrap_or_default();
-            stored_approve(&app.ctx.dir, q, pr, head)?;
+            stored_approve(&app.ctx.dir, q, pr, head, session)?;
             Some(q)
         }
     };
@@ -130,13 +136,19 @@ fn joined_from_slack(members: &[crate::core::lease::Member], session: &str) -> b
 
 /// The owner's stored answer to `q` must be `approve` for exactly `pr` at `head`, and the id must
 /// name them (`<pr>-<short head>-<unix>`). The file is only a guard against confused workers.
-fn stored_approve(dir: &Path, q: &str, pr: u64, head: &str) -> Result<()> {
+fn stored_approve(dir: &Path, q: &str, pr: u64, head: &str, session: &str) -> Result<()> {
     let prefix = format!("{pr}-{}-", &head[..7]);
-    // A hold of this head (any question) wins over an earlier approve.
+    // The newest answer for this head wins (a later hold refuses), and the answer must have been
+    // given in this orchestrator session: a missing or other session id never counts.
     let ok = q.starts_with(&prefix)
         && !answers::held(dir, pr, head)
-        && answers::get(dir, q)
-            .is_some_and(|a| a.answer == "approve" && a.pr == pr && a.head == head);
+        && answers::get(dir, q).is_some_and(|a| {
+            a.answer == "approve"
+                && a.pr == pr
+                && a.head == head
+                && !a.session_id.is_empty()
+                && a.session_id == session
+        });
     if ok {
         return Ok(());
     }
