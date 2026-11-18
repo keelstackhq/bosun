@@ -1737,6 +1737,7 @@ fn an_explicit_pin_writes_the_policy_only_when_checked() {
             ("intake", ""),
             ("policy", "autonomous"),
             ("policy_pin_checked", checked),
+            ("ci_provider", ""),
             ("bosun_app", ""),
         ]
         .into_iter()

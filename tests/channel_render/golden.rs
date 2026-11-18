@@ -21,6 +21,7 @@ fn vars(bosun_app: &str) -> BTreeMap<&'static str, String> {
         ("intake", ""),
         ("policy", ""),
         ("policy_pin_checked", ""),
+        ("ci_provider", ""),
         ("bosun_app", bosun_app),
     ]
     .into_iter()

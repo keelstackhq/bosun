@@ -1,1 +1,0 @@
-- 2026-11-10 · chat-approval T8 · `[ci] provider` config + adopt detection; none skips main-health and ci-minutes

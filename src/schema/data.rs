@@ -89,7 +89,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
-    registry: {action: str, reason?: str, number?: int}};
+    registry: {action: str, reason?: str, number?: int}, ci: str | null, workflows_skipped: [str]};
 uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels: [{action: str,
     name: str, fix?: str}], registry: {action: str, number?: int}};
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
@@ -118,11 +118,11 @@ intake check = {goal: str, plan: str | null, repo: {owner: str, name: str, visib
 intake sign = {key: str, mode: str, nonce: str, expires: str, sig: str};
 intake verify = {verified: bool, repo: str, key: str, mode: str, nonce: str, expires: str,
     intake: {..}};
-main-health = {result: str, changed: bool, opened: bool, closed: bool, main_red: int | null,
-    note: str, rejudged: int, rejudge_errors: [any], skipped_unknown: [int],
-    conflicts: [{issue: int, pr: int, posted: bool, fix: str}], conflict_errors: [{error: str,
-    issue?: int}], gate_missed: {created?: bool, issue?: int, error?: str} | null,
-    lesson: {created: bool, hits: int, issue: int} | null};
+main-health = {result: str, skipped?: str, changed?: bool, opened?: bool, closed?: bool, main_red?: int | null,
+    note?: str, rejudged?: int, rejudge_errors?: [any], skipped_unknown?: [int],
+    conflicts?: [{issue: int, pr: int, posted: bool, fix: str}], conflict_errors?: [{error: str,
+    issue?: int}], gate_missed?: {created?: bool, issue?: int, error?: str} | null,
+    lesson?: {created: bool, hits: int, issue: int} | null};
 gate-missed = {issue: int, created: bool, key: str};
 review-ci = {pr: int, head_sha?: str, since_sha?: str | null, model?: str, skipped?: str,
     dry_run?: bool, approved?: bool, status?: str, reasons?: [str], task_state?: str | null,
@@ -149,7 +149,7 @@ wait = {changed: bool, polls: int, before: {..}, after: {..}, heartbeat: {beats:
     error: str | null, leases: [int], left: [str], reaped: [{issue: int, session: str}],
     registry: bool}};
 gate = {gate?: str, stack?: str | null, command?: [str], packages?: [str], exit_status?: int,
-    secs?: num, over_budget?: bool, skipped?: bool, reason?: str, stamp?: str | null,
+    secs?: num, over_budget?: bool, skipped?: bool | str, reason?: str, stamp?: str | null,
     uncommitted?: [str], files?: [str], findings?: [any], base?: str, files_checked?: int,
     integrity?: str, head_sha?: str, main_red?: int | null, mainfix?: bool, pass?: bool, pr?: int,
     checks_skipped?: bool,

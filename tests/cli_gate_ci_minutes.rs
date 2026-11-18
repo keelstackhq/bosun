@@ -165,3 +165,13 @@ fn ci_minutes_skips_without_ci() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["skipped"], "ci provider none");
 }
+
+#[test]
+fn ci_minutes_invalid_config_is_exit_1() {
+    let tmp = repo(&[("ci.yml", GOOD)]);
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    // A non-table `ci` must not read as github.
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "ci = \"none\"\n").unwrap();
+    let (code, v) = gate(tmp.path());
+    assert_eq!(code, 1, "{v}");
+}

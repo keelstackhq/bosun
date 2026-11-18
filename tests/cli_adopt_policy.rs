@@ -169,8 +169,8 @@ const GH_WORKFLOWS: [&str; 5] = [
 
 #[test]
 fn adopt_default_writes_github_with_its_workflows() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    let tmp = common::git_tempdir();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("github"));
     assert_eq!(v["data"]["ci"], "github");
@@ -182,8 +182,8 @@ fn adopt_default_writes_github_with_its_workflows() {
 
 #[test]
 fn adopt_ci_none_skips_github_workflows() {
-    let tmp = tempfile::tempdir().unwrap();
-    let args = ["--ci", "none", "--bosun-version", "0.12.0"];
+    let tmp = common::git_tempdir();
+    let args = ["--ci", "none", "--bosun-version", "0.21.0"];
     let (code, v) = adopt(tmp.path(), &args);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("none"));
@@ -197,7 +197,7 @@ fn adopt_ci_none_skips_github_workflows() {
         assert!(!v["data"]["changes"].to_string().contains(w), "{w}");
     }
     // A rerun without --ci keeps none and still skips them.
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(
         v["data"]["workflows_skipped"],
@@ -208,48 +208,48 @@ fn adopt_ci_none_skips_github_workflows() {
 
 #[test]
 fn adopt_with_workflows_writes_github() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     let wf = tmp.path().join(".github/workflows");
     std::fs::create_dir_all(&wf).unwrap();
     std::fs::write(wf.join("ci.yml"), "name: ci\non: push\njobs: {}\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("github"));
 }
 
 #[test]
 fn adopt_circleci_dir_writes_circleci() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     std::fs::create_dir_all(tmp.path().join(".circleci")).unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("circleci"));
 }
 
 #[test]
 fn adopt_ci_flag_overrides_detection() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (code, v) = adopt(tmp.path(), &["--ci", "github", "--bosun-version", "0.12.0"]);
+    let tmp = common::git_tempdir();
+    let (code, v) = adopt(tmp.path(), &["--ci", "github", "--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("github"));
 }
 
 #[test]
 fn adopt_old_pin_writes_no_ci_table() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0"]);
     assert_eq!(code, 0, "{v}");
     assert!(ci_of(&config(tmp.path())).is_none());
     assert!(v["data"]["ci"].is_null());
     let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0", "--ci", "none"]);
     assert_eq!(code, 2, "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("0.12.0"));
+    assert!(v["error"]["fix"].as_str().unwrap().contains("0.21.0"));
 }
 
 #[test]
 fn adopt_rerun_keeps_written_ci() {
-    let tmp = tempfile::tempdir().unwrap();
-    let args = ["--bosun-version", "0.12.0"];
+    let tmp = common::git_tempdir();
+    let args = ["--bosun-version", "0.21.0"];
     assert_eq!(adopt(tmp.path(), &args).0, 0);
     // Adopt's own workflows now exist (detection would say github); the file holds circleci.
     std::fs::write(
@@ -264,12 +264,12 @@ fn adopt_rerun_keeps_written_ci() {
 
 #[test]
 fn adopt_kept_config_without_ci_gets_owner_step() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
     std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
     let (code, v) = adopt(
         tmp.path(),
-        &["--bosun-version", "0.12.0", "--ci", "circleci"],
+        &["--bosun-version", "0.21.0", "--ci", "circleci"],
     );
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["ci"].is_null(), "{v}");
@@ -283,10 +283,10 @@ fn adopt_kept_config_without_ci_gets_owner_step() {
 
 #[test]
 fn adopt_ci_none_with_kept_config_without_it_is_refused() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
     std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0", "--ci", "none"]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0", "--ci", "none"]);
     assert_eq!(code, 2, "{v}");
     assert!(v["error"]["fix"].as_str().unwrap().contains("[ci]"), "{v}");
     assert!(!tmp.path().join(".bosun/adopt.toml").exists());
@@ -295,8 +295,8 @@ fn adopt_ci_none_with_kept_config_without_it_is_refused() {
 
 #[test]
 fn adopt_ci_none_owner_steps_name_no_required_checks() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.12.0"]);
+    let tmp = common::git_tempdir();
+    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     let steps = v["data"]["owner_steps"].to_string();
     for check in ["ci-ok", "risk-check", "review-verdict", "main-open"] {
@@ -307,8 +307,8 @@ fn adopt_ci_none_owner_steps_name_no_required_checks() {
 
 #[test]
 fn adopt_ci_none_dry_run_skips_workflows() {
-    let tmp = tempfile::tempdir().unwrap();
-    let args = ["--ci", "none", "--bosun-version", "0.12.0", "--dry-run"];
+    let tmp = common::git_tempdir();
+    let args = ["--ci", "none", "--bosun-version", "0.21.0", "--dry-run"];
     let (code, v) = adopt(tmp.path(), &args);
     assert_eq!(code, 0, "{v}");
     assert_eq!(
@@ -325,11 +325,11 @@ fn adopt_ci_none_dry_run_skips_workflows() {
 
 #[test]
 fn adopt_ci_none_over_existing_workflows_keeps_and_names_them() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     let wf = tmp.path().join(GH_WORKFLOWS[0]);
     std::fs::create_dir_all(wf.parent().unwrap()).unwrap();
     std::fs::write(&wf, "name: old\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.12.0"]);
+    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(std::fs::read_to_string(&wf).unwrap(), "name: old\n");
     assert_eq!(
@@ -345,11 +345,13 @@ fn adopt_kept_config_with_bad_ci_is_an_error() {
     for text in [
         "project = \"x\"\n[ci]\nprovider = \"jenkins\"\n",
         "not = [toml\n",
+        // Not a table: it must not read as github.
+        "ci = \"none\"\nproject = \"x\"\n",
     ] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = common::git_tempdir();
         std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
         std::fs::write(tmp.path().join(".bosun/bosun.toml"), text).unwrap();
-        let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+        let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
         assert_eq!(code, 1, "{text}: {v}");
         assert!(
             v["error"]["fix"].as_str().unwrap().contains("bosun.toml"),
@@ -360,10 +362,10 @@ fn adopt_kept_config_with_bad_ci_is_an_error() {
 
 #[test]
 fn adopt_kept_config_without_ci_is_github() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
     std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.21.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["ci"], "github", "{v}");
     assert!(
@@ -374,7 +376,7 @@ fn adopt_kept_config_without_ci_is_github() {
 
 #[test]
 fn adopt_old_pin_keeps_unparsed_config_as_before() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = common::git_tempdir();
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
     std::fs::write(tmp.path().join(".bosun/bosun.toml"), "not = [toml\n").unwrap();
     let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0"]);

@@ -170,7 +170,7 @@ fn detect_ci(root: &Path) -> &'static str {
 
 /// The first release whose config parser knows `[ci] provider` (spec §9). Keep in sync with the
 /// `ci` key in `KNOWN` of `tests/pinned_config.rs` and the minimum in spec §11.
-const CI_MIN: &str = "0.12.0";
+const CI_MIN: &str = "0.21.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
 fn policy_min(value: &str) -> &'static str {
@@ -467,6 +467,19 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
             format!("fix {cfg} (or delete it), then rerun `bosun adopt`"),
         )
     })?;
+    // A non-table `ci = "none"` is no `[ci]`: fail closed instead of reading it as github.
+    if kept_cfg
+        .as_ref()
+        .and_then(|t| t.get("ci"))
+        .is_some_and(|c| !c.is_table())
+    {
+        return Err(BosunError::error(
+            format!("{cfg}: ci is not a table"),
+            format!(
+                "edit {cfg}: write `[ci]` with `provider = \"github\"`, \"circleci\" or \"none\", or remove it"
+            ),
+        ));
+    }
     let kept_ci = kept_cfg
         .as_ref()
         .and_then(|t| t.get("ci")?.get("provider"))
