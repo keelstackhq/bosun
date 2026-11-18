@@ -107,6 +107,20 @@ fn only_an_approving_newest_record_of_an_independent_session_counts() {
 }
 
 #[test]
+fn a_verdict_relayed_by_the_lease_holder_is_not_carried() {
+    for relayer in ["session_a", "session_a/task-7"] {
+        let fake = world();
+        let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: None, relayed_by: Some(relayer.into()) };
+        fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
+        assert!(!carried(&fake), "{relayer}");
+    }
+    let fake = world();
+    let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: None, relayed_by: Some("session_x".into()) };
+    fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
+    assert!(carried(&fake)); // a relayer without a lease: still the reviewer's verdict
+}
+
+#[test]
 fn a_later_verdict_record_on_the_path_supersedes() {
     assert!(blocked(|f| verdict(f, H2, "session_s", true))); // on H2 itself, with no status
     let fake = two_hops(); verdict(&fake, H, "session_r", true);

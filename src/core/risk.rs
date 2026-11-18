@@ -1320,7 +1320,7 @@ fn verdict_sessions<'a>(
 /// Whether a verdict's relayer is one of the `excluded` sessions (lease holders, so also the PR
 /// author). Wave agents share their orchestrator's session id (spec §4), so `S` and `S/task`
 /// are the same session here: fail closed.
-fn relayer_excluded(relayer: Option<&str>, excluded: &[String]) -> bool {
+pub(crate) fn relayer_excluded(relayer: Option<&str>, excluded: &[String]) -> bool {
     let root = |s: &str| s.split('/').next().unwrap_or_default().to_string();
     relayer.is_some_and(|r| excluded.iter().any(|e| root(e) == root(r)))
 }

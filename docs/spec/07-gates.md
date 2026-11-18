@@ -154,7 +154,7 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   Relaying a relayed comment keeps the reviewer and replaces `relayed_by` (only the last
   relayer is named). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
   `relayed_by` too and records the reviewer with `relayed_by` in the verdict record. In the
-  two-verdict, delegate and autonomous checks (not yet in verdict carry-over), a verdict whose relayer
+  two-verdict, delegate and autonomous checks and in verdict carry-over, a verdict whose relayer
   holds or held a lease on a linked task (so also the PR author's session) is not independent:
   it counts as the relayer's and never counts, and as the reviewer's newest record it withdraws
   an older approval. Wave agents share their orchestrator's session id (§4), so `S` and `S/task`
