@@ -585,6 +585,30 @@ pub fn chat_identity_override(command: &str) -> bool {
         })
 }
 
+/// The index of the command word of a simple command: past shell keywords and prefix words
+/// (`if`, `then`, `time`, `nohup`, `sudo`, `nice`, ...) with their options, and `NAME=value`.
+fn command_word(seg: &[String]) -> usize {
+    const PREFIX: [&str; 17] = [
+        "if", "then", "else", "elif", "do", "while", "until", "!", "{", "time", "nohup", "command",
+        "exec", "sudo", "nice", "builtin", "setsid",
+    ];
+    let mut i = 0;
+    while let Some(w) = seg.get(i) {
+        if PREFIX.contains(&w.as_str()) {
+            i += 1;
+            while let Some(o) = seg.get(i).filter(|o| o.starts_with('-')) {
+                // `nice -n 5`, `sudo -u root`: these options take a value.
+                i += 1 + usize::from(matches!(o.as_str(), "-n" | "-u" | "-g"));
+            }
+        } else if w.contains('=') && !w.starts_with('-') {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
 /// Whether a command drops or overrides the child-session flag next to a `bosun` word: an
 /// unset of it, a cleared environment, or an assignment to it. Best effort (lexical, like the
 /// rest of the chat-lock): refused for everyone, since no honest command needs to hide that it
@@ -605,22 +629,25 @@ pub fn child_flag_tamper(command: &str) -> bool {
         .map(dequoted_words)
         .any(|seg| {
             let named = seg.iter().any(flag);
-            if seg.first().is_some_and(|w| w == "unset") && named {
+            let at = command_word(&seg);
+            if seg.get(at).is_some_and(|w| w == "unset") && named {
                 return true;
             }
-            let Some(at) = seg.iter().position(|w| base(w) == "env") else {
+            if seg.get(at).is_none_or(|w| base(w) != "env") {
                 return false;
-            };
+            }
             let (mut unsets, mut clears, mut skip) = (false, false, false);
             for w in &seg[at + 1..] {
                 if std::mem::take(&mut skip) {
                     continue;
                 }
-                if w == "-u" {
+                if matches!(w.as_str(), "-u" | "--unset") {
                     unsets = true;
                     skip = true;
-                } else if w.starts_with("-u") || w.starts_with("--unset") {
+                } else if w.starts_with("-u") || w.starts_with("--unset=") {
                     unsets = true;
+                } else if matches!(w.as_str(), "-C" | "--chdir" | "-S" | "--split-string") {
+                    skip = true;
                 } else if matches!(w.as_str(), "-i" | "--ignore-environment" | "-") {
                     clears = true;
                 } else if !w.starts_with('-') && !w.contains('=') {
@@ -7334,6 +7361,15 @@ mod tests {
             "env -u 'CLAUDE_CODE_CHILD_SESSION' bos''un status",
             "cd /r && env -u CLAUDE_CODE_CHILD_SESSION bosun approve 3@h --chat",
             "env FOO=1 -i bosun status",
+            "if true; then env -i bosun status; fi",
+            "while :; do unset CLAUDE_CODE_CHILD_SESSION; done; bosun status",
+            "! env -u CLAUDE_CODE_CHILD_SESSION bosun status",
+            "time nohup env -i bosun status",
+            "sudo -u root env -i bosun status",
+            "nice -n 5 command exec env --unset=CLAUDE_CODE_CHILD_SESSION bosun status",
+            "FOO=1 env -C /r -u CLAUDE_CODE_CHILD_SESSION bosun status",
+            "env --chdir /r --unset CLAUDE_CODE_CHILD_SESSION bosun status",
+            "env -S x -i bosun status",
         ] {
             assert!(child_flag_tamper(c), "{c}");
         }
@@ -7348,6 +7384,12 @@ mod tests {
             "grep -i CLAUDE_CODE_CHILD_SESSION notes && bosun status",
             "bosun status | grep -i x",
             "bosun comment unset CLAUDE_CODE_CHILD_SESSION",
+            "env -C /r bosun status",
+            "env -C -i bosun status",
+            "env -u FOO -S x bosun status",
+            "if grep -i x f; then bosun status; fi",
+            "echo env -i; bosun status",
+            "then unset FOO; bosun status",
         ] {
             assert!(!child_flag_tamper(c), "{c}");
         }
