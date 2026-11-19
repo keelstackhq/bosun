@@ -582,6 +582,18 @@ fn chat_refused_when_the_child_flag_is_set_whatever_the_origin_says() {
     refused(&fake, r, 5);
 }
 
+#[test]
+fn chat_refused_when_the_child_flag_is_any_non_empty_value() {
+    let (fake, tmp) = (setup(), repo());
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let env = [
+        ("CLAUDE_CODE_CHILD_SESSION", "true"),
+        ("BOSUN_ORIGIN", "local"),
+    ];
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &env);
+    refused(&fake, r, 5);
+}
+
 /// PR `n` at `head` in the ready list: its risk-check waits for an owner, a clean verdict, green CI.
 fn ready(fake: &FakeGithub, n: u64, head: &str) {
     fake.pull(n, "change", &format!("b{n}"), "");
