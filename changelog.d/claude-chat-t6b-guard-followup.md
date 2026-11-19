@@ -1,0 +1,1 @@
+- PreToolUse chat-lock: the child-flag check also catches loop and function bodies, `timeout`/`exec -a` prefixes, combined env flags, `export -n` and `declare +x`.
