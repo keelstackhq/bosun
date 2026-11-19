@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.21.0 (2026-11-18)
+
 - bosun runs on itself in `[mode] name = "autonomous"`; the explicit `[approvals] policy` is dropped so the preset fills `autonomous`.
 - ts-pnpm `deps` in bosun-trusted reads the pushed commit's own `package.json` and `pnpm-workspace.yaml` on a push to the default branch, so a merged `auditConfig` change (an approved `ignoreGhsas` entry) applies on its own push run instead of leaving main red; pull requests and the merge queue still use the base's copies.
 - bosun.yml (and the CircleCI job) key the ts-pnpm steps (pnpm setup, install, hoard) off the ts-pnpm `[[stack]]` paths of the base's `.bosun/bosun.toml`, not the render's `ts_path`, so a stack in a subdirectory (`action/`) gets pnpm on push to main; the `{}` package.json stand-in for a new stack's audit is scoped to those stacks and removed right after deps.
