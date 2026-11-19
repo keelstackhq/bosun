@@ -598,9 +598,9 @@ fn merge_env_tamper(command: &str) -> Option<String> {
         .any(|w| base(w) == "bosun" || w.ends_with("=bosun") || w.starts_with("bosun"));
     let hidden = rough_segments(command).iter().any(|seg| {
         let mut t = seg.split_whitespace();
-        let cmd = t.next().map_or("", |c| c.trim_matches(['(', '"', '\'']));
-        let bosun = cmd == "bosun" || cmd.ends_with("/bosun") || cmd.starts_with('$');
-        (bosun || cmd.contains('`')) && t.any(|w| w.contains(['$', '\\', '{', '?', '*', '[', '`']))
+        let c = t.next().unwrap_or("").trim_matches(['(', '"', '\'']);
+        (c == "bosun" || c.ends_with("/bosun") || c.starts_with('$') || c.contains('`'))
+            && t.any(|w| w.contains(['$', '\\', '{', '?', '*', '[', '`']))
     });
     if !hidden && (!runs_bosun || !words.iter().any(|w| w == "merge")) {
         return None;
@@ -611,9 +611,8 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     let allowed = |seg: &[String]| {
         let w: Vec<&str> = seg.iter().map(String::as_str).collect();
         match w[..] {
-            ["cd", ..]
-            | [
-                "jq" | "tee" | "head" | "tail" | "grep" | "cat" | "sleep",
+            [
+                "cd" | "jq" | "tee" | "head" | "tail" | "grep" | "cat" | "sleep",
                 ..,
             ] => true,
             ["python3", "-m", "json.tool"] => true,
@@ -624,16 +623,12 @@ fn merge_env_tamper(command: &str) -> Option<String> {
                     !d.is_empty() && !d.replace("$HOME", "").contains(['$', '`', '='])
                 }),
             ["echo" | "printf", ..] => !w.iter().any(|x| x.starts_with("-v")),
-            ["git", ..] => {
-                let verb = w.get(if w.get(1) == Some(&"-C") { 3 } else { 1 });
-                matches!(
-                    verb,
-                    Some(&("status" | "log" | "diff" | "show" | "rev-parse"))
-                )
-            }
-            [first, ..] => {
-                first == "bosun"
-                    || (first.starts_with('/') && first.ends_with("/bosun") && !first.contains('='))
+            ["git", ..] => matches!(
+                w.get(if w.get(1) == Some(&"-C") { 3 } else { 1 }),
+                Some(&("status" | "log" | "diff" | "show" | "rev-parse"))
+            ),
+            [f, ..] => {
+                f == "bosun" || (f.starts_with('/') && f.ends_with("/bosun") && !f.contains('='))
             }
             [] => true,
         }
@@ -641,10 +636,8 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     let words = shell_words(&text);
     (text.contains("${") || text.contains("((") || !words.split(|w| w == SEP).all(allowed)).then(
         || {
-            "a command that runs `bosun merge` (or `bosun $x`) may only also run cd, read-only \
-             git (no fetch), echo, printf, jq, tee, head, tail, grep, cat, sleep and `export \
-             PATH=<dir>:$PATH`: the merge checks the caller's own identity (D-019); run \
-             `bosun merge <pr>` bare"
+            "a command that runs `bosun merge` (or `bosun $x`) may only also run cd, read-only git \
+             (no fetch), echo, printf, viewers and `export PATH=<dir>:$PATH` (D-019): run it bare"
                 .to_string()
         },
     )
