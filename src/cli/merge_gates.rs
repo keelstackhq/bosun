@@ -194,51 +194,43 @@ fn sha40(s: &str) -> bool {
 /// exit 5 with the failing gates unless all pass. The repo is always removed. The gates execute the
 /// head's code (tests, build scripts): the signed verdict and the owner's approval are the control.
 pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
-    let head = pull.head_sha.as_str();
+    let (head, n) = (pull.head_sha.as_str(), pull.number);
     if !sha40(head) || !sha40(&pull.base_sha) {
-        let n = pull.number;
         return Err(BosunError::needs_human(
             format!("PR #{n} head or base is not a 40-hex commit id"),
             format!("rerun `bosun merge {n}` once GitHub reports real commit ids"),
         ));
     }
-    let private = Private(fresh_dir(&format!("merge-{}", pull.number))?);
+    let private = Private(fresh_dir(&format!("merge-{n}"))?);
     let repo = private.0.join("repo");
     std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
     gates::isolate(&private.0.join("setup"));
     clean_above(&repo, &private.0)?;
-    let info = app.gh.repo_info().ok().flatten();
-    if info.is_some_and(|i| i.visibility.is_some_and(|v| v != "public")) {
-        return Err(BosunError::needs_human(
-            format!(
-                "{} is a private repo (not public), so `bosun merge` cannot fetch PR #{} to run its gates",
-                app.ctx.repo, pull.number
-            ),
-            format!(
-                "the owner merges PR #{} on GitHub once the checks are green",
-                pull.number
-            ),
-        ));
-    }
+    let vis = app.gh.repo_info().ok().flatten().and_then(|i| i.visibility);
+    let public = vis.is_none_or(|v| v == "public");
     // Never the shared checkout (its config and objects are not trusted): fetch by sha, no token.
+    // `BOSUN_GIT_URL` (a test source) counts in debug builds only.
     let host = format!("https://github.com/{}.git", app.ctx.repo);
-    // The test source exists only in debug builds: a release build always fetches from GitHub.
-    let url = if cfg!(debug_assertions) {
-        std::env::var("BOSUN_GIT_URL").unwrap_or(host)
-    } else {
-        host
-    };
+    let url = (std::env::var("BOSUN_GIT_URL")
+        .ok()
+        .filter(|_| cfg!(debug_assertions)))
+    .unwrap_or(host);
     gates::git(&repo, &["init", "-q"])?;
     let mut args: Vec<&str> = FETCH_CONFIG.iter().flat_map(|c| ["-c", *c]).collect();
     args.extend(["fetch", "-q", "--no-tags", &url, head, &pull.base_sha]);
-    let got = gates::git(&repo, &args).is_ok()
+    let got = public
+        && gates::git(&repo, &args).is_ok()
         && [head, &pull.base_sha]
             .iter()
             .all(|s| stamps::tree_of(&repo, s).is_some());
     if !got {
-        let n = pull.number;
+        let why = if public {
+            "cannot be fetched anonymously"
+        } else {
+            "is in a private repo"
+        };
         return Err(BosunError::needs_human(
-            format!("cannot fetch the commits of PR #{n} anonymously, so its gates cannot run"),
+            format!("PR #{n} {why}, so its gates cannot run"),
             format!(
                 "bosun merge needs a public repo; the owner merges PR #{n} on GitHub once the checks are green"
             ),
