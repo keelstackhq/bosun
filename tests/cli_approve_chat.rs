@@ -47,11 +47,13 @@ fn with_transcript(repo: &Path, mut input: Value) -> Value {
         .flatten())
     .map(|(q, a)| format!("\"{q}\"=\"{}\"", a.as_str().unwrap_or("")))
     .collect();
-    let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
+    let (sid, answers) = (&input["session_id"], &input["tool_response"]["answers"]);
+    let call = json!({"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
         {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
-    let done = json!({"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": id, "content":
-            format!("User has answered your questions: {}. You can now continue.", said.join(", "))}]}});
+    // the real format: a text `tool_result` plus the structured `toolUseResult.answers`
+    let done = json!({"type": "user", "sessionId": sid, "toolUseResult": {"answers": answers},
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content":
+            format!("Your questions have been answered: {}. You can now continue with these answers in mind.", said.join(", "))}]}});
     let dir = repo.join(".home/.claude/projects/p");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join(format!("{}.jsonl", input["session_id"].as_str().unwrap()));
