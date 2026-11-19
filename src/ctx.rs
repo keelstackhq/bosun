@@ -107,6 +107,17 @@ pub fn session_id(bosun_session: Option<&str>, remote_session: Option<&str>, hos
     format!("local-{host}")
 }
 
+/// The session's own id (`session_id` from the environment, a `/<task>` suffix cut off). The
+/// PreToolUse hook's input `session_id` is Claude's UUID, not bosun's, so it is not used.
+pub fn own_session() -> String {
+    let id = session_id(
+        env("BOSUN_SESSION").as_deref(),
+        env("CLAUDE_CODE_REMOTE_SESSION_ID").as_deref(),
+        &hostname(),
+    );
+    id.split('/').next().unwrap_or_default().to_string()
+}
+
 pub(crate) fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()
