@@ -146,3 +146,17 @@ fn relay_waves_and_the_cloud_environment_parse() {
     assert_eq!(c.cloud.environment_id.as_deref(), Some("env_1"));
     assert!(Limits::parse("[waves]\nrelay_waves = 0\n", "x").is_err());
 }
+
+#[test]
+fn approvals_chat_defaults_true() {
+    let c = Config::parse("", "b").unwrap();
+    assert_eq!(c.approvals.chat, None);
+    assert!(c.approvals.chat_enabled());
+}
+
+#[test]
+fn approvals_chat_false_parses() {
+    let c = Config::parse("[approvals]\nchat = false\n", "b").unwrap();
+    assert_eq!(c.approvals.chat, Some(false));
+    assert!(!c.approvals.chat_enabled());
+}
