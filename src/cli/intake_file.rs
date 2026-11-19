@@ -405,9 +405,12 @@ fn verify_chat(
             ("expired", "it is more than an hour old")
         } else {
             let made = made.expect("checked above");
+            // from the signature, so the replay record binds the signed bytes, not a comment id
+            let sig = r.sig.as_ref().map_or("", |s| s.1.as_str());
+            let nonce = format!("chat-{}", &intake_sha256(sig.as_bytes())[..32]);
             return Ok(Outcome::data(json!({"verified": true, "via": "chat",
                 "issue": issue, "comment": c.id, "approved_by": c.user, "session": r.session,
-                "repo": repo_of(intake), "mode": mode, "nonce": format!("chat-{}", c.id),
+                "repo": repo_of(intake), "mode": mode, "nonce": nonce,
                 "expires": made.plus_secs(MAX_EXPIRES_SECS as i64).to_string(),
                 "intake_sha256": sha, "intake": view(intake)})));
         };
@@ -417,21 +420,46 @@ fn verify_chat(
     Err(refuse(reason, &format!("the chat record {text}"), fix))
 }
 
-/// Whether `body` (its current text) opens with `/bosun hold` or `/bosun no`: any case, extra
-/// spaces, a leading quote, emphasis or backticks, trailing punctuation; not `/bosun nothing`.
+/// Whether a line of `body` (its current text) is `/bosun hold` or `/bosun no` (`/bosun: hold`
+/// too): any case, extra spaces, list markers, a quote, emphasis, backticks or a code fence, a
+/// leading HTML comment, zero-width characters, trailing punctuation; not `/bosun nothing`.
 fn is_hold(body: &str) -> bool {
-    let line = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-    let line = line.to_lowercase();
-    let line = line.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#".contains(c));
-    let Some(rest) = line
-        .strip_prefix("/bosun")
-        .filter(|r| r.starts_with(char::is_whitespace))
-    else {
-        return false;
-    };
-    let rest = rest.trim_start();
-    ["hold", "no"].iter().any(|w| {
-        (rest.strip_prefix(w)).is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
+    let zero = |c: char| matches!(c, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}');
+    [None, Some(' ')].into_iter().any(|sub| {
+        let mut text = (body
+            .chars()
+            .filter_map(|c| if zero(c) { sub } else { Some(c) }))
+        .collect::<String>()
+        .to_lowercase();
+        while let Some(i) = text.find("<!--") {
+            let end = text[i..].find("-->").map_or(i + 4, |j| i + j + 3);
+            text.replace_range(i..end, " ");
+        }
+        text.lines().any(|line| {
+            let mut l = line;
+            loop {
+                let t = l.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#-+".contains(c));
+                let d = t.trim_start_matches(|c: char| c.is_ascii_digit());
+                let n = if d.len() < t.len() {
+                    d.strip_prefix(['.', ')']).unwrap_or(t)
+                } else {
+                    t
+                };
+                if n.len() == l.len() {
+                    break;
+                }
+                l = n;
+            }
+            let sep = |c: char| c.is_whitespace() || c == ':';
+            let Some(rest) = l.strip_prefix("/bosun").filter(|r| r.starts_with(sep)) else {
+                return false;
+            };
+            let rest = rest.trim_start_matches(sep);
+            ["hold", "no"].iter().any(|w| {
+                (rest.strip_prefix(w))
+                    .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
+            })
+        })
     })
 }
 

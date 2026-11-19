@@ -144,7 +144,13 @@ fn chat_record_verifies_the_intake() {
     assert_eq!(d["intake_sha256"], sha());
     assert_eq!(d["mode"], "new");
     assert_eq!(d["expires"], "2026-11-10T10:30:00Z");
-    assert!(d["nonce"].as_str().unwrap().starts_with("chat-"), "{v}");
+    // derived from the signature: `chat-` and 32 hex of its sha256, not the comment id
+    let nonce = d["nonce"].as_str().unwrap();
+    let hex = nonce.strip_prefix("chat-").unwrap();
+    assert!(
+        hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{v}"
+    );
     assert_eq!(d["intake"]["repo"]["name"], "widget");
 }
 
@@ -509,6 +515,25 @@ fn the_signing_time_is_bound_and_fresh() {
     let body = record_at(&sha, "session_orch", NOW).replace(&format!(" at={}", unix(NOW)), "");
     post(&fake, "ada", &body, NOW);
     refused(&fake, "chat_unsigned");
+    // A signing time may lead the posting by 60 s, not by 61 s (it may lag by up to 600 s).
+    for (signed, posted, ok) in [
+        ("2026-11-10T09:31:00Z", "2026-11-10T09:30:00Z", true),
+        ("2026-11-10T09:31:01Z", "2026-11-10T09:30:00Z", false),
+        ("2026-11-10T09:20:00Z", "2026-11-10T09:30:00Z", true),
+    ] {
+        let fake = setup(true);
+        post(
+            &fake,
+            "ada",
+            &record_at(&sha, "session_orch", signed),
+            posted,
+        );
+        if ok {
+            assert_eq!(verify(&fake, OK, &[]).0, 0, "{signed}");
+        } else {
+            refused(&fake, "chat_unsigned");
+        }
+    }
     // The session is signed: another session name in the marker does not verify.
     let fake = setup(true);
     let body =
@@ -542,6 +567,16 @@ fn hold_matching_is_forgiving() {
         "/bosun hold.",
         "/bosun no!",
         "\n\n/Bosun No, not yet",
+        "- /bosun hold",
+        "* /bosun hold",
+        "1. /bosun hold",
+        "/bosun: hold",
+        "Thanks, but\n/bosun hold\nfor now",
+        "<!-- note --> /bosun hold",
+        "```\n/bosun hold\n```",
+        "\u{200b}/bosun hold",
+        "/bosun\u{200b}hold",
+        "/bos\u{200b}un hold",
     ] {
         let fake = setup(true);
         post(
@@ -558,6 +593,9 @@ fn hold_matching_is_forgiving() {
         "/bosun holdup",
         "/bosunhold",
         "bosun hold",
+        "/bosun: nothing",
+        "<!-- /bosun hold -->",
+        "please do not /bosun hold",
     ] {
         let fake = setup(true);
         post(
@@ -569,6 +607,20 @@ fn hold_matching_is_forgiving() {
         post(&fake, "ada", other, "2026-11-10T09:31:00Z");
         assert_eq!(verify(&fake, OK, &[]).0, 0, "{other}");
     }
+}
+
+#[test]
+fn a_hold_written_after_the_record_and_edited_again_still_holds_while_it_reads_as_one() {
+    let at = "2026-11-10T09:30:00Z";
+    let rec = || record_at(&sha(), "session_orch", at);
+    let fake = setup(true);
+    post(&fake, "ada", &rec(), at);
+    post(&fake, "ada", "/bosun hold", "2026-11-10T09:31:00Z");
+    fake.last_comment(|c| {
+        c.body = "/bosun hold, still".into();
+        c.updated_at = "2026-11-10T09:45:00Z".into();
+    });
+    refused(&fake, "chat_held");
 }
 
 #[test]
