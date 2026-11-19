@@ -1,5 +1,4 @@
-//! The no-CI gates (spec §4, D-019): the base's required gates, run on a private repo at the exact
-//! PR head; stamp files are never trusted.
+//! The no-CI gates (spec §4, D-019): the base's gates, run on a private repo at the exact PR head.
 
 use std::path::{Path, PathBuf};
 
@@ -195,7 +194,6 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     clean_above(&repo, &private.0)?;
     let vis = app.gh.repo_info().ok().flatten().and_then(|i| i.visibility);
     let public = vis.is_none_or(|v| v == "public");
-    // Never the shared checkout: fetch by sha, no token; `BOSUN_GIT_URL` (test source) in debug builds only.
     let host = format!("https://github.com/{}.git", app.ctx.repo);
     let url = (std::env::var("BOSUN_GIT_URL")
         .ok()
@@ -227,7 +225,6 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
 }
 
 fn run_gates(app: &App, pull: &Pull, wt: &Path) -> Result<Vec<String>, BosunError> {
-    // The PR's base commit, not the branch name: it cannot move between the checks and the run.
     let overlay = Overlay::load(app.gh.as_ref(), &pull.base_sha)?;
     overlay.apply(wt)?;
     let all = non_empty(stamps::ready_gates(wt)?)?;
@@ -236,7 +233,6 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path) -> Result<Vec<String>, BosunErro
     let mut failed = Vec::new();
     let private = wt.parent().unwrap_or(wt);
     for (i, gate) in all.iter().enumerate() {
-        // Fresh before each gate, and checked after: an earlier gate (head code) cannot steer a later one.
         overlay.apply(wt)?;
         let own = fresh_dir(private, &format!("gate{i}"))?;
         gates::isolate(&own);
