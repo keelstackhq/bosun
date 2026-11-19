@@ -3,7 +3,8 @@
 > **Ported 2026-11-18 onto 0.20.0.** The original PRs were rebuilt on the current main as a stack of
 > branches: `claude/chat-t10-merge` carries T1-T5, T8-T10; siblings `claude/chat-t6-guard` (T6),
 > `claude/chat-t7-user-hooks` (T7), `claude/chat-t12-intake` (T12); this docs task is
-> `claude/chat-t11-docs`. Config keys are known from 0.21.0. Org decisions D-016 to D-020 now
+> `claude/chat-t11-docs`. The new config keys (`[approvals] chat`, `chat_signed`, `[ci] provider`) are
+> read from the next release after 0.21.0 (0.22.0); 0.21.0 does not read them. Org decisions D-016 to D-020 now
 > govern (every owner approval asked in chat, `bosun merge` for `provider = "none"`).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
@@ -19,8 +20,7 @@ moves risk/verdict/approval checks into `pr --ready` and `bosun merge`.
 
 **Tech Stack:** Rust, existing crates only (serde, ureq, clap, tiny_http in tests). No new crate.
 
-**Spec:** `docs/superpowers/specs/2026-11-10-chat-approval-design.md` (incl. "Calls made").
-Spec sections touched: §1 (D13 row), §4 (`pr --ready`, merge), §8 (approvals), §14 (approval
+**Spec:** the spec sections themselves (no separate design doc). Sections touched: §1 (D13 row), §4 (`pr --ready`, merge), §8 (approvals), §14 (approval
 batches).
 
 ## Global Constraints
@@ -35,14 +35,15 @@ batches).
   or `slack`. Ids containing `/` (wave agents) never qualify.
 - Question id = `<pr>-<short head (7)>-<unix secs>`.
 - New config keys: `[approvals] chat: Option<bool>` (default true), `[ci] provider:
-  Option<String>` in `{"github","circleci","none"}`; add to `tests/pinned_config.rs:260`
-  `KNOWN_APPROVALS` (new release row) / known sections. Older pins reject them: release ordering as usual.
+  Option<String>` in `{"github","circleci","none"}`; add to `KNOWN_APPROVALS` in
+  `tests/pinned_config.rs` (a new row for the release that first reads them) / known sections. Older pins reject them: release ordering as usual.
 - Hook guard is best effort (option A): it stops confused workers, not liars. Say so in §8.
 - Fast checks before each commit: `cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo nextest run --locked`.
-- Dependency T0 (outside bosun): PR in keelstackhq/decisions amending D-008 (orchestrator may
-  run `bosun merge` without CI), D-012 (chat record replaces the signature as the default
-  form) and noting spec D13. Owner (or a session attached to that repo) opens it; it should
-  merge before T2 and T10 merge. Not blocking writing T1–T9.
+- Dependency T0 is settled: D-018 (chat approvals) and D-019 (`bosun merge` for
+  `provider = "none"`) are in the org decisions, so T0 no longer blocks T2 or T10.
+- Looser than D-018 for now: `origin` `local`/`slack` sessions at depth 2 also count as
+  orchestrators, and a session with no origin defaults to `local`. Tightening this is in the
+  post-landing follow-up.
 
 ## Review Focus
 
@@ -89,7 +90,7 @@ batches).
 
 ### Task 2: risk-check counts chat records (+ no-owners fallback)
 
-**Gated:** yes (`src/cli/risk_check.rs`, `src/core/risk.rs`). **Model:** opus. **Depends:** T1; T0 before merge.
+**Gated:** yes (`src/cli/risk_check.rs`, `src/core/risk.rs`). **Model:** opus. **Depends:** T1 (T0 settled by D-018).
 **Branch:** `claude/chat-record-count`.
 
 **Files:** Modify `src/cli/risk_check.rs:875` (`approver`), `:1275` (add `chat_comment_by`),
@@ -291,7 +292,7 @@ verdict from another session (exit 5) → chat record when gated (exit 5, `next`
 
 ### Task 10: `bosun merge <pr>` (owner decision a)
 
-**Gated:** yes (merge path, D13). **Model:** opus. **Depends:** T9; T0 merged first.
+**Gated:** yes (merge path, D13). **Model:** opus. **Depends:** T9 (T0 settled by D-019).
 **Branch:** `claude/bosun-merge`.
 
 **Files:** Create `src/cli/merge.rs`; Modify `src/cli/mod.rs:91` (`Command::Merge(MergeArgs
@@ -324,13 +325,13 @@ head_sha, merged: true}`.
 **Files:** Modify `docs/adopt-existing-repo.md` (chat approval, `[ci] provider`, user-scope
 hooks, `.bosun/approvers.toml` optional, `[approvals] chat = false` opt-out, release pin
 ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines,
-`docs/PROGRESS.md` Blocked: T0 decisions PR (owner, phone). Test: `tests/fragments.rs` passes.
+(T0 is settled, so nothing goes to Blocked.) Test: `tests/fragments.rs` passes.
 
 - [ ] Write; `cargo nextest run --locked --test fragments` PASS. Fragments. Commit, push, PR.
 
 ### Task 12: `bosun intake verify` accepts a chat record (D-014 as amended by decisions#19)
 
-Follow-up from T2 (PR #488): spec §8 already says intake verify accepts the orchestrator's chat
+Follow-up from T2 (now #634): with that PR, spec §8 says intake verify accepts the orchestrator's chat
 record of the owner's yes (signature optional); the command needs GitHub reads it lacks today.
 Gated, opus, depends on T2. One PR ≤400 lines: read the intake issue's comments, count a chat
 record by the T2 rules (`count_chat`), keep signatures working; tests in `tests/cli_intake*.rs`.
@@ -349,14 +350,14 @@ The stack was ported onto main as PRs #633-#644 (T1-T12), plus these split-outs 
 Trust model: the guards stop confused workers, not a worker that lies; `chat_signed` is the
 stronger opt-in.
 
-## Notes from landed tasks
+## Notes from the stacked PRs (pending, not yet on main)
 
-- T2 (#488): with no owners file, the org-repo fallback uses the repo `admin` permission
-  (readable by the Actions token), not the org-membership API. Spec §8 has it.
+- T2 (#634, was #488): with no owners file, the org-repo fallback uses the repo `admin` permission
+  (readable by the Actions token), not the org-membership API. Spec §8 gets it with that PR.
 - T2 minors left: no test for the failed-read path; an empty `owners.toml` also turns on the
   fallback; §8 refers to the T6 guard ahead of T6.
-- T8 (#486) minors left for a follow-up: a kept non-table `ci = "none"` reads as github (exit 0,
+- T8 (#638, was #486) minors left for a follow-up: a kept non-table `ci = "none"` reads as github (exit 0,
   Config::parse rejects later); a circleci-only kept checkout still gets a hand step; `gate
   ci-minutes` exits 1 on an invalid bosun.toml (not in spec).
-- T6 (#491): the guard also denies prose that names the marker or the chat form in PR bodies,
+- T6 (#642, was #491): the guard also denies prose that names the marker or the chat form in PR bodies,
   file pushes and `git commit -m`. T11 documents it in spec §4.
