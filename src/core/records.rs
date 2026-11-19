@@ -80,6 +80,10 @@ pub enum Record {
         /// The reviewer's self-declared model; `[approvals] review_models` limits which count.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// The session that relayed another reviewer's verdict comment (self-declared): a relayer
+        /// that cannot review independently makes the verdict not independent either.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relayed_by: Option<String>,
     },
     /// A failed fix round: the failure signature and the lines it changed (spec §4 stop rules).
     Failure {
@@ -377,6 +381,7 @@ mod tests {
             confidence: Some(0.95),
             major: Some(1),
             model: None,
+            relayed_by: None,
         };
         assert_eq!(
             r.to_line(),
