@@ -611,14 +611,14 @@ fn identity_tamper(text: &str, own: &str) -> Option<String> {
         let split = |c: char| c.is_whitespace() || "()`".contains(c);
         let t: Vec<&str> = seg.split(split).filter(|w| !w.is_empty()).collect();
         let first = t.iter().position(|w| !w.contains('='));
-        let quiet = first.is_some_and(|i| among("git gh rg grep echo", t[i]))
+        let quiet = first == Some(0)
+            && among("git gh rg grep echo", t[0])
             && !seg.contains("$(")
             && !seg.contains('`');
-        let hit = t[..first.unwrap_or(t.len())].iter().any(|w| setter(w))
-            || (!quiet
-                && (t.iter().any(|w| setter(w))
-                    || (t.iter().any(|w| named(w)) && t.iter().any(|w| verb(w)))));
-        let clean = t.iter().filter(|w| named(w)).all(|w| allowed(w))
+        let ids: Vec<_> = t.iter().filter(|w| named(w)).collect();
+        let hit = !quiet
+            && (t.iter().any(|w| setter(w)) || (!ids.is_empty() && t.iter().any(|w| verb(w))));
+        let clean = ids.iter().all(|w| allowed(w))
             && t.iter().filter(|w| verb(w)).all(|w| base(w) == "export")
             && !t.contains(&"-n");
         bad |= hit && !(may && clean);
