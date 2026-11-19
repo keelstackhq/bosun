@@ -332,6 +332,7 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
             "review_models",
             "signer",
             "chat",
+            "chat_signed",
         ],
     ),
 ];
@@ -547,6 +548,13 @@ fn signer_is_known_from_0_15_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"signer"));
     assert!(!has("0.14.0"));
     assert!(has("0.15.0"));
+}
+
+#[test]
+fn chat_signed_is_known_from_0_21_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat_signed"));
+    assert!(!has("0.20.0"));
+    assert!(has("0.21.0"));
 }
 
 #[test]

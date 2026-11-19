@@ -566,22 +566,78 @@ pub fn signed_comment(
 /// The marker that tags a chat approval record (spec section 8).
 pub const CHAT_MARKER: &str = "bosun:chat-approval";
 
+/// The marker of the optional signature line of a chat record (`[approvals] chat_signed`).
+pub const CHAT_SIG_MARKER: &str = "bosun:chat-sig";
+
+/// The bytes an enrolled owner key signs for a chat record: its own prefix, so it never
+/// verifies as any other approval form, bound to the repo, PR, exact head, question id, the
+/// record's session and its time (`at`, unix): a copy posted later carries a stale time.
+pub fn signed_message_chat(
+    (owner, repo, pr): (&str, &str, u64),
+    head: &str,
+    (question, session, at): (&str, &str, i64),
+) -> String {
+    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    format!("bosun-chat v2 {o}/{r}#{pr} {head} {question} session={session} at={at}")
+}
+
 /// A chat approval record: the orchestrator wrote down the owner's chat yes for `head`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatRecord {
     pub head: String,
     pub session: String,
     pub question: Option<String>,
+    /// `(key id, base64 signature)` of the `bosun:chat-sig` line, when the record has one.
+    pub sig: Option<(String, String)>,
+    /// The signing time (unix) the sig line names; none on a line without `at=`.
+    pub at: Option<i64>,
 }
 
 /// The PR comment that records the owner's chat approval of `head`.
-pub fn chat_comment(head: &str, session: &str, at: &str, question: Option<&str>) -> String {
+pub fn chat_comment(
+    head: &str,
+    session: &str,
+    at: &str,
+    question: Option<&str>,
+    sig: Option<(&str, i64, &str)>,
+) -> String {
     let q = question
         .map(|q| format!(" question={q}"))
         .unwrap_or_default();
+    let sig = sig.map_or(String::new(), |(key, at, sig)| {
+        format!("\n<!-- {CHAT_SIG_MARKER} v1 key={key} at={at} sig={sig} -->")
+    });
     format!(
-        "/bosun approve {head} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} head={head}{q} -->"
+        "/bosun approve {head} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} head={head}{q} -->{sig}"
     )
+}
+
+/// The signature line of a chat record: none, or exactly one line mentioning the marker that
+/// reads `<!-- bosun:chat-sig v1 key=<id>[ at=<unix>] sig=<b64> -->`; `Err` for anything else.
+fn parse_chat_sig(body: &str) -> Result<Option<(String, String, Option<i64>)>, ()> {
+    let mut lines = body.lines().filter(|l| l.contains(CHAT_SIG_MARKER));
+    let Some(line) = lines.next() else {
+        return Ok(None);
+    };
+    if lines.next().is_some() {
+        return Err(());
+    }
+    let rest = (line.trim())
+        .strip_prefix(&format!("<!-- {CHAT_SIG_MARKER} v1 key="))
+        .and_then(|r| r.strip_suffix(" -->"))
+        .ok_or(())?;
+    let (key, sig) = rest.split_once(" sig=").ok_or(())?;
+    let (k, at) = match key.split_once(" at=") {
+        Some((k, at)) => (k, Some(at.parse::<i64>().map_err(|_| ())?)),
+        None => (key, None),
+    };
+    match [k, sig]
+        .iter()
+        .any(|p| p.is_empty() || p.contains(char::is_whitespace))
+    {
+        false => Ok(Some((k.into(), sig.into(), at))),
+        true => Err(()),
+    }
 }
 
 /// The chat record in `body` for `head`: the first line is exactly `/bosun approve <head> chat`,
@@ -627,7 +683,13 @@ pub fn parse_chat_record(body: &str, head: &str, pr: Option<u64>) -> Option<Chat
             return None;
         }
     }
+    let (sig, at) = match parse_chat_sig(body).ok()? {
+        Some((k, s, at)) => (Some((k, s)), at),
+        None => (None, None),
+    };
     Some(ChatRecord {
+        sig,
+        at,
         head: head.into(),
         session: session.into(),
         question: question.map(Into::into),
@@ -732,7 +794,13 @@ mod tests {
 
     #[test]
     fn chat_comment_round_trips() {
-        let body = chat_comment(H, "session_o", "2026-11-10T00:00:00Z", Some("12-abcdef1-1"));
+        let body = chat_comment(
+            H,
+            "session_o",
+            "2026-11-10T00:00:00Z",
+            Some("12-abcdef1-1"),
+            None,
+        );
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], format!("/bosun approve {H} chat"));
@@ -752,15 +820,45 @@ mod tests {
                 head: H.into(),
                 session: "session_o".into(),
                 question: Some("12-abcdef1-1".into()),
+                sig: None,
+                at: None,
             })
         );
-        let none = chat_comment(H, "session_o", "t", None);
+        let none = chat_comment(H, "session_o", "t", None, None);
         assert_eq!(parse_chat_record(&none, H).unwrap().question, None);
     }
 
     #[test]
+    fn chat_sig_line_is_strict() {
+        let q = Some("12-abcdef1-1");
+        let ok = chat_comment(H, "s", "t", q, Some(("k1", 1700000000, "c2ln")));
+        let r = parse_chat_record(&ok, H).unwrap();
+        assert_eq!(r.sig, Some(("k1".into(), "c2ln".into())));
+        assert_eq!(r.at, Some(1700000000));
+        assert!(ok.ends_with("<!-- bosun:chat-sig v1 key=k1 at=1700000000 sig=c2ln -->"));
+        let line = ok.lines().last().unwrap();
+        assert_eq!(parse_chat_record(&format!("{ok}\n{line}"), H), None);
+        for bad in [
+            "<!-- bosun:chat-sig v1 key= sig=x -->",
+            "<!-- bosun:chat-sig v1 key=k sig= -->",
+            "<!-- bosun:chat-sig v2 key=k sig=x -->",
+            "<!-- bosun:chat-sig v1 key=k sig=x y -->",
+            "<!-- bosun:chat-sig v1 sig=x key=k -->",
+            "<!-- bosun:chat-sig v1 key=k at=x sig=x -->",
+        ] {
+            let body = ok.replace(line, bad);
+            assert_eq!(parse_chat_record(&body, H), None, "{bad}");
+        }
+        let msg = signed_message_chat(("O", "R", 12), H, ("12-abcdef1-1", "s1", 5));
+        assert_eq!(
+            msg,
+            format!("bosun-chat v2 o/r#12 {H} 12-abcdef1-1 session=s1 at=5")
+        );
+    }
+
+    #[test]
     fn parse_rejects_other_head() {
-        let body = chat_comment(H, "s", "t", None);
+        let body = chat_comment(H, "s", "t", None, None);
         assert_eq!(parse_chat_record(&body, H2), None);
         // Marker names another head than the first line.
         let mixed = body.replacen(&format!("head={H}"), &format!("head={H2}"), 1);
@@ -771,13 +869,13 @@ mod tests {
     fn parse_rejects_missing_marker() {
         let body = format!("/bosun approve {H} chat\nApproved by the owner in chat.");
         assert_eq!(parse_chat_record(&body, H), None);
-        let empty = chat_comment(H, "", "t", None);
+        let empty = chat_comment(H, "", "t", None, None);
         assert_eq!(parse_chat_record(&empty, H), None);
     }
 
     #[test]
     fn parse_rejects_duplicate_marker_or_key() {
-        let body = chat_comment(H, "s", "t", None);
+        let body = chat_comment(H, "s", "t", None, None);
         assert_eq!(
             parse_chat_record(&format!("{body}\n{}", body.lines().nth(2).unwrap()), H),
             None
@@ -789,7 +887,7 @@ mod tests {
     #[test]
     fn parse_rejects_plain_approve() {
         assert_eq!(parse_chat_record(&format!("/bosun approve {H}"), H), None);
-        let quoted = format!("> {}", chat_comment(H, "s", "t", None));
+        let quoted = format!("> {}", chat_comment(H, "s", "t", None, None));
         assert_eq!(parse_chat_record(&quoted, H), None);
     }
 
@@ -844,23 +942,23 @@ mod tests {
     #[test]
     fn question_binds_the_pr_and_the_head() {
         let q = question_id(12, H, 1_700_000_000);
-        let body = chat_comment(H, "s", "t", Some(&q));
+        let body = chat_comment(H, "s", "t", Some(&q), None);
         assert!(super::parse_chat_record(&body, H, Some(12)).is_some());
         assert!(super::parse_chat_record(&body, H, None).is_some());
         assert_eq!(super::parse_chat_record(&body, H, Some(13)), None);
         let other = question_id(12, H2, 1);
-        let body = chat_comment(H, "s", "t", Some(&other));
+        let body = chat_comment(H, "s", "t", Some(&other), None);
         assert_eq!(super::parse_chat_record(&body, H, Some(12)), None);
         assert_eq!(super::parse_chat_record(&body, H, None), None);
-        let junk = chat_comment(H, "s", "t", Some("q"));
+        let junk = chat_comment(H, "s", "t", Some("q"), None);
         assert_eq!(super::parse_chat_record(&junk, H, None), None);
-        let none = chat_comment(H, "s", "t", None);
+        let none = chat_comment(H, "s", "t", None, None);
         assert!(super::parse_chat_record(&none, H, Some(12)).is_some());
     }
 
     #[test]
     fn parse_is_strict() {
-        let ok = chat_comment(H, "s", "t", Some("1-abcdef1-2"));
+        let ok = chat_comment(H, "s", "t", Some("1-abcdef1-2"), None);
         let m = |marker: &str| ok.replacen("session=s head=", marker, 1);
         // Keys out of order, unknown, duplicated.
         assert_eq!(parse_chat_record(&m("head=x session=s head="), H), None);
@@ -875,11 +973,11 @@ mod tests {
         let dup_q = ok.replacen("question=1-abcdef1-2", "question=1-abcdef1-2 question=r", 1);
         assert_eq!(parse_chat_record(&dup_q, H), None);
         // Head must be 40 lowercase hex.
-        let short = chat_comment("abc", "s", "t", None);
+        let short = chat_comment("abc", "s", "t", None, None);
         assert_eq!(parse_chat_record(&short, "abc"), None);
         let upper = H.to_uppercase();
         assert_eq!(
-            parse_chat_record(&chat_comment(&upper, "s", "t", None), &upper),
+            parse_chat_record(&chat_comment(&upper, "s", "t", None, None), &upper),
             None
         );
         // Exactly one marker line, and nothing after the marker but `-->`.

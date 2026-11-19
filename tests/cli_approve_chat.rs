@@ -149,7 +149,7 @@ fn chat_records_comment() {
     answer(tmp.path(), Q, "approve", 1, HEAD);
     let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     assert_eq!(code, 0, "{v}");
-    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q));
+    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q), None);
     assert_eq!(chat_comments(&fake), vec![body]);
     assert_eq!(v["data"]["pr"], 1);
     assert_eq!(v["data"]["head_sha"], HEAD);
@@ -221,7 +221,7 @@ fn chat_end_to_end_with_the_hook_stored_answer_in_cloud() {
         .unwrap();
     let v = one_object(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{v}");
-    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q));
+    let body = bosun::core::approve::chat_comment(HEAD, "session_orch", NOW, Some(Q), None);
     assert_eq!(chat_comments(&fake), vec![body]);
 }
 
@@ -358,7 +358,7 @@ fn chat_slack_owner_ok() {
         &env,
     );
     assert_eq!(code, 0, "{v}");
-    let body = bosun::core::approve::chat_comment(HEAD, "session_tag", NOW, Some(Q));
+    let body = bosun::core::approve::chat_comment(HEAD, "session_tag", NOW, Some(Q), None);
     assert_eq!(chat_comments(&fake), vec![body]);
 }
 
@@ -786,4 +786,106 @@ fn chat_no_ci_fails_closed_without_a_linked_task() {
     fake.pull_set(1, "body", json!(""));
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     refused(&fake, r, 5);
+}
+
+mod chat_signed {
+    use super::*;
+    use bosun::github::b64;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+
+    fn pem(dir: &Path, seed: u8) -> (std::path::PathBuf, String) {
+        let mut der = hex_prefix();
+        der.extend_from_slice(&[seed; 32]);
+        let kp = Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap();
+        let path = dir.join(format!("key{seed}.pem"));
+        let text = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            b64::encode(&der)
+        );
+        std::fs::write(&path, text).unwrap();
+        (path, b64::encode(kp.public_key().as_ref()))
+    }
+
+    /// The PKCS#8 header of an ed25519 private key, before the 32-byte seed.
+    fn hex_prefix() -> Vec<u8> {
+        vec![
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ]
+    }
+
+    fn setup_signed(public: &str) -> FakeGithub {
+        let fake = setup();
+        for r in ["base0000", "main", "refs/heads/main"] {
+            fake.content(".bosun/bosun.toml", r, "[approvals]\nchat_signed = true\n");
+        }
+        let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{public}\"\n");
+        fake.content(".bosun/approvers.toml", "refs/heads/main", &keys);
+        fake
+    }
+
+    #[test]
+    fn chat_without_a_key_refuses_and_names_sign_key() {
+        let (tmp, kdir) = (repo(), tempfile::tempdir().unwrap());
+        let (_, public) = pem(kdir.path(), 1);
+        let fake = setup_signed(&public);
+        answer(tmp.path(), Q, "approve", 1, HEAD);
+        let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+        assert_eq!(code, 5, "{v}");
+        assert!(v["error"]["fix"].as_str().unwrap().contains("--sign-key"));
+        assert!(chat_comments(&fake).is_empty());
+    }
+
+    #[test]
+    fn chat_with_an_enrolled_key_posts_the_signature() {
+        let (tmp, kdir) = (repo(), tempfile::tempdir().unwrap());
+        let (path, public) = pem(kdir.path(), 1);
+        let fake = setup_signed(&public);
+        answer(tmp.path(), Q, "approve", 1, HEAD);
+        let key = path.to_str().unwrap();
+        let args = ["--question", Q, "--sign-key", key];
+        let (code, v) = chat(&fake, tmp.path(), "session_orch", &args, &[]);
+        assert_eq!(code, 0, "{v}");
+        let body = chat_comments(&fake).remove(0);
+        let sig_line = body.lines().last().unwrap();
+        // Signed at the session's time, for this session: a copy posted later is stale.
+        let sig = sig_line
+            .strip_prefix("<!-- bosun:chat-sig v1 key=k1 at=1794304800 sig=")
+            .and_then(|s| s.strip_suffix(" -->"))
+            .unwrap_or_else(|| panic!("{body}"));
+        let msg =
+            format!("bosun-chat v2 acme/widget#1 {HEAD} {Q} session=session_orch at=1794304800");
+        let (pk, sig) = (b64::decode(&public).unwrap(), b64::decode(sig).unwrap());
+        assert!(bosun::core::approve::verify_ed25519(
+            &pk,
+            msg.as_bytes(),
+            &sig
+        ));
+        assert!(!v.to_string().contains("BEGIN PRIVATE"));
+    }
+
+    #[test]
+    fn chat_with_an_unenrolled_key_refuses() {
+        let (tmp, kdir) = (repo(), tempfile::tempdir().unwrap());
+        let (_, public) = pem(kdir.path(), 1);
+        let (other, _) = pem(kdir.path(), 2);
+        let fake = setup_signed(&public);
+        answer(tmp.path(), Q, "approve", 1, HEAD);
+        let args = ["--question", Q, "--sign-key", other.to_str().unwrap()];
+        let (code, v) = chat(&fake, tmp.path(), "session_orch", &args, &[]);
+        assert_eq!(code, 1, "{v}");
+        assert!(chat_comments(&fake).is_empty());
+    }
+
+    #[test]
+    fn without_chat_signed_the_record_stays_unsigned() {
+        let (tmp, kdir) = (repo(), tempfile::tempdir().unwrap());
+        let (path, _) = pem(kdir.path(), 1);
+        let fake = setup();
+        answer(tmp.path(), Q, "approve", 1, HEAD);
+        let args = ["--question", Q, "--sign-key", path.to_str().unwrap()];
+        let (code, v) = chat(&fake, tmp.path(), "session_orch", &args, &[]);
+        assert_eq!(code, 0, "{v}");
+        assert!(!chat_comments(&fake)[0].contains("chat-sig"));
+    }
 }
