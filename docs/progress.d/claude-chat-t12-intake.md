@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T12 · intake verify --chat counts the orchestrator's intake chat record · this PR

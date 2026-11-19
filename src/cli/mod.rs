@@ -710,7 +710,7 @@ pub struct ApproveArgs {
     pub bootstrap: bool,
     /// Record the owner's chat answer for one `<pr>@<head>` as a chat approval comment (an
     /// orchestrator only; spec section 8).
-    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key", "via_signer"])]
+    #[arg(long, conflicts_with_all = ["list", "main_open", "via_signer"])]
     pub chat: bool,
     /// With --chat (required): the question id the owner answered (`data.ready[].ask.question_id`).
     #[arg(long, value_name = "ID", requires = "chat")]
@@ -1203,11 +1203,22 @@ pub struct IntakeVerifyArgs {
     /// The intake file.
     pub file: PathBuf,
     /// The detached signature file.
-    #[arg(long, value_name = "SIGFILE")]
-    pub sig: PathBuf,
+    #[arg(
+        long,
+        value_name = "SIGFILE",
+        required_unless_present = "chat",
+        requires = "approvers"
+    )]
+    pub sig: Option<PathBuf>,
     /// The approvers file to verify against (provision's own checked-out main).
-    #[arg(long, value_name = "PATH")]
-    pub approvers: PathBuf,
+    #[arg(long, value_name = "PATH", requires = "sig")]
+    pub approvers: Option<PathBuf>,
+    /// Instead of a signature: the intake issue holding the orchestrator's chat record.
+    #[arg(long, value_name = "ISSUE", conflicts_with_all = ["sig", "approvers"], requires = "mode")]
+    pub chat: Option<u64>,
+    /// With --chat: new or adopt; the chat record must name the same mode (as a signature does).
+    #[arg(long, value_parser = ["new", "adopt"], requires = "chat")]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Args)]

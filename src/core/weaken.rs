@@ -1280,6 +1280,16 @@ mod tests {
             [".bosun/bosun.toml: approvals.policy owner-gated → autonomous"]
         );
         assert!(t(c, base, &base.replace("\"p\"", "\"q\"")).is_empty());
+        // Turning chat_signed off (or removing it) weakens chat approvals.
+        let on = "project = \"p\"\n[approvals]\nchat_signed = true\n";
+        assert_eq!(
+            t(c, on, &on.replace("true", "false")),
+            [".bosun/bosun.toml: approvals.chat_signed true → false"]
+        );
+        assert_eq!(
+            t(c, on, "project = \"p\"\n"),
+            [".bosun/bosun.toml: approvals.chat_signed true → (removed)"]
+        );
         assert_eq!(
             t(
                 "deny.toml",

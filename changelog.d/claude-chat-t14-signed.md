@@ -1,0 +1,1 @@
+- feat(approve): opt-in `[approvals] chat_signed`: chat approval records count only with an enrolled owner key's signature (`approve --chat --sign-key`)

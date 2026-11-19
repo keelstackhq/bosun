@@ -188,6 +188,8 @@ pub trait Github {
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The owner (user or org) of the repository this client talks to.
     fn repo_owner(&self) -> &str;
+    /// The name of the repository this client talks to.
+    fn repo_name(&self) -> &str;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
@@ -457,6 +459,10 @@ impl LiveGithub {
 impl Github for LiveGithub {
     fn repo_owner(&self) -> &str {
         &self.owner
+    }
+
+    fn repo_name(&self) -> &str {
+        &self.repo
     }
 
     fn repo_info(&self) -> Result<Option<RepoInfo>> {

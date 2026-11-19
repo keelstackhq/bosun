@@ -116,8 +116,9 @@ intake check = {goal: str, plan: str | null, repo: {owner: str, name: str, visib
     stack: [str], pieces: [str], bosun_pieces: [str], publish: [str], approvals: str, notify: str,
     slack_channel: str};
 intake sign = {key: str, mode: str, nonce: str, expires: str, sig: str};
-intake verify = {verified: bool, repo: str, key: str, mode: str, nonce: str, expires: str,
-    intake: {..}};
+intake verify = {verified: bool, repo: str, key?: str, mode: str | null, nonce: str, expires: str,
+    intake: {..}, via?: str, issue?: int, comment?: int, approved_by?: str, session?: str,
+    intake_sha256?: str};
 main-health = {result: str, changed: bool, opened: bool, closed: bool, main_red: int | null,
     note: str, rejudged: int, rejudge_errors: [any], skipped_unknown: [int],
     conflicts: [{issue: int, pr: int, posted: bool, fix: str}], conflict_errors: [{error: str,

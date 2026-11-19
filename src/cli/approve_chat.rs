@@ -12,9 +12,12 @@ use super::ApproveArgs;
 use crate::app::{App, Result, default_branch, kill_switch};
 use crate::cli::answer::valid_slack_id;
 use crate::cli::pr_no_ci::clean_by_other;
-use crate::cli::risk_check::{chat_enabled, owner_slack_ids};
-use crate::core::approve::{chat_comment, is_orchestrator, parse_target};
+use crate::cli::risk_check::{chat_enabled, chat_signed, enrolled_keys, owner_slack_ids};
+use crate::core::approve::{
+    Role, chat_comment, is_orchestrator, parse_target, signed_message_chat,
+};
 use crate::ctx::Origin;
+use crate::github::b64;
 use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -189,7 +192,14 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         }
     };
     let question = args.question.as_deref();
-    let body = chat_comment(head, session, &app.ctx.now.to_string(), question);
+    let sig = signature(app, &pull, (question.unwrap_or_default(), session), args)?;
+    let body = chat_comment(
+        head,
+        session,
+        &app.ctx.now.to_string(),
+        question,
+        sig.as_ref().map(|(k, at, s)| (k.as_str(), *at, s.as_str())),
+    );
     let c = gh.add_comment(pr, &body)?;
     Ok(json!({"pr": pr, "head_sha": head, "comment_id": c.id, "question_id": question}))
 }
@@ -227,4 +237,55 @@ fn stored_approve(ctx: &crate::ctx::Ctx, q: &str, pr: u64, head: &str) -> Result
         format!("no stored owner answer approving #{pr} at {head} for question {q:?}"),
         ASK_AGAIN,
     ))
+}
+
+/// Under `[approvals] chat_signed` (read at the PR's base) the record is signed with `--sign-key`:
+/// `(key id, signing time, base64 signature)`. Without that setting a key is not used. The key
+/// must be an enrolled owner key; it is never printed.
+fn signature(
+    app: &App,
+    pull: &crate::github::Pull,
+    (question, session): (&str, &str),
+    args: &ApproveArgs,
+) -> Result<Option<(String, i64, String)>> {
+    let gh = app.gh.as_ref();
+    if !chat_signed(gh)? {
+        return Ok(None);
+    }
+    let Some(path) = &args.sign_key else {
+        return Err(BosunError::needs_human(
+            "`[approvals] chat_signed = true`: a chat record counts only with an enrolled owner key's signature",
+            "record it with `bosun approve <pr>@<head> --chat --question <id> --sign-key <pem>`",
+        ));
+    };
+    let pair = crate::cli::approve::read_key(path)?;
+    let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
+    let keys = enrolled_keys(gh).map_err(|why| {
+        BosunError::error(
+            format!("signed approvals are off: {why}"),
+            "fix .bosun/approvers.toml on the default branch with a PR the owner approves on GitHub",
+        )
+    })?;
+    let key = (keys.into_iter())
+        .find(|k| {
+            k.role == Role::Owner && b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone())
+        })
+        .ok_or_else(|| {
+            BosunError::error(
+                "the key is not enrolled as an owner key in .bosun/approvers.toml on the default branch",
+                format!("enroll the public key {public} with a PR the owner approves on GitHub"),
+            )
+        })?;
+    let repo = &app.ctx.repo;
+    let at = app.ctx.now.0;
+    let msg = signed_message_chat(
+        (&repo.owner, &repo.name, pull.number),
+        &pull.head_sha,
+        (question, session, at),
+    );
+    Ok(Some((
+        key.id,
+        at,
+        b64::encode(pair.sign(msg.as_bytes()).as_ref()),
+    )))
 }

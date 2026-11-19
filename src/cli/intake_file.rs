@@ -1,6 +1,7 @@
 //! `bosun intake check|sign|verify`: the intake file `.bosun/intake.toml` (spec section 3) and
-//! its detached signature `.bosun/intake.sig`. No GitHub access: everything is read from local
-//! files, so `verify` can run in provision.yml against its own checked-out main.
+//! its detached signature `.bosun/intake.sig`. Signatures need no GitHub access: everything is
+//! read from local files, so `verify --sig` can run in provision.yml against its own checked-out
+//! main. `verify --chat <issue>` reads the orchestrator's chat record on the intake issue.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -8,8 +9,16 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::{IntakeCheckArgs, IntakeSignArgs, IntakeVerifyArgs};
+use crate::app::{App, default_ref};
 use crate::cli::approve::read_key;
-use crate::core::approve::{APPROVERS_PATH, ApproverKey, Role, parse_approvers, verify_ed25519};
+use crate::cli::risk_check::{
+    OWNERS_PATH, chat_enabled, chat_sig_valid, enrolled_keys, fallback_owners, owner_logins,
+    sig_fresh,
+};
+use crate::core::approve::{
+    APPROVERS_PATH, ApproverKey, Role, is_orchestrator, parse_approvers, parse_intake_chat_record,
+    signed_message_chat_intake, verify_ed25519,
+};
 use crate::core::intake::{INTAKE_PATH, Intake, SigFile, intake_sha256, parse};
 use crate::github::b64;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -158,7 +167,7 @@ pub fn sign(dir: Option<&Path>, a: &IntakeSignArgs) -> CmdResult {
 }
 
 fn refuse(reason: &str, why: &str, fix: &str) -> BosunError {
-    BosunError::needs_human(format!("the intake signature does not count: {why}"), fix)
+    BosunError::needs_human(format!("the intake approval does not count: {why}"), fix)
         .with_data(json!({"reason": reason}))
 }
 
@@ -180,7 +189,22 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
     let text =
         std::fs::read_to_string(at(dir, &a.file)).map_err(|e| bad_intake(e.kind().to_string()))?;
     let intake = parse(&text).map_err(|e| bad_intake(e.message))?;
-    let sf = std::fs::read_to_string(at(dir, &a.sig))
+    if let Some(issue) = a.chat {
+        let Some(mode) = &a.mode else {
+            return Err(BosunError::usage(
+                "--chat needs --mode",
+                "pass --mode new or --mode adopt",
+            ));
+        };
+        return verify_chat(dir, issue, mode, &text, &intake);
+    }
+    let (Some(sig), Some(approvers)) = (&a.sig, &a.approvers) else {
+        return Err(BosunError::usage(
+            "--sig and --approvers, or --chat, are required",
+            "pass --sig SIGFILE --approvers PATH, or --chat ISSUE",
+        ));
+    };
+    let sf = std::fs::read_to_string(at(dir, sig))
         .map_err(|e| e.to_string())
         .and_then(|t| SigFile::parse(&t))
         .map_err(|e| {
@@ -239,7 +263,7 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
             fix,
         ));
     }
-    let ks = keys(dir, &a.approvers).map_err(|why| {
+    let ks = keys(dir, approvers).map_err(|why| {
         refuse(
             "bad_approvers",
             &format!("the approvers file is unusable ({why})"),
@@ -273,7 +297,184 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
         ));
     }
     Ok(Outcome::data(
-        json!({"verified": true, "key": sf.key, "repo": sf.repo, "mode": sf.mode,
+        json!({"verified": true, "via": "signature", "key": sf.key, "repo": sf.repo, "mode": sf.mode,
         "nonce": sf.nonce, "expires": sf.expires, "intake": view(&intake)}),
     ))
+}
+
+/// `verify --chat`: the newest comment on `issue` that records the owner's chat yes to these
+/// intake bytes counts when unedited, written by an owner (owners on the default branch, else
+/// the no-owners fallback of risk-check), for an orchestrator session in the registry, and at
+/// most an hour old (spec section 8). `[approvals] chat = false` on the default branch turns it
+/// off. Failures are exit 5 with `data.reason`; a failed GitHub read errors (fail closed).
+fn verify_chat(
+    dir: Option<&Path>,
+    issue: u64,
+    mode: &str,
+    text: &str,
+    intake: &Intake,
+) -> CmdResult {
+    let fix = "ask the orchestrator to record the owner's chat yes on the intake issue again, or sign the intake (`bosun intake sign`) and pass --sig";
+    let app = App::load(dir)?;
+    let gh = app.gh.as_ref();
+    let repo = &app.ctx.repo;
+    if repo_of(intake) != format!("{}/{}", repo.owner, repo.name).to_ascii_lowercase() {
+        return Err(refuse(
+            "repo_mismatch",
+            "the intake names another repo than this one",
+            "run it in the repo the intake is for",
+        ));
+    }
+    let main = default_ref(gh)?;
+    if !chat_enabled(gh, &main)? {
+        return Err(refuse(
+            "chat_off",
+            "chat records are off (`[approvals] chat = false` on the default branch)",
+            "sign the intake (`bosun intake sign`) and pass --sig",
+        ));
+    }
+    let sha = intake_sha256(text.as_bytes());
+    let comments = gh.list_comments(issue)?;
+    let mut found: Vec<_> = (comments.iter())
+        .filter_map(|c| parse_intake_chat_record(&c.body, &sha).map(|r| (c, r)))
+        .collect();
+    if found.is_empty() {
+        return Err(refuse(
+            "no_chat_record",
+            "the issue has no chat record for these intake bytes",
+            fix,
+        ));
+    }
+    found.sort_by_key(|(c, _)| std::cmp::Reverse(c.id));
+    let mut owners = owner_logins(gh, &main)?;
+    if owners.is_empty() && gh.file_at(OWNERS_PATH, &main)?.is_none() {
+        // The no-owners fallback is judged for the intake issue's author, like T2 does for the
+        // PR author, not for whoever wrote the comment.
+        let author = gh
+            .get_issue(issue)?
+            .map(|i| i.user)
+            .ok_or_else(|| refuse("no_chat_record", "the intake issue does not exist", fix))?;
+        owners = fallback_owners(gh, &author)?;
+    }
+    // Fail closed: only a record signed by an enrolled owner key counts, whatever `chat_signed` says.
+    let keys = enrolled_keys(gh).unwrap_or_else(|why| {
+        eprintln!("bosun: intake verify: no key counts: {why}");
+        Vec::new()
+    });
+    let members = crate::registry::load(gh)?
+        .map(|(_, notes)| crate::core::lease::members(&notes))
+        .unwrap_or_default();
+    let now = Timestamp::now();
+    // A signing time may not precede the newest owner hold (current text, edit time counts).
+    let since = comments
+        .iter()
+        .filter(|h| is_hold(&h.body) && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user)))
+        .filter_map(|h| parse_rfc3339(&h.updated_at).max(parse_rfc3339(&h.created_at)))
+        .max();
+    let mut why = None;
+    for (c, r) in found {
+        let made = parse_rfc3339(&c.created_at);
+        let reason = if !c.unedited() {
+            ("chat_edited", "it was edited")
+        } else if !owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user)) {
+            ("chat_not_owner", "its author is not an owner")
+        } else if !made.is_some_and(|t| is_orchestrator(&members, &r.session, t)) {
+            (
+                "chat_not_orchestrator",
+                "its session was not a live orchestrator in the registry",
+            )
+        } else if r.mode.as_deref() != Some(mode) {
+            (
+                "chat_wrong_mode",
+                "it approves the other mode (new or adopt)",
+            )
+        } else if held(&comments, &owners, c) {
+            ("chat_held", "was held or declined by an owner after it")
+        } else if !(r.question.as_deref().zip(r.at).zip(made)).is_some_and(|((q, at), t)| {
+            let m = (q, r.session.as_str(), at);
+            let m = signed_message_chat_intake((&repo.owner, &repo.name, issue), &sha, mode, m);
+            sig_fresh(at, t, since) && chat_sig_valid(&r, &keys, &m)
+        }) {
+            (
+                "chat_unsigned",
+                "carries no valid signature of an enrolled owner key over its question",
+            )
+        } else if made.is_none_or(|t| t > now.plus_secs(MAX_SKEW_SECS)) {
+            ("issued_in_future", "it was written in the future")
+        } else if made.is_some_and(|t| now.0 - t.0 > MAX_EXPIRES_SECS as i64) {
+            ("expired", "it is more than an hour old")
+        } else {
+            let made = made.expect("checked above");
+            // from the signature, so the replay record binds the signed bytes, not a comment id
+            let sig = r.sig.as_ref().map_or("", |s| s.1.as_str());
+            let nonce = format!("chat-{}", &intake_sha256(sig.as_bytes())[..32]);
+            return Ok(Outcome::data(json!({"verified": true, "via": "chat",
+                "issue": issue, "comment": c.id, "approved_by": c.user, "session": r.session,
+                "repo": repo_of(intake), "mode": mode, "nonce": nonce,
+                "expires": made.plus_secs(MAX_EXPIRES_SECS as i64).to_string(),
+                "intake_sha256": sha, "intake": view(intake)})));
+        };
+        why.get_or_insert(reason);
+    }
+    let (reason, text) = why.expect("one record at least");
+    Err(refuse(reason, &format!("the chat record {text}"), fix))
+}
+
+/// Whether a line of `body` (its current text) is `/bosun hold` or `/bosun no` (`/bosun: hold`
+/// too): any case, extra spaces, list markers, a quote, emphasis, backticks or a code fence, a
+/// leading HTML comment, zero-width characters, trailing punctuation; not `/bosun nothing`.
+fn is_hold(body: &str) -> bool {
+    let zero = |c: char| matches!(c, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}');
+    [None, Some(' ')].into_iter().any(|sub| {
+        let mut text = (body
+            .chars()
+            .filter_map(|c| if zero(c) { sub } else { Some(c) }))
+        .collect::<String>()
+        .to_lowercase();
+        while let Some(i) = text.find("<!--") {
+            let end = text[i..].find("-->").map_or(i + 4, |j| i + j + 3);
+            text.replace_range(i..end, " ");
+        }
+        text.lines().any(|line| {
+            let mut l = line;
+            loop {
+                let t = l.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#-+".contains(c));
+                let d = t.trim_start_matches(|c: char| c.is_ascii_digit());
+                let n = if d.len() < t.len() {
+                    d.strip_prefix(['.', ')']).unwrap_or(t)
+                } else {
+                    t
+                };
+                if n.len() == l.len() {
+                    break;
+                }
+                l = n;
+            }
+            let sep = |c: char| c.is_whitespace() || c == ':';
+            let Some(rest) = l.strip_prefix("/bosun").filter(|r| r.starts_with(sep)) else {
+                return false;
+            };
+            let rest = rest.trim_start_matches(sep);
+            ["hold", "no"].iter().any(|w| {
+                (rest.strip_prefix(w))
+                    .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
+            })
+        })
+    })
+}
+
+/// Whether an owner's hold counts against record `rec`: written, or edited into a hold, after
+/// it (a deleted comment is gone from the list, an edited-away hold no longer matches).
+fn held(
+    comments: &[crate::github::Comment],
+    owners: &[String],
+    rec: &crate::github::Comment,
+) -> bool {
+    let when =
+        |c: &crate::github::Comment| parse_rfc3339(&c.updated_at).max(parse_rfc3339(&c.created_at));
+    comments.iter().any(|h| {
+        is_hold(&h.body)
+            && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
+            && (h.id > rec.id || when(h) > parse_rfc3339(&rec.created_at))
+    })
 }
