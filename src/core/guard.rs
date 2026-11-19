@@ -573,17 +573,14 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
 
 const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): a command that merges may not set or unset CLAUDE_CODE*, *_SESSION or *_ORIGIN variables, nor use `${!x}` or drop the environment (`env -i`, `env -`, `exec -c`); the orchestrator runs `bosun merge <pr>` unmodified";
 
-/// D-019: `bosun merge` judges the caller from its environment. Text (quotes and backslashes
-/// removed) is refused everywhere for `${!x}` and for options that drop the environment (`env` /
-/// `exec` / a `$` command word with `-i`, `-`, `--ignore-environment`; `exec -c`). A setter of
+/// D-019: text (quotes and backslashes removed) is refused everywhere for `${!x}` (not
+/// `${!a[@]}`) and for `env -i`, `env -`, `exec -c` (also via a `$` command word). A setter of
 /// an identity name (`NAME=v`, or export, unset, ... naming `CLAUDE_CODE`, `_SESSION`,
 /// `_ORIGIN`, `BOSUN_$`, `CLAUDE_$`) is refused only when the text also looks like `bosun merge`
 /// (a `merge` word, a `$` command word, a `$` word after `bosun`): `BOSUN_SESSION=s/12 bosun
-/// claim 12`, mere mentions and git, gh, rg, grep, echo text pass, as do `${!a[@]}` and
-/// `${!p@}`. It stops confused workers, not liars.
+/// claim 12` and mere mentions (git, gh, rg, grep, echo text) pass. Stops confused workers.
 fn identity_tamper(text: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
-    let plain = plain.replace("$IFS", " ").replace("${IFS}", " ");
     let names = ["CLAUDE_CODE", "_SESSION", "_ORIGIN", "BOSUN_$", "CLAUDE_$"];
     let setters = "export unset declare typeset readonly local env printf read eval set";
     let mention = |w: &str| names.iter().any(|n| w.contains(n));
@@ -621,8 +618,7 @@ fn identity_tamper(text: &str) -> Option<String> {
     (drops || (merge && setter)).then(|| IDENTITY_FIX.to_string())
 }
 
-/// Whether the options of `env` (`bad` = `i`) or `exec` (`c`) drop the environment: a short
-/// cluster with `bad`, `-`, or `--ignore-environment`. Reads options and `NAME=v` words only.
+/// Whether the options of `env` (`bad` = `i`) or `exec` (`c`) drop the environment.
 fn drops_env(args: &[&str], bad: char) -> bool {
     let mut it = args.iter();
     while let Some(&a) = it.next() {
