@@ -585,12 +585,11 @@ fn merge_words(command: &str) -> Vec<String> {
 
 /// D-019: `bosun merge` judges the caller from its own environment (`BOSUN_*`,
 /// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command line that runs bosun
-/// to merge (a bosun command word with `$ \ { ? * [` or a backtick later in its segment counts)
-/// is an allowlist: every segment is `bosun ...` (that word, or an absolute path ending
-/// `/bosun`), `cd`, read-only `git` (no fetch), `echo`/`printf` without `-v`, a viewer
-/// (`jq tee head tail grep cat sleep`, `python3 -m json.tool`) or `export PATH=<dir>:$PATH`; no
-/// `${...}` but `${PWD}`, `${HOME}`, and no `((`. Anything else is refused. Best effort against a
-/// confused worker, not a liar.
+/// to merge (also a bosun word followed by `$ \ { ? * [` or a backtick) is an allowlist: every
+/// segment is `bosun ...` (or an absolute `/../bosun`), `cd`, read-only `git` (no fetch), `echo`,
+/// `printf` without `-v`, a viewer (`jq tee head tail grep cat sleep`, `python3 -m json.tool`)
+/// or `export PATH=<dir>:$PATH`; no `${...}` but `${PWD}`, `${HOME}`, and no `((`. Best effort
+/// against a confused worker, not a liar.
 fn merge_env_tamper(command: &str) -> Option<String> {
     let words = merge_words(command);
     let runs_bosun = words
