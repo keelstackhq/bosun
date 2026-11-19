@@ -18,11 +18,12 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
-/// `git` for the adopted check: never prompts, gives up on a stalled transfer (low speed) and
+/// `git` for the adopted check: never prompts, ignores local replace refs, gives up on a stalled transfer (low speed) and
 /// on one that takes over 20 seconds.
 fn git_remote(dir: &Path, args: &[&str]) -> Option<String> {
     let mut child = std::process::Command::new("git")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .args(["-c", "http.lowSpeedLimit=1000"])
         .args(["-c", "http.lowSpeedTime=15", "-C"])
         .arg(dir)
@@ -53,7 +54,7 @@ fn git_remote(dir: &Path, args: &[&str]) -> Option<String> {
 /// tree at that sha, fetched without blobs into a private repo if not local): local refs and files
 /// can be edited. Fail closed: an unreachable remote counts as adopted, and so does no `origin`
 /// with a `.bosun/` directory. The answer is cached per session for `BOSUN_ADOPTED_CACHE_SECS`
-/// (default 600) in `<git common dir>/bosun/adopted`, so a burst of hooks asks the remote once.
+/// (default 600, keyed by session and origin URL) in `<git common dir>/bosun/adopted`, so a burst of hooks asks the remote once.
 pub fn unadopted(cwd: &Path) -> bool {
     let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
@@ -62,7 +63,10 @@ pub fn unadopted(cwd: &Path) -> bool {
     }
     let common = super::git_out(&root, &["rev-parse", "--git-common-dir"]);
     let file = common.map(|c| root.join(c).join("bosun/adopted"));
+    let url = git_remote(&root, &["remote", "get-url", "origin"]);
+    // The key holds the origin URL too, so changing `origin` invalidates the entry.
     let session = std::env::var("BOSUN_SESSION").unwrap_or_default();
+    let session = format!("{session}|{}", url.as_deref().unwrap_or_default());
     let ttl = std::env::var("BOSUN_ADOPTED_CACHE_SECS").ok();
     let ttl: i64 = ttl.and_then(|v| v.trim().parse().ok()).unwrap_or(600);
     let now = crate::time::Timestamp::now().0;
@@ -76,7 +80,7 @@ pub fn unadopted(cwd: &Path) -> bool {
     {
         return answer == "1";
     }
-    let answer = unadopted_remote(&root);
+    let answer = unadopted_remote(&root, url);
     if let Some(f) = file {
         let _ = std::fs::create_dir_all(f.parent().unwrap_or(&root));
         let _ = std::fs::write(f, format!("{now} {} {session}", u8::from(answer)));
@@ -97,8 +101,8 @@ fn private_repo() -> Option<PathBuf> {
     git_remote(&tmp, &["init", "-q", "--bare"]).map(|_| tmp)
 }
 
-fn unadopted_remote(root: &Path) -> bool {
-    let Some(url) = git_remote(root, &["remote", "get-url", "origin"]) else {
+fn unadopted_remote(root: &Path, url: Option<String>) -> bool {
+    let Some(url) = url else {
         return !root.join(".bosun").is_dir();
     };
     let Some(heads) = git_remote(root, &["ls-remote", &url, "HEAD"]) else {

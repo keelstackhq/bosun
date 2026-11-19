@@ -481,7 +481,10 @@ fn install_hooks_refuses_invalid_json_and_matches_the_repo_settings() {
         "PreCompact",
     ] {
         assert_eq!(commands(&user, e), commands(&repo, e), "{e}");
+        let timeout = |v: &serde_json::Value| v["hooks"][e][0]["hooks"][0]["timeout"].clone();
+        assert_eq!(timeout(&user), timeout(&repo), "{e} timeout");
     }
+    assert_eq!(user["hooks"]["PreCompact"][0]["hooks"][0]["timeout"], 15);
 }
 
 #[cfg(unix)]

@@ -1,0 +1,1 @@
+- The adopted check ignores local `git replace` refs, its cache is keyed by session and origin URL, and `bosun setup-snippet --install-hooks` timeouts are tested against the repo's own settings (PreCompact 15 s).
