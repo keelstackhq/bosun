@@ -479,3 +479,20 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-17 · review flow M7 M8 M10 M14 C11 · owner clears escalation, verdict bots, fix tasks, pack checks and stamps · review-flow PR
 - 2026-11-17 · C6 bosun rules --write + doctor step 18, G1 ci-minutes with the head pin · src/cli/rules.rs, src/hooks/session_rules.rs, src/cli/doctor.rs, .github/workflows/ci.yml, docs/spec/04-lifecycle.md, docs/spec/07-gates.md · gated PR
 - 2026-11-17 · Cloud proxy · result --session-json spend, cloud skips collaborator reads, GET reset retry, migrate budget 600 s, any /graphql 403 hands back the MCP call · PR (fix/cloud-proxy)
+- 2026-11-18 · bosun moves to autonomous mode (D-017, spec §18) · .bosun/bosun.toml, tests/pinned_config.rs · this PR
+- 2026-11-18 · deps push-to-main manifests · bosun.yml.jinja bosun-trusted deps keeps HEAD manifests on a push to the default branch, spec §3 · this PR
+- 2026-11-18 · Fold fragments · changelog.d and progress.d into CHANGELOG Unreleased and docs/progress-done.md · docs PR
+- 2026-11-18 · Pin bosun 0.20.0 · .bosun/version, docs/setup-script.sh version and sha512 pins · pin PR
+- 2026-11-18 · pnpm stack path · bosun.yml.jinja and CircleCI bosun-ok key pnpm steps off .bosun/bosun.toml ts-pnpm stack paths, no {} package.json, spec §3 · this PR
+- 2026-11-18 · push-gates stale-verdict warning · src/hooks/pre_tool_use.rs, spec §7 · this PR
+- 2026-11-18 · Release 0.20.0 · version bump, CHANGELOG (#612-#617: gov paths, review flow, rules --write, agent ergonomics, cloud proxy, stamps) · release PR
+- 2026-11-18 · risk-check verdict re-apply · src/cli/risk_check.rs, src/cli/verdict.rs, src/schema/data.rs, spec §8 · this PR
+- 2026-11-18 · Fix test-integrity stamp · judges untracked files, stamps the working tree like every gate · fix PR
+- 2026-11-18 · review-pack verdict_skeleton; chunks refusal says how to add them · src/cli/review_pack.rs, src/cli/verdict.rs, src/schema/data.rs, spec §7 · this PR
+- 2026-11-18 · Fold fragments for 0.21.0 · changelog.d and progress.d into CHANGELOG Unreleased and docs/progress-done.md · docs PR
+- 2026-11-18 · handoff notes path `docs/handoff/**` (normal risk, one-off ok) · spec §4 §8, tests/risk_hoist.rs, tests/cli_pr_oneoff_guard.rs · this PR
+- 2026-11-18 · bot verdict relay · src/core/verdict.rs bot_verdict_json, src/cli/verdict.rs apply, verdict.yml (+ channel), spec §7 · this PR
+- 2026-11-18 · B2 gate sources · src/gates/sources.rs, src/cli/gate.rs, spec §15 §7 · this PR
+- 2026-11-18 · M9 review-loop · src/cli/review_loop.rs, src/core/review_loop.rs, [mode] review_rounds, spec §7 §18 · this PR
+- 2026-11-18 · verdict relay keeps the reviewer · src/core/verdict.rs, src/cli/verdict.rs, src/schema/data.rs, spec §7 · this PR
+- 2026-11-18 · Verify the gate poster in dual mode · src/github/gate.rs, spec §15 · this PR
