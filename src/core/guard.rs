@@ -573,29 +573,21 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
 
 const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): a command that merges may not set or unset CLAUDE_CODE*, *_SESSION or *_ORIGIN variables, nor use `${!x}` or drop the environment (`env -i`, `env -`, `exec -c`); the orchestrator runs `bosun merge <pr>` unmodified";
 
-/// Commands that set or clear a variable; with a word naming an identity variable they are a setter.
-const SETTERS: [&str; 11] = [
-    "export", "unset", "declare", "typeset", "readonly", "local", "env", "printf", "read", "eval",
-    "set",
-];
-
-/// D-019: `bosun merge` judges the caller from its environment (`BOSUN_SESSION`, `BOSUN_ORIGIN`,
-/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). Text (quotes and backslashes
-/// removed) is refused everywhere for `${!` and for options that drop the environment (`env` /
-/// `exec` / a `$` command word with `-i`, `-`, `--ignore-environment`; `exec -c`). A setter of an
-/// identity name (`NAME=v`, or export, unset, declare, ... with a word containing `CLAUDE_CODE`,
-/// `_SESSION`, `_ORIGIN`, `BOSUN_$` or `CLAUDE_$`) is refused only when the command also looks like
-/// `bosun merge` (a `merge` word, a `$` command word, a `$` word after `bosun`), so the wave-agent
-/// forms (`BOSUN_SESSION=s/12 bosun claim 12`) and mere mentions stay allowed. Text only: a name
-/// built in a way this does not read, or a liar, gets past it; it stops confused workers
-/// (`bosun merge` refuses child sessions at run time).
+/// D-019: `bosun merge` judges the caller from its environment. Text (quotes and backslashes
+/// removed) is refused everywhere for `${!x}` and for options that drop the environment (`env` /
+/// `exec` / a `$` command word with `-i`, `-`, `--ignore-environment`; `exec -c`). A setter of
+/// an identity name (`NAME=v`, or export, unset, ... naming `CLAUDE_CODE`, `_SESSION`,
+/// `_ORIGIN`, `BOSUN_$`, `CLAUDE_$`) is refused only when the text also looks like `bosun merge`
+/// (a `merge` word, a `$` command word, a `$` word after `bosun`): `BOSUN_SESSION=s/12 bosun
+/// claim 12` and mere mentions pass. It stops confused workers, not liars.
 fn identity_tamper(text: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
     let plain = plain.replace("${IFS}", " ").replace("$IFS", " ");
     let names = ["CLAUDE_CODE", "_SESSION", "_ORIGIN", "BOSUN_$", "CLAUDE_$"];
+    let setters = "export unset declare typeset readonly local env printf read eval set";
     let mention = |w: &str| names.iter().any(|n| w.contains(n));
     let (mut merge, mut setter) = (false, false);
-    // Indirect expansion; `${!arr[@]}` and `${!prefix@}` (names, not values) are not.
+    // `${!arr[@]}` and `${!prefix@}` list names and pass.
     let mut drops = plain.split("${!").skip(1).any(|r| {
         let name = r.split('}').next().unwrap_or("");
         !["[@]", "[*]", "@", "*"].iter().any(|e| name.ends_with(e))
@@ -610,14 +602,14 @@ fn identity_tamper(text: &str) -> Option<String> {
             || t.iter().enumerate().any(|(i, w)| {
                 *w == "merge" || (i > 0 && base(t[i - 1]) == "bosun" && w.contains('$'))
             });
-        // Text commands only mention a name (a commit message, a search pattern).
-        let text_cmd =
-            first.is_some_and(|i| ["git", "gh", "rg", "grep", "echo"].contains(&base(t[i])));
-        setter |= !text_cmd
+        // git, gh, rg, grep, echo only mention a name (a commit message, a pattern).
+        let text = first.is_some_and(|i| "git gh rg grep echo".split(' ').any(|c| c == base(t[i])));
+        setter |= !text
             && (t
                 .iter()
-                .any(|w| w.contains('=') && w.split('=').next().is_some_and(mention))
-                || (t.iter().any(|w| SETTERS.contains(&base(w))) && t.iter().any(|w| mention(w))));
+                .any(|w| w.split_once('=').is_some_and(|(n, _)| mention(n)))
+                || (t.iter().any(|w| setters.split(' ').any(|s| s == base(w)))
+                    && t.iter().any(|w| mention(w))));
         drops |= t.iter().enumerate().any(|(i, w)| match base(w) {
             "env" => drops_env(&t[i + 1..], 'i'),
             "exec" => drops_env(&t[i + 1..], 'c'),
