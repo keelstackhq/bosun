@@ -513,7 +513,23 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let mut task = None;
     let mut plan_high = Vec::new();
     let mut one_off = false;
-    for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
+    // D-021: gated work may bundle, so every task the PR closes counts for R-plan: links in the
+    // body, and closing refs in the title and commit messages (GitHub reads all three). A
+    // commit list cut at GitHub's cap (the author can pad it) fails closed to the owner.
+    let repo = app.ctx.repo.to_string();
+    let mut linked = linked_issues_in(&pull.body, &repo);
+    let (extra, incomplete) = closing_refs_outside_body(gh, &pull, &repo)?;
+    for n in extra {
+        if !linked.contains(&n) {
+            linked.push(n);
+        }
+    }
+    if incomplete {
+        plan_high.push(format!(
+            "the PR has {COMMIT_CAP} or more commits: closing refs in later commits cannot be ruled out"
+        ));
+    }
+    for i in linked {
         let issue = gh.get_issue(i)?;
         let meta = issue.as_ref().and_then(task_meta);
         // The body is the author's: it can only add. The plan file on the base, reached through
@@ -2142,4 +2158,27 @@ pub fn owner_comment<'a>(comments: &'a [Comment], owner: &str, head: &str) -> Op
             && c.by_user_token()
             && comment_approves(&c.body, head)
     })
+}
+
+/// GitHub lists at most this many commits of a PR.
+const COMMIT_CAP: usize = 250;
+
+/// Closing refs to this repo's issues in the PR title and commit messages, and whether the
+/// commit list hit GitHub's 250-commit cap. A commit that cannot be read (an API error, not
+/// the author's choice) is skipped; risk-check runs again on every push.
+fn closing_refs_outside_body(
+    gh: &dyn crate::github::Github,
+    pull: &crate::github::Pull,
+    repo: &str,
+) -> crate::app::Result<(Vec<u64>, bool)> {
+    let mut out = closing_issues_in(&pull.title, Some(repo));
+    let shas = gh.pull_commits(pull.number)?;
+    let incomplete = shas.len() >= COMMIT_CAP;
+    for sha in &shas {
+        if let Ok(Some(c)) = gh.commit(sha) {
+            out.extend(closing_issues_in(&c.message, Some(repo)));
+        }
+    }
+    out.dedup();
+    Ok((out, incomplete))
 }
