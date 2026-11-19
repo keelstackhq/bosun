@@ -562,12 +562,12 @@ fn merge_words(command: &str) -> Vec<String> {
 }
 
 /// D-019: `bosun merge` judges the caller from its own environment (`BOSUN_*`,
-/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command that runs bosun to
-/// merge may not touch the environment at all, whatever names it uses (they can be built from
-/// pieces): no export, unset, declare, typeset, readonly, env, eval, source, `.`, local,
-/// read, mapfile, readarray, getopts, let, arithmetic commands, `set -a`, and no `NAME=` assignment. The bosun word may be hidden in a variable or
-/// substitution (`b=bosun; $b merge 1`). `${!name}` indirect expansion counts too. Best effort
-/// against a confused worker, not a liar: a file that is run by other means is missed.
+/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command line that runs bosun
+/// to merge (the word may hide in a variable) is an allowlist: every segment must be `bosun ...`
+/// itself, `cd`, a read-only `git` verb (status, log, diff, show, rev-parse, fetch), `echo` or
+/// `printf` without `-v`, or a `jq`, `tee` or `head`; no `${...}` and no `((`. Anything else
+/// (export, env, eval, `NAME=`, `wait -p`, `set -a`, a function, `time`) is refused. Best effort
+/// against a confused worker, not a liar: a script run by other means is missed.
 fn merge_env_tamper(command: &str) -> Option<String> {
     let words = merge_words(command);
     let runs_bosun = words
@@ -576,41 +576,34 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     if !runs_bosun || !words.iter().any(|w| w == "merge") {
         return None;
     }
-    let verbs = "export unset declare typeset env readonly eval source local read mapfile \
-                 readarray getopts let";
-
-    let touches_env = words.iter().any(|w| {
-        verbs.split_whitespace().any(|v| v == w)
-            || w.split_once('=').is_some_and(|(n, _)| {
-                n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                    && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            })
-    });
-    let dot = shell_words(command)
-        .split(|w| w == SEP)
-        .any(|seg| seg.first().is_some_and(|w| w == "."));
-    let set_a = dot
-        || words.windows(2).any(|p| {
-            (p[0] == "set" && (p[1] == "-a" || p[1] == "allexport"))
-                || (p[0] == "printf" && p[1] == "-v")
-        });
-    // The command word is a variable or substitution: it may be bosun in disguise.
-    let indirect = shell_words(command).split(|w| w == SEP).any(|seg| {
-        seg.iter().any(|w| w == "merge")
-            && seg
-                .iter()
-                .find(|w| !w.contains('=') || w.starts_with('$'))
-                .is_some_and(|w| w.starts_with('$') || w.starts_with('`'))
-    });
-    // `${!name}` expands the variable `name` points to: the identity variable can be named at
-    // run time (`n=BOSUN_SESSION; export ${!n}=x`).
-    let by_name = command.contains("${!");
-    (touches_env || set_a || indirect || by_name || command.contains("((")).then(|| {
-        "a command that runs `bosun merge` may not change the environment (export, unset, \
-         declare, env, eval, source, NAME=...): the merge checks the caller's own identity \
-         (D-019); run `bosun merge <pr>` bare"
-            .to_string()
-    })
+    let text = ["2>&1", "1>&2", ">&2"]
+        .iter()
+        .fold(command.to_string(), |t, r| t.replace(r, " "));
+    let allowed = |seg: &[String]| {
+        let w: Vec<&str> = seg.iter().map(String::as_str).collect();
+        match w[..] {
+            ["cd", ..] | ["jq" | "tee" | "head", ..] => true,
+            ["echo" | "printf", ..] => !w.iter().any(|x| x.starts_with("-v")),
+            ["git", ..] => {
+                let verb = w.get(if w.get(1) == Some(&"-C") { 3 } else { 1 });
+                matches!(
+                    verb,
+                    Some(&("status" | "log" | "diff" | "show" | "rev-parse" | "fetch"))
+                )
+            }
+            [first, ..] => base(first) == "bosun",
+            [] => true,
+        }
+    };
+    let words = shell_words(&text);
+    (text.contains("${") || text.contains("((") || !words.split(|w| w == SEP).all(allowed)).then(
+        || {
+            "a command that runs `bosun merge` may only also run cd, read-only git \
+             (status, log, diff, show, rev-parse, fetch), echo or printf without -v, and jq, tee \
+             or head: the merge checks the caller's own identity (D-019); run `bosun merge <pr>` bare"
+                .to_string()
+        },
+    )
 }
 
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
@@ -7345,8 +7338,20 @@ mod tests {
             "getopts a BOSUN_SESSION; bosun merge 1",
             "let x++; bosun merge 1",
             "(( x = 1 )); bosun merge 1",
+            "wait -p BOSUN_SESSION; bosun merge 1",
+            "printf -vBOSUN_SESSION x; bosun merge 1",
+            "set -o allexport; bosun merge 1",
+            "echo ${BOSUN_SESSION:=x}; bosun merge 1",
+            "git status; time bosun merge 1",
         ] {
             assert!(hit(c), "{c}");
+        }
+        for ok in [
+            "cd /r && bosun merge 1 2>&1 | jq .data",
+            "git -C /r status && git log -1 && bosun merge 1 | tee /tmp/o | head -5",
+            "echo merging; printf '%s' x; /usr/bin/bosun merge 1 &",
+        ] {
+            assert!(!hit(ok), "{ok}");
         }
         assert!(!hit("bosun merge 1"));
         assert!(!hit("BOSUN_NOW=2026-01-01T00:00:00Z bosun status"));
