@@ -1,0 +1,1 @@
+- 2026-11-19 · chat-approval T6b · child_flag_tamper follow-up: loop and function bodies, timeout and exec -a prefixes, combined env flags, export -n, declare +x · this PR

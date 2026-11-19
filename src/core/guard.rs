@@ -584,18 +584,24 @@ pub fn chat_identity_override(command: &str) -> bool {
 /// The index of the command word of a simple command: past shell keywords and prefix words
 /// (`if`, `then`, `time`, `nohup`, `sudo`, `nice`, ...) with their options, and `NAME=value`.
 fn command_word(seg: &[String]) -> usize {
-    const PREFIX: [&str; 17] = [
+    const PREFIX: [&str; 18] = [
         "if", "then", "else", "elif", "do", "while", "until", "!", "{", "time", "nohup", "command",
-        "exec", "sudo", "nice", "builtin", "setsid",
+        "exec", "sudo", "nice", "builtin", "setsid", "timeout",
     ];
     let mut i = 0;
     while let Some(w) = seg.get(i) {
         if PREFIX.contains(&w.as_str()) {
             i += 1;
             while let Some(o) = seg.get(i).filter(|o| o.starts_with('-')) {
-                // `nice -n 5`, `sudo -u root`: these options take a value.
-                i += 1 + usize::from(matches!(o.as_str(), "-n" | "-u" | "-g"));
+                // `nice -n 5`, `sudo -u root`, `exec -a NAME`, `timeout -s SIG`: a value follows.
+                let takes = match (w.as_str(), o.as_str()) {
+                    (_, "-n" | "-u" | "-g") | ("exec", "-a") | ("timeout", "-s" | "-k") => 1,
+                    _ => 0,
+                };
+                i += 1 + takes;
             }
+            // `timeout DURATION cmd`.
+            i += usize::from(w == "timeout");
         } else if w.contains('=') && !w.starts_with('-') {
             i += 1;
         } else {
@@ -626,7 +632,19 @@ pub fn child_flag_tamper(command: &str) -> bool {
         .any(|seg| {
             let named = seg.iter().any(flag);
             let at = command_word(&seg);
-            if seg.get(at).is_some_and(|w| w == "unset") && named {
+            let head = seg.get(at).map_or("", |w| base(w));
+            // `unset $v` in a loop over the name: the name may sit in another segment.
+            if head == "unset" && (named || words.iter().any(flag)) {
+                return true;
+            }
+            // `export -n NAME`, `declare +x NAME`: the variable stops being exported.
+            let opt = |w: &String, sign: char, c: char| {
+                w.starts_with(sign) && !w.starts_with("--") && w[1..].contains(c)
+            };
+            if matches!(head, "export" | "declare" | "typeset" | "local")
+                && named
+                && seg.iter().any(|w| opt(w, '-', 'n') || opt(w, '+', 'x'))
+            {
                 return true;
             }
             if seg.get(at).is_none_or(|w| base(w) != "env") {
@@ -637,15 +655,26 @@ pub fn child_flag_tamper(command: &str) -> bool {
                 if std::mem::take(&mut skip) {
                     continue;
                 }
-                if matches!(w.as_str(), "-u" | "--unset") {
+                if matches!(w.as_str(), "--unset") {
                     unsets = true;
                     skip = true;
-                } else if w.starts_with("-u") || w.starts_with("--unset=") {
+                } else if w.starts_with("--unset=") {
                     unsets = true;
-                } else if matches!(w.as_str(), "-C" | "--chdir" | "-S" | "--split-string") {
+                } else if matches!(
+                    w.as_str(),
+                    "--chdir" | "--split-string" | "--default-signal"
+                ) {
                     skip = true;
-                } else if matches!(w.as_str(), "-i" | "--ignore-environment" | "-") {
+                } else if matches!(w.as_str(), "--ignore-environment" | "-") {
                     clears = true;
+                } else if w.starts_with('-') && !w.starts_with("--") {
+                    // A cluster of short flags (`-iC dir`, `-ui`): `i` anywhere clears; the
+                    // first flag that takes a value ends it, and a bare one takes the next word.
+                    clears |= w.contains('i');
+                    if let Some(p) = w.find(['u', 'C', 'S', 'P']) {
+                        unsets |= w.as_bytes()[p] == b'u';
+                        skip = p + 1 == w.len();
+                    }
                 } else if !w.starts_with('-') && !w.contains('=') {
                     break;
                 }
@@ -7366,6 +7395,19 @@ mod tests {
             "FOO=1 env -C /r -u CLAUDE_CODE_CHILD_SESSION bosun status",
             "env --chdir /r --unset CLAUDE_CODE_CHILD_SESSION bosun status",
             "env -S x -i bosun status",
+            "for v in CLAUDE_CODE_CHILD_SESSION; do unset $v; done; bosun status",
+            "env -P /bin -i bosun status",
+            "env -iC /r bosun status",
+            "env -ui bosun status",
+            "env -iu CLAUDE_CODE_CHILD_SESSION bosun status",
+            "timeout 5 env -i bosun status",
+            "timeout -s KILL -k 1 5 env -i bosun status",
+            "exec -a x env -i bosun status",
+            "f(){ unset CLAUDE_CODE_CHILD_SESSION; }; f; bosun status",
+            "bosun(){ unset CLAUDE_CODE_CHILD_SESSION; command bosun \"$@\"; }; bosun status",
+            "export -n CLAUDE_CODE_CHILD_SESSION; bosun status",
+            "declare +x CLAUDE_CODE_CHILD_SESSION; bosun status",
+            "typeset +x CLAUDE_CODE_CHILD_SESSION && bosun status",
         ] {
             assert!(child_flag_tamper(c), "{c}");
         }
@@ -7386,6 +7428,13 @@ mod tests {
             "if grep -i x f; then bosun status; fi",
             "echo env -i; bosun status",
             "then unset FOO; bosun status",
+            "env -P /bin bosun status",
+            "env -uFOO -C /r bosun status",
+            "timeout 5 bosun status",
+            "exec -a x bosun status",
+            "export FOO; bosun status",
+            "declare -x FOO; bosun status",
+            "for v in A B; do unset $v; done; bosun status",
         ] {
             assert!(!child_flag_tamper(c), "{c}");
         }

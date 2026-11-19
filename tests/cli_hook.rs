@@ -1044,6 +1044,15 @@ fn the_child_flag_is_read_directly_and_cannot_be_dropped() {
             "env"
         ),
         format!("{} -i bosun approve 3@{FORGE} --chat", "env"),
+        format!(
+            "for v in CLAUDE_CODE_CHILD_SESSION; do unset $v; done; bosun approve 3@{FORGE} --chat"
+        ),
+        format!("env -iC /r bosun approve 3@{FORGE} --chat"),
+        format!("timeout 5 env -i bosun approve 3@{FORGE} --chat"),
+        format!("exec -a x env -i bosun approve 3@{FORGE} --chat"),
+        format!("f(){{ unset CLAUDE_CODE_CHILD_SESSION; }}; f; bosun approve 3@{FORGE} --chat"),
+        format!("export -n CLAUDE_CODE_CHILD_SESSION; bosun approve 3@{FORGE} --chat"),
+        format!("declare +x CLAUDE_CODE_CHILD_SESSION; bosun approve 3@{FORGE} --chat"),
     ] {
         let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
         let out = hook_with(
@@ -1055,6 +1064,6 @@ fn the_child_flag_is_read_directly_and_cannot_be_dropped() {
             "pre-tool-use",
             &input,
         );
-        denied(&out);
+        assert!(denied(&out).contains("CLAUDE_CODE_CHILD_SESSION"), "{cmd}");
     }
 }
