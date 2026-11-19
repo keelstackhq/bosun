@@ -9,7 +9,7 @@ PRs. Chunked review, owner approval of gated paths and the 2x drift note stay.
 - H1: merge keelstackhq/decisions#21 (D-021)
   on: phone
   steps: GitHub > keelstackhq/decisions > Pull requests > #21 > Merge
-  blocks: DC21/T1
+  blocks: DC21
 
 ## DC21: Gated PRs have no line cap
 area: plan
@@ -28,7 +28,7 @@ caps a gated task at 400 until T2 lands (the drift note is expected). T2 is R-we
   kind: bookkeeping
   size: 4
 - T2: drop the 400-line, one-task, alone rule for gated work (D-021; R-weaken, owner-only)
-  touch: src/cli/claim.rs, src/cli/metrics.rs, src/cli/plan.rs, src/cli/pr.rs, src/cli/pr_bundle.rs, src/cli/review_pack.rs, src/cli/risk_check.rs, src/cli/wave.rs, src/core/meta.rs, src/core/plan.rs, src/core/risk.rs, src/core/shape.rs, src/core/wave.rs, tests/cli_claim_bundle.rs, tests/cli_claim_subtree.rs, tests/cli_plan_import.rs, tests/cli_plan_shape.rs, tests/cli_plan_subtree.rs, tests/cli_pr_bundle.rs, tests/cli_pr_bundle_closes.rs, tests/cli_review_pack_drift.rs, tests/cli_risk_plan.rs, tests/cli_verdict_chunks.rs, tests/cli_wave_single.rs, tests/cli_wave_subtree.rs, tests/metrics_core.rs, tests/plan_parse.rs, tests/risk_bundle_gated.rs, tests/risk_bundle_title_commits.rs, AGENTS.md, CLAUDE.md, docs/defaults.md, docs/plan-format.md, docs/spec/04-lifecycle.md, docs/spec/05-spawn.md, docs/spec/08-risk.md, docs/spec/12-plan.md, plans/zero-touch-onboarding.md
+  touch: src/cli/claim.rs, src/cli/metrics.rs, src/cli/plan.rs, src/cli/pr.rs, src/cli/pr_bundle.rs, src/cli/review_pack.rs, src/cli/risk_check.rs, src/cli/wave.rs, src/core/meta.rs, src/core/plan.rs, src/core/risk.rs, src/core/shape.rs, src/core/wave.rs, tests/cli_claim_bundle.rs, tests/cli_claim_subtree.rs, tests/cli_plan_import.rs, tests/cli_plan_shape.rs, tests/cli_plan_subtree.rs, tests/cli_pr_bundle.rs, tests/cli_pr_bundle_closes.rs, tests/cli_wave_single.rs, tests/cli_wave_subtree.rs, tests/metrics_core.rs, tests/risk_bundle_gated.rs, tests/risk_bundle_title_commits.rs, AGENTS.md, CLAUDE.md, docs/defaults.md, docs/plan-format.md, docs/spec/04-lifecycle.md, docs/spec/05-spawn.md, docs/spec/08-risk.md, docs/spec/12-plan.md, plans/zero-touch-onboarding.md
   depends: T1
   risk: high
   allow: delete-test, fewer-asserts
