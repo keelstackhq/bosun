@@ -1,8 +1,8 @@
 //! `bosun gate <name> [--base REF] [--all]`. Works offline: it needs only git and the config, not
 //! a GitHub repo id.
 
+use crate::gates::cmd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::cli::{GateArgs, stamps};
 use crate::config::Config;
@@ -27,7 +27,7 @@ pub fn resolve_base_in(root: &Path, flag: Option<&str>, github_base_ref: Option<
     if flag.filter(nonempty).is_some() || github_base_ref.filter(nonempty).is_some() {
         return resolve_base(flag, github_base_ref);
     }
-    Command::new("git")
+    cmd("git")
         .arg("-C")
         .arg(root)
         .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
@@ -75,7 +75,7 @@ pub(crate) fn resolve_ci(
 }
 
 pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
-    let out = Command::new("git")
+    let out = cmd("git")
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "--show-toplevel"])
