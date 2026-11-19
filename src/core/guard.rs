@@ -573,12 +573,8 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
 }
 
 const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): no setting, unsetting, exporting or reading by name of BOSUN_SESSION, BOSUN_ORIGIN, CLAUDE_CODE_CHILD_SESSION or CLAUDE_CODE_REMOTE_SESSION_ID, no `${!x}`, no `env -i`, `env -`, `exec -c`; only `BOSUN_SESSION=<your session>/<task>` and `BOSUN_ORIGIN=routine` on a command that is not bosun merge, approve, verdict or join --origin";
-const IDENTITY: [&str; 4] = [
-    "BOSUN_SESSION",
-    "BOSUN_ORIGIN",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_REMOTE_SESSION_ID",
-];
+const IDENTITY: &str =
+    "BOSUN_SESSION BOSUN_ORIGIN CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_REMOTE_SESSION_ID";
 
 /// The `<task>` of a `BOSUN_SESSION` value `<own>/<task>` (`[A-Za-z0-9._-]+`).
 pub fn task_of<'a>(value: &'a str, own: &str) -> Option<&'a str> {
@@ -587,39 +583,35 @@ pub fn task_of<'a>(value: &'a str, own: &str) -> Option<&'a str> {
     (!own.is_empty() && !task.is_empty() && task.chars().all(ok)).then_some(task)
 }
 
-/// D-019, everywhere (confused workers, not liars; spec 04): refuses text (quotes and backslashes
-/// removed) that sets or names one of the four identity names beside export, unset, declare,
-/// readonly, local, typeset, printf, read, env or eval (`NAME=v` always), any `${!`, `env -i`,
-/// `env -`, `--ignore-environment`, `exec -c`. git, gh, rg, grep, echo text passes. Allowed:
-/// `BOSUN_SESSION=<own>/<task>` and `BOSUN_ORIGIN=routine` (prefix or one `export`) when `own` is
-/// set and the text has no `$` and no word merge, approve, verdict or `--origin`.
+/// D-019, everywhere (stops confused workers, not liars; spec 04): refuses `NAME=v`, or a name
+/// beside a verb (export, unset, env, read, ...), for the four identity names, any `${!`, and
+/// `env -i`, `env -`, `exec -c`; git, gh, rg, grep, echo text passes. Allowed: `BOSUN_SESSION=
+/// <own>/<task>` and `BOSUN_ORIGIN=routine` (prefix or one `export`) when `own` is set and the
+/// text has no `$`, `--origin`, merge, approve or verdict.
 fn identity_tamper(text: &str, own: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
-    let named = |w: &str| IDENTITY.iter().any(|n| w.contains(n));
+    let named = |w: &str| IDENTITY.split(' ').any(|n| w.contains(n));
     let setter = |w: &str| w.split_once('=').is_some_and(|(n, _)| named(n));
     let allowed = |w: &str| match w.split_once('=') {
         Some(("BOSUN_SESSION", v)) => task_of(v, own).is_some(),
         Some(("BOSUN_ORIGIN", v)) => v == "routine",
         _ => false,
     };
-    let may = !own.is_empty()
-        && !plain.contains('$')
-        && !plain.contains("--origin")
-        && !plain
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| ["merge", "approve", "verdict"].contains(&w));
+    let no = ["$", "--origin", "merge", "approve", "verdict"];
+    let may = !own.is_empty() && !no.iter().any(|w| plain.contains(w));
+    let among = |list: &str, w: &str| list.split(' ').any(|c| c == base(w));
     let verb = |w: &str| {
-        "export unset declare typeset readonly local printf read env eval"
-            .split(' ')
-            .any(|c| c == base(w))
+        among(
+            "export unset declare typeset readonly local printf read env eval",
+            w,
+        )
     };
     let mut bad = plain.contains("${!");
     for seg in plain.split([';', '&', '|', '\n']) {
         let split = |c: char| c.is_whitespace() || "()`".contains(c);
         let t: Vec<&str> = seg.split(split).filter(|w| !w.is_empty()).collect();
         let first = t.iter().position(|w| !w.contains('='));
-        let quiet = first
-            .is_some_and(|i| "git gh rg grep echo".split(' ').any(|c| c == base(t[i])))
+        let quiet = first.is_some_and(|i| among("git gh rg grep echo", t[i]))
             && !seg.contains("$(")
             && !seg.contains('`');
         let hit = t[..first.unwrap_or(t.len())].iter().any(|w| setter(w))
@@ -628,8 +620,7 @@ fn identity_tamper(text: &str, own: &str) -> Option<String> {
                     || (t.iter().any(|w| named(w)) && t.iter().any(|w| verb(w)))));
         let clean = t.iter().filter(|w| named(w)).all(|w| allowed(w))
             && t.iter().filter(|w| verb(w)).all(|w| base(w) == "export")
-            && t.windows(2)
-                .all(|p| base(p[0]) != "export" || !p[1].starts_with('-'));
+            && !t.contains(&"-n");
         bad |= hit && !(may && clean);
         bad |= t.iter().enumerate().any(|(i, w)| match base(w) {
             "env" => drops_env(&t[i + 1..], 'i'),
