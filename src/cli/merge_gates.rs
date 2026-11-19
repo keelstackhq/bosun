@@ -37,7 +37,7 @@ fn no_symlink(root: &Path, rel: &str) -> Result<(), BosunError> {
         if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(BosunError::needs_human(
                 format!(
-                    "{rel} is (or sits below) a symlink in the PR head, so the gates will not run there"
+                    "{rel} is (or is below) a symlink in the PR head, so the gates will not run"
                 ),
                 "the author replaces the symlink with a regular file or directory, then reruns `bosun pr <task> --ready`",
             ));
@@ -147,17 +147,11 @@ impl Drop for Private {
 }
 
 /// Fetch settings: verify objects, https only (`file` for the test source), no credentials, no stalls.
-const FETCH_CONFIG: [&str; 9] = [
-    "transfer.fsckObjects=true",
-    "fetch.fsckObjects=true",
-    "protocol.allow=never",
-    "protocol.https.allow=always",
-    "protocol.file.allow=user",
-    "credential.helper=",
-    "core.askPass=/bin/false",
-    "http.lowSpeedLimit=1000",
-    "http.lowSpeedTime=60",
-];
+const FETCH_CONFIG: &str = concat!(
+    "transfer.fsckObjects=true fetch.fsckObjects=true protocol.allow=never protocol.https.allow=always ",
+    "protocol.file.allow=user credential.helper= core.askPass=/bin/false ",
+    "http.lowSpeedLimit=1000 http.lowSpeedTime=60"
+);
 
 /// Exit 5 when a `.cargo` exists in any parent of the repo or of the gate's new HOME, CARGO_HOME
 /// or TMPDIR (so also `/tmp` and `/`): cargo reads those, and a runner there would run code.
@@ -174,16 +168,10 @@ fn clean_above(repo: &Path, gate: &Path) -> Result<(), BosunError> {
 
 /// The gates a PR must pass, from the default branch's config at its current sha.
 pub fn required_gates(gh: &dyn Github) -> Result<Vec<String>, BosunError> {
-    let tmp = fresh_dir("gates")?;
-    let out = Overlay::load(gh, &default_ref(gh)?)
-        .and_then(|o| o.apply(&tmp))
-        .and_then(|()| stamps::ready_gates(&tmp));
-    let _ = std::fs::remove_dir_all(&tmp);
-    non_empty(out?)
-}
-
-fn sha40(s: &str) -> bool {
-    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+    let tmp = Private(fresh_dir("gates")?);
+    let overlay = Overlay::load(gh, &default_ref(gh)?)?;
+    overlay.apply(&tmp.0)?;
+    non_empty(stamps::ready_gates(&tmp.0)?)
 }
 
 /// Run the required gates on a private repo of `pull`'s head and base (fetched by sha, removed on
@@ -191,6 +179,7 @@ fn sha40(s: &str) -> bool {
 /// owner's approval are the control.
 pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     let (head, n) = (pull.head_sha.as_str(), pull.number);
+    let sha40 = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
     if !sha40(head) || !sha40(&pull.base_sha) {
         return Err(BosunError::needs_human(
             format!("PR #{n} head or base is not a 40-hex commit id"),
@@ -212,7 +201,7 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
         .filter(|_| cfg!(debug_assertions)))
     .unwrap_or(host);
     gates::git(&repo, &["init", "-q"])?;
-    let mut args: Vec<&str> = FETCH_CONFIG.iter().flat_map(|c| ["-c", *c]).collect();
+    let mut args: Vec<&str> = FETCH_CONFIG.split(' ').flat_map(|c| ["-c", c]).collect();
     args.extend(["fetch", "-q", "--no-tags", &url, head, &pull.base_sha]);
     let got = public
         && gates::git(&repo, &args).is_ok()
