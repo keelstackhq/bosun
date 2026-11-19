@@ -624,15 +624,37 @@ fn a_hold_written_after_the_record_and_edited_again_still_holds_while_it_reads_a
 }
 
 #[test]
-fn an_edited_hold_counts_by_its_current_text_and_time() {
+fn an_edited_owner_comment_after_the_record_holds_fail_closed() {
     let at = "2026-11-10T09:30:00Z";
     let rec = || record_at(&sha(), "session_orch", at);
-    // A hold edited away to something else no longer holds.
+    // A hold edited away to something else may have erased a hold: it still holds.
     let fake = setup(true);
     post(&fake, "ada", &rec(), at);
     post(&fake, "ada", "/bosun hold", "2026-11-10T09:31:00Z");
-    fake.last_comment(|c| c.body = "never mind".into());
+    fake.last_comment(|c| {
+        c.body = "never mind".into();
+        c.updated_at = "2026-11-10T09:33:00Z".into();
+    });
+    refused(&fake, "chat_held");
+    // The same comment never edited is no hold.
+    let fake = setup(true);
+    post(&fake, "ada", &rec(), at);
+    post(&fake, "ada", "thanks", "2026-11-10T09:31:00Z");
     assert_eq!(verify(&fake, OK, &[]).0, 0);
+    // Other hold words and a checkbox hold.
+    for body in [
+        "/bosun stop",
+        "/bosun wait",
+        "/bosun cancel",
+        "/bosun deny",
+        "/bosun reject",
+        "- [ ] /bosun hold",
+    ] {
+        let fake = setup(true);
+        post(&fake, "ada", &rec(), at);
+        post(&fake, "ada", body, "2026-11-10T09:31:00Z");
+        refused(&fake, "chat_held");
+    }
     // A comment written before the record and edited into a hold after it holds.
     let fake = setup(true);
     post(&fake, "ada", "thinking", "2026-11-10T09:20:00Z");

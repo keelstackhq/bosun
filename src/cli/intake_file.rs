@@ -405,9 +405,14 @@ fn verify_chat(
             ("expired", "it is more than an hour old")
         } else {
             let made = made.expect("checked above");
-            // from the signature, so the replay record binds the signed bytes, not a comment id
-            let sig = r.sig.as_ref().map_or("", |s| s.1.as_str());
-            let nonce = format!("chat-{}", &intake_sha256(sig.as_bytes())[..32]);
+            // from the decoded signature bytes, so a re-spelled (non-canonical) base64 of the same
+            // signature is the same nonce, not a comment id or a text
+            let sig = r
+                .sig
+                .as_ref()
+                .and_then(|s| b64::decode(&s.1))
+                .unwrap_or_default();
+            let nonce = format!("chat-{}", &intake_sha256(&sig)[..32]);
             return Ok(Outcome::data(json!({"verified": true, "via": "chat",
                 "issue": issue, "comment": c.id, "approved_by": c.user, "session": r.session,
                 "repo": repo_of(intake), "mode": mode, "nonce": nonce,
@@ -438,7 +443,8 @@ fn is_hold(body: &str) -> bool {
         text.lines().any(|line| {
             let mut l = line;
             loop {
-                let t = l.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#-+".contains(c));
+                let t =
+                    l.trim_start_matches(|c: char| c.is_whitespace() || "*_`>#-+[]".contains(c));
                 let d = t.trim_start_matches(|c: char| c.is_ascii_digit());
                 let n = if d.len() < t.len() {
                     d.strip_prefix(['.', ')']).unwrap_or(t)
@@ -455,16 +461,19 @@ fn is_hold(body: &str) -> bool {
                 return false;
             };
             let rest = rest.trim_start_matches(sep);
-            ["hold", "no"].iter().any(|w| {
-                (rest.strip_prefix(w))
-                    .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
-            })
+            ["hold", "no", "stop", "wait", "cancel", "deny", "reject"]
+                .iter()
+                .any(|w| {
+                    (rest.strip_prefix(w))
+                        .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric()))
+                })
         })
     })
 }
 
-/// Whether an owner's hold counts against record `rec`: written, or edited into a hold, after
-/// it (a deleted comment is gone from the list, an edited-away hold no longer matches).
+/// Whether an owner's hold counts against record `rec`: a hold written, or edited into a hold,
+/// after it, and (fail closed) any owner comment posted after it that was later edited, since an
+/// edit may have erased a hold. A deleted comment is gone from the list: a residual (spec 08).
 fn held(
     comments: &[crate::github::Comment],
     owners: &[String],
@@ -473,8 +482,10 @@ fn held(
     let when =
         |c: &crate::github::Comment| parse_rfc3339(&c.updated_at).max(parse_rfc3339(&c.created_at));
     comments.iter().any(|h| {
-        is_hold(&h.body)
-            && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
-            && (h.id > rec.id || when(h) > parse_rfc3339(&rec.created_at))
+        let after = h.id > rec.id || parse_rfc3339(&h.created_at) > parse_rfc3339(&rec.created_at);
+        owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
+            && ((after && !h.unedited())
+                || (is_hold(&h.body)
+                    && (h.id > rec.id || when(h) > parse_rfc3339(&rec.created_at))))
     })
 }
