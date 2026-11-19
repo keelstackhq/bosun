@@ -242,7 +242,6 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
         return via_signer(dir, args);
     }
     if args.chat {
-        crate::ctx::trusted_identity()?;
         return super::approve_chat::run(dir, args);
     }
     if let Some(key) = &args.sign_key {

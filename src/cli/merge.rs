@@ -20,7 +20,6 @@ use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 
 pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
-    crate::ctx::trusted_identity()?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let pr = args.pr;
