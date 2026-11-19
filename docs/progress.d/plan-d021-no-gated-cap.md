@@ -1,1 +1,0 @@
-- 2026-11-19 · Plan DC21 (D-021 no gated cap) · plans/d021-no-gated-cap.md: H1 decisions#21 merge, T1 org-decisions sync, T2 (R-weaken, owner) drops the gated cap with allow delete-test, fewer-asserts on named cap tests · plan PR
