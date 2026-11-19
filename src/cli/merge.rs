@@ -28,7 +28,7 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
     let members = crate::registry::load(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
-    let child = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
+    let child = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| !v.trim().is_empty());
     if app.ctx.origin == Origin::Spawned
         || child
         || !is_orchestrator(&members, session, app.ctx.now)
