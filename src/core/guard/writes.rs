@@ -59,12 +59,12 @@ fn redirect<'a>(word: &'a str, next: Option<&'a String>) -> Option<&'a str> {
 }
 
 /// The command word of a segment and its arguments, after assignments, wrappers (`if`, `then`,
-/// `{`, a leading `(`) and runners with their options (`sudo -u x`, `time`, `env`); and whether
-/// a runner changes directory (`env -C dir`, `sudo -D dir`).
-pub(super) fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
+/// `{`, a leading `(`) and runners with their options (`sudo -u x`, `time`, `env`); and the
+/// directories those runners move to (`env -C dir`, `sudo -D dir`).
+pub(super) fn command_of(seg: &[String]) -> (&str, Vec<&str>, Vec<String>) {
     let all: Vec<&str> = seg.iter().map(|w| w.trim_start_matches('(')).collect();
     let mut cmd: &[&str] = &all;
-    let mut moved = false;
+    let mut moved = Vec::new();
     loop {
         let wrapper = |w: &str| {
             (w.contains('=') && !w.starts_with('-'))
@@ -73,7 +73,7 @@ pub(super) fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
         };
         let skip = cmd.iter().take_while(|w| wrapper(w)).count();
         let (rest, dirs, _) = unwrap_runners(&cmd[skip..]);
-        moved |= !dirs.is_empty();
+        moved.extend(dirs.iter().map(|d| d.to_string()));
         if rest.len() == cmd.len() {
             break;
         }
@@ -101,7 +101,7 @@ pub fn bash_writes(command: &str) -> Vec<String> {
     for seg in words.split(|w| w == SEP) {
         let mut found: Vec<String> = Vec::new();
         let (cmd, all, here_moved) = command_of(seg);
-        let moved_now = moved || here_moved;
+        let moved_now = moved || !here_moved.is_empty();
         for (i, w) in seg.iter().enumerate() {
             found.extend(redirect(w, seg.get(i + 1)).map(str::to_string));
         }
@@ -202,7 +202,7 @@ fn moves_before(text: &str) -> bool {
         .split(|w| w == SEP)
         .any(|seg| {
             let (cmd, _, moved) = command_of(seg);
-            moved || matches!(cmd, "cd" | "pushd" | "popd")
+            !moved.is_empty() || matches!(cmd, "cd" | "pushd" | "popd")
         })
 }
 

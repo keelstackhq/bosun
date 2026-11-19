@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::writes::command_of;
 use super::{
     SEP, bash_writes, edited_path, prose, read_only, shell_words, split_heredocs, strings,
+    word_scripts,
 };
 
 const FIX: &str = "the hooks and permissions in .claude/settings*.json and ~/.claude are the \
@@ -102,6 +103,48 @@ fn opt<'a>(args: &[&'a str], short: &str, long: &str) -> Option<&'a str> {
     })
 }
 
+/// The index of the git subcommand: the first word that is not an option or its value.
+fn git_sub(args: &[&str]) -> Option<usize> {
+    (0..args.len())
+        .find(|&i| !args[i].starts_with('-') && !(i > 0 && matches!(args[i - 1], "-C" | "-c")))
+}
+
+/// Whether a word is a redirection (`>f`, `2>f`, `&>f`), which ends a command's operands.
+fn is_redir(word: &str) -> bool {
+    word.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
+        .starts_with('>')
+}
+
+/// Where `cp` or `install` puts its files: the `-t` value (`-t D`, `-tD`, `-rt D`,
+/// `--target-directory[=]D`), else the last operand.
+fn destination<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let args: Vec<&str> = args.iter().copied().take_while(|a| !is_redir(a)).collect();
+    let dir = args.iter().enumerate().find_map(|(i, a)| {
+        let next = args.get(i + 1).copied().unwrap_or("");
+        if let Some(v) = a.strip_prefix("--target-directory=") {
+            return Some(v);
+        }
+        let short = a.starts_with('-') && !a.starts_with("--");
+        let at = a.find('t').filter(|_| short || *a == "--target-directory");
+        at.map(|at| {
+            Some(&a[at + 1..])
+                .filter(|r| short && !r.is_empty())
+                .unwrap_or(next)
+        })
+    });
+    dir.or_else(|| args.iter().rev().find(|a| !a.starts_with('-')).copied())
+}
+
+/// A word as a path from `.claude`, for a command that runs there (`rm settings.json`).
+fn from_claude(word: &str) -> String {
+    let free = word.starts_with(['-', '/', '~', '$', '>']) || word.contains('>');
+    if free {
+        word.into()
+    } else {
+        format!(".claude/{word}")
+    }
+}
+
 /// The settings-lock for one tool call; `None` allows it.
 pub(super) fn settings_rule(tool: &str, input: &Value) -> Option<String> {
     if tool == "Bash" {
@@ -129,11 +172,9 @@ fn mutates(cmd: &str, args: &[&str]) -> bool {
         "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "touch" | "chmod" | "chown" | "ln"
         | "mv" => any(args),
         // `bash_writes` skips `~` and `$HOME` targets: judge them here (a path word only).
-        "cp" | "install" => {
-            let last = args.iter().rev().find(|a| !a.starts_with('-'));
-            opt(args, "-t", "--target-directory").is_some_and(target)
-                || last.is_some_and(|a| protected(a))
-        }
+        // The destination is the `-t` value (also in a cluster: `-rt DIR`) or the last operand,
+        // and may be the `.claude` directory itself.
+        "cp" | "install" => destination(args).is_some_and(target),
         "tee" => args.iter().any(|a| protected(a)),
         "sed"
             if args.iter().any(|a| {
@@ -162,8 +203,7 @@ fn mutates(cmd: &str, args: &[&str]) -> bool {
                 && (any(args) || opt(args, "-C", "--directory").is_some_and(target))
         }
         "git" => {
-            let opt = |i: usize| i > 0 && matches!(args[i - 1], "-C" | "-c");
-            let sub = (0..args.len()).find(|&i| !args[i].starts_with('-') && !opt(i));
+            let sub = git_sub(args);
             let ops = ["checkout", "restore", "stash", "reset", "clean", "rm", "mv"];
             sub.is_some_and(|i| ops.contains(&args[i]) && any(&args[i + 1..]))
         }
@@ -173,7 +213,7 @@ fn mutates(cmd: &str, args: &[&str]) -> bool {
 
 /// Whether a redirection in the segment (`>f`, `>> f`, `2>f`) writes a target; unlike
 /// `bash_writes` it also sees `~` and `$HOME` paths.
-fn redirects(seg: &[String]) -> bool {
+fn redirects(seg: &[String], cwd: bool) -> bool {
     seg.iter().enumerate().any(|(i, w)| {
         let op = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
         let rest = op.strip_prefix('>').map(|r| r.trim_start_matches('>'));
@@ -184,8 +224,52 @@ fn redirects(seg: &[String]) -> bool {
                 r
             }
         });
-        to.is_some_and(target)
+        to.is_some_and(|t| target(&if cwd { from_claude(t) } else { t.into() }))
     })
+}
+
+/// Whether the commands in `text` mutate a target. `cwd` is set once a `cd`, `pushd`, `git -C`,
+/// `env -C` or `sudo -D` goes into `.claude`: relative words then count as paths in it (sticky
+/// to the end, which only makes it stricter). Subshell groups are scanned in line; `sh -c`,
+/// `eval` and `env -S` strings are scanned again with the current `cwd`.
+fn mutated(text: &str, mut cwd: bool, depth: usize) -> bool {
+    let words = shell_words(&split_heredocs(text).0);
+    for seg in words.split(|w| w == SEP) {
+        let (cmd, args, dirs) = command_of(seg);
+        let git = (cmd == "git")
+            .then(|| opt(&args, "-C", "--work-tree"))
+            .flatten();
+        let here = cwd || dirs.iter().map(String::as_str).chain(git).any(target);
+        // Git's options and subcommand are words, not paths.
+        let lead = if cmd == "git" {
+            git_sub(&args).map_or(args.len(), |i| i + 1)
+        } else {
+            0
+        };
+        let args: Vec<String> = (args.iter().enumerate())
+            .map(|(i, a)| {
+                if here && i >= lead {
+                    from_claude(a)
+                } else {
+                    a.to_string()
+                }
+            })
+            .collect();
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        if mutates(cmd, &refs) || redirects(seg, here) {
+            return true;
+        }
+        if matches!(cmd, "cd" | "pushd") {
+            cwd |= args
+                .iter()
+                .find(|a| !a.starts_with('-'))
+                .is_some_and(|d| target(d));
+        }
+    }
+    depth < 4
+        && word_scripts(text)
+            .iter()
+            .any(|s| mutated(s, cwd, depth + 1))
 }
 
 fn bash(command: &str) -> Option<String> {
@@ -195,12 +279,7 @@ fn bash(command: &str) -> Option<String> {
         .filter(|c| !matches!(c, '\'' | '"' | '\\'))
         .collect();
     let words = shell_words(&split_heredocs(&text).0);
-    let (mut interp, mut mutated) = (false, false);
-    for seg in words.split(|w| w == SEP) {
-        let (cmd, args, _) = command_of(seg);
-        interp |= INTERP.contains(&cmd);
-        mutated |= mutates(cmd, &args) || redirects(seg);
-    }
+    let interp = (words.split(|w| w == SEP)).any(|seg| INTERP.contains(&command_of(seg).0));
     // `read_only` ignores redirections: a `>` in code that runs counts as a write.
     let reads = read_only(&text, 0) && !text.contains('>');
     let sets = (HOOKS_OFF.is_match(&text) || HOOKS_OFF.is_match(&dequoted))
@@ -208,7 +287,7 @@ fn bash(command: &str) -> Option<String> {
         && !reads;
     let code = interp && TEXT.is_match(&dequoted) && !reads;
     let writes = bash_writes(command).iter().any(|p| protected(p));
-    (mutated || code || sets || writes)
+    (mutated(&text, false, 0) || code || sets || writes)
         .then(|| format!("the command writes the guard's own settings: {FIX}"))
 }
 
@@ -332,8 +411,45 @@ mod tests {
             "ln -s x .claude/settings.json",
             "ln -sfn /tmp/d .claude",
             "ln -s .claude/settings.json link",
+            "cp f .claude/",
+            "cp f ./.claude/",
+            "cp f .claude",
+            "cp f .claude 2>/dev/null",
+            "install -m 644 f ~/.claude",
+            "cp -rt .claude f",
+            "cp -t.claude f",
         ] {
             assert!(sh(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn a_directory_change_into_claude_makes_relative_words_targets() {
+        for c in [
+            "cd .claude && rm settings.json",
+            "cd ./.claude; echo {} > settings.json",
+            "pushd .claude && cp x settings.local.json",
+            "cd ~/.claude && rm -rf *",
+            "cd .claude && rm -rf .",
+            "git -C .claude checkout -- settings.json",
+            "env -C .claude rm settings.json",
+            "sudo -D .claude rm settings.json",
+            "(cd .claude && rm settings.json)",
+            "sh -c 'cd .claude && rm settings.json'",
+            "eval \"cd ~/.claude; echo {} > settings.json\"",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+        for c in [
+            "cd .claude && cat settings.json",
+            "cd .claude && ls",
+            "cd .claude && cp settings.json /tmp/x",
+            "cd src && rm a.rs",
+            "cp -t /tmp .claude/settings.json",
+            "git -C .claude status",
+            "env -C src rm a.rs",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
         }
     }
 
