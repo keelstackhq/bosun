@@ -84,10 +84,10 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 - Owner approvals (D-012): the session asks the owner with a form in the Claude Code chat
   (`AskUserQuestion`: repo, PR, head SHA; approve or hold); a child session sends the request to
   the orchestrator. On approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>` (the chat record
-  for that head; a signed `--sign-key` form still works). Only an orchestrator posts it; never
-  write the `bosun:chat-approval` marker yourself. Never ask the owner to write a GitHub
+  for that head; a signed `--sign-key` form still works). A worker never posts it: a guard refuses the
+  `bosun:chat-approval` marker in its writes, never write it yourself. Never ask the owner to write a GitHub
   comment; their own `/bosun approve <sha>` comment is only a fallback. With `[ci] provider =
-  "none"` the orchestrator merges with `bosun merge <pr>`. The guards stop confused workers, not a worker that lies; `[approvals] chat_signed = true` (signed records, an enrolled ed25519 key) is the strong path.
+  "none"` the orchestrator merges with `bosun merge <pr>`. The guards stop confused workers, not a worker that lies; signed records (an enrolled ed25519 key) are the strong path, which comes with the follow-up PRs (#671-#673, #644).
 - Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
   `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
 - The PreToolUse hook refuses destructive commands (`rm -rf /` or `~`, `mkfs`, `dd` to a device,

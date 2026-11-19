@@ -52,12 +52,11 @@ No CI, no key, no approvers file. The owner answers one chat form per gated PR (
    setup PR. The pin must be 0.21.0 or later (adopt checks) for `[ci] provider` and chat approvals.
 3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr>@<head> --chat --question <id>`
    posts the record for that head. No signing key; `.bosun/approvers.toml` is optional.
-4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>` (it re-checks every
-   gate on the exact head). With CI, auto-merge does it.
+4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>` (it checks the gate stamps on the exact head; the follow-up PRs #671-#673 rerun the gates there). With CI, auto-merge does it.
 
-Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. Trust model: The guards stop confused workers, not a worker that lies; `[approvals] chat_signed = true` (signed records, an enrolled ed25519 key) is the strong path. The key is known
+Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. Trust model: the guards stop confused workers, not a worker that lies; signed records (an enrolled ed25519 key) are the strong path, which comes with the follow-up PRs (#671-#673, #644). The `[approvals]` keys are known
 from release 0.21.0: pin that release first (the setup PR that moves `.bosun/version`), then set
-the key in a later PR; an older pin rejects it.
+them in a later PR; an older pin rejects them.
 
 ## For agents
 
@@ -216,7 +215,7 @@ else console.log(`exit ${r.exit_code}, next step: ${r.error.fix}`); // e.g. 3: p
 
 - **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,
   head SHA; approve or hold); on approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>`,
-  which posts the chat record for that exact head; `risk-check` counts it like your own comment
+  which posts the chat record for that exact head; `risk-check` counts it as an owner approval of that head
   (spec §8, chat records). A signed `bosun approve <pr>@<head> --sign-key <pem>` still works
   when you enrolled a key (D-012). Fallback:
   comment on the PR yourself, as a login in `governance/owners.toml`, with exactly

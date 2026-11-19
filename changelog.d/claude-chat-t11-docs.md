@@ -1,1 +1,1 @@
-- Chat approval docs: `bosun adopt --ci none --policy autonomous --owner <login>`, chat records and `chat_signed` trust model, keys known from 0.21.0, `bosun merge` without CI.
+- Chat approval docs: `bosun adopt --ci none --policy autonomous --owner <login>`, chat records and the trust model (guards stop confused workers; signed records come with #671-#673, #644), keys known from 0.21.0, `bosun merge` without CI.
