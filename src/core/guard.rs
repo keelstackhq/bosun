@@ -445,13 +445,13 @@ pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
     let hit = match tool {
         "Bash" => {
             let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
-            names_answers(cmd) && !answers_read_only(cmd)
+            names_answers(cmd) && !answers_read_only(cmd) && !names_only_in_text(cmd)
         }
         _ => edited_path(tool, input).is_some_and(|p| is_answers_path(&p)),
     };
     hit.then(|| {
-        "the owner's answers file is written only by the PostToolUse hook for AskUserQuestion; \
-         do not write it (reading is fine). Ask the owner with `bosun approve --list` \
+        "the owner's answers file is written only by the PostToolUse hook for AskUserQuestion, \
+         and ~/.claude/projects (session transcripts) only by Claude Code; do not write them (reading is fine). Ask the owner with `bosun approve --list` \
          and let the answer arrive through the tool"
             .to_string()
     })
@@ -491,16 +491,38 @@ fn answers_read_only(command: &str) -> bool {
                     | "test"
                     | "["
                     | "cd"
+                    | "echo"
+                    | "printf"
             ),
         }
     })
 }
 
-/// `.../bosun/answers.json` once lexically normalised.
+/// `.../bosun/answers.json` or anything under `.../.claude/projects/` once lexically normalised.
 fn is_answers_path(path: &str) -> bool {
-    let norm = lexical(&path.replace('\\', "/")).to_lowercase();
-    let mut parts = norm.rsplit('/');
-    parts.next() == Some("answers.json") && parts.next() == Some("bosun")
+    let norm = format!("/{}", lexical(&path.replace('\\', "/")).to_lowercase());
+    norm.ends_with("/bosun/answers.json") || norm.contains("/.claude/projects/")
+}
+
+/// Only a `git commit` or `gh pr|issue create|edit|comment` message, title or body names the file
+/// (`-m`, `--message`, `-b`, `--body`, `--title`, `-t`); no `$(...)` or backticks.
+fn names_only_in_text(cmd: &str) -> bool {
+    if cmd.contains(['`']) || cmd.contains("$(") {
+        return false;
+    }
+    shell_words(cmd).split(|w| w == SEP).all(|g| {
+        let msg = matches!(
+            g.iter().map(String::as_str).collect::<Vec<_>>()[..],
+            ["git", "commit", ..] | ["gh", "pr" | "issue", "create" | "edit" | "comment", ..]
+        );
+        let mut prev = "";
+        let rest = g.iter().all(|w| {
+            let text = ["-m", "--message", "-b", "--body", "--title", "-t"].contains(&prev);
+            prev = w;
+            text || !names_answers(w)
+        });
+        rest && (msg || !names_answers(&g.join(" ")))
+    })
 }
 
 /// Whether the command text names `answers.json` or the state dir `.git/bosun`.
@@ -509,7 +531,7 @@ fn names_answers(command: &str) -> bool {
     while t.contains("//") || t.contains("/./") {
         t = t.replace("//", "/").replace("/./", "/");
     }
-    let state = |s: &str| s.contains(".git/bosun");
+    let state = |s: &str| s.contains(".git/bosun") || s.contains(".claude/projects");
     t.contains("answers.json")
         || state(&t)
         || shell_words(&t)
@@ -7228,6 +7250,13 @@ mod tests {
             "cat f | tee .git/bosun/answers.json",
             "cat .git/bosun/answers.json > .git/bosun/answers.json",
             "cat .git/bosun/answers.json; rm .git/bosun/answers.json",
+            "cp f ~/.claude/projects/p/s.jsonl",
+            "echo x > $HOME/.claude/projects/p/s.jsonl",
+            "tee /root/.claude/projects/p/s.jsonl < f",
+            "cd ~/.claude/projects && cp f p/",
+            "git commit -m 'answers.json' > .git/bosun/answers.json",
+            "git commit -m x && cp f answers.json",
+            "git commit -m x -F answers.json",
         ] {
             assert!(bash(w), "{w}");
         }
@@ -7235,6 +7264,9 @@ mod tests {
         assert!(edit("/r/.git/bosun//answers.json"));
         assert!(edit("/r/.git/bosun/ANSWERS.json"));
         assert!(!edit("/r/.git/bosun/other.json"));
+        assert!(edit("/root/.claude/projects/p/s.jsonl"));
+        assert!(edit("~/.claude/projects/p/../q/s.jsonl"));
+        assert!(!edit("/r/.claude/settings.json"));
     }
 
     #[test]
@@ -7305,6 +7337,11 @@ mod tests {
             "ls -l .git/bosun",
             "stat .git/bosun/answers.json",
             "cd .git/bosun && cat answers.json",
+            "cat ~/.claude/projects/p/s.jsonl | head -3",
+            "git commit -m 'guard answers.json; and .git/bosun'",
+            "gh pr create --title t --body 'the answers.json lock'",
+            "test -f .git/bosun/answers.json && echo yes",
+            "cat .git/bosun/answers.json 2>/dev/null || echo none",
         ] {
             assert!(!bash(c), "{c}");
         }

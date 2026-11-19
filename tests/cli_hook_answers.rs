@@ -110,11 +110,13 @@ fn transcript_as(repo: &Path, input: &Value, result: bool, answers: Value, name:
         .map(|(q, a)| format!("\"{q}\"=\"{}\"", a.as_str().unwrap_or("")))
         .collect::<Vec<_>>()
         .join(", ");
-    let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
+    let sid = input["session_id"].clone();
+    let call = json!({"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
         {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
-    let done = json!({"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": id,
-            "content": format!("User has answered your questions: {said}. You can now continue.")}]}});
+    // the real format: a text `tool_result` plus the structured `toolUseResult.answers`
+    let done = json!({"type": "user", "sessionId": sid, "toolUseResult": {"answers": answers},
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id,
+            "content": format!("Your questions have been answered: {said}. You can now continue with these answers in mind.")}]}});
     let lines = if result { vec![call, done] } else { vec![call] };
     let dir = repo
         .join(".home")
@@ -686,6 +688,51 @@ fn a_child_session_stores_nothing() {
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("not stored"),
         "{out:?}"
+    );
+    assert_eq!(stored(r.path()), json!({}));
+}
+
+#[test]
+fn the_transcript_lines_must_carry_the_input_session_id() {
+    let r = repo();
+    let input = question(&[(12, &head("abc1234"))], "Approve #12 abc1234");
+    let path = transcript(r.path(), &input, true);
+    let file = std::path::PathBuf::from(path.as_str().unwrap());
+    let good = std::fs::read_to_string(&file).unwrap();
+    let other = input["session_id"].as_str().unwrap();
+    for bad in [format!("\"sessionId\":\"{other}\""), String::new()] {
+        let swapped = good.replace(&bad, "\"sessionId\":\"another\"");
+        std::fs::write(
+            &file,
+            if bad.is_empty() {
+                good.replace("\"sessionId\":", "\"x\":")
+            } else {
+                swapped
+            },
+        )
+        .unwrap();
+        let mut forged = input.clone();
+        forged["transcript_path"] = path.clone();
+        let out = post_raw(r.path(), &forged, NOW);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("not stored"),
+            "{out:?}"
+        );
+        assert_eq!(stored(r.path()), json!({}));
+    }
+}
+
+#[test]
+fn a_transcript_without_the_tool_result_line_says_no_answer_yet() {
+    let r = repo();
+    let input = question(&[(12, &head("abc1234"))], "Hold");
+    let mut open = input.clone();
+    open["transcript_path"] = transcript(r.path(), &input, false);
+    let out = post_raw(r.path(), &open, NOW);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no answer yet") && err.contains("not stored"),
+        "{err}"
     );
     assert_eq!(stored(r.path()), json!({}));
 }
