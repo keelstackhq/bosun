@@ -579,7 +579,8 @@ const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019)
 /// an identity name (`NAME=v`, or export, unset, ... naming `CLAUDE_CODE`, `_SESSION`,
 /// `_ORIGIN`, `BOSUN_$`, `CLAUDE_$`) is refused only when the text also looks like `bosun merge`
 /// (a `merge` word, a `$` command word, a `$` word after `bosun`): `BOSUN_SESSION=s/12 bosun
-/// claim 12` and mere mentions pass. It stops confused workers, not liars.
+/// claim 12`, mere mentions and git, gh, rg, grep, echo text pass, as do `${!a[@]}` and
+/// `${!p@}`. It stops confused workers, not liars.
 fn identity_tamper(text: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
     let plain = plain.replace("$IFS", " ").replace("${IFS}", " ");
@@ -588,7 +589,6 @@ fn identity_tamper(text: &str) -> Option<String> {
     let mention = |w: &str| names.iter().any(|n| w.contains(n));
     let is_in = |list: &str, w: &str| list.split(' ').any(|c| c == base(w));
     let (mut merge, mut setter) = (false, false);
-    // `${!arr[@]}` and `${!prefix@}` list names and pass.
     let mut drops = plain.split("${!").skip(1).any(|r| {
         let name = r.split('}').next().unwrap_or("");
         !["[@]", "[*]", "@", "*"].iter().any(|e| name.ends_with(e))
@@ -603,14 +603,11 @@ fn identity_tamper(text: &str) -> Option<String> {
             || t.iter().enumerate().any(|(i, w)| {
                 *w == "merge" || (i > 0 && base(t[i - 1]) == "bosun" && w.contains('$'))
             });
-        // git, gh, rg, grep, echo only mention a name (a commit message, a pattern).
-        let text = first.is_some_and(|i| is_in("git gh rg grep echo", t[i]));
-        let named = t.iter().any(|w| mention(w));
-        setter |= !text
-            && (t
-                .iter()
-                .any(|w| w.split_once('=').is_some_and(|(n, _)| mention(n)))
-                || (named && t.iter().any(|w| is_in(setters, w))));
+        let assigns = t
+            .iter()
+            .any(|w| w.split_once('=').is_some_and(|(n, _)| mention(n)));
+        let named = t.iter().any(|w| mention(w)) && t.iter().any(|w| is_in(setters, w));
+        setter |= !first.is_some_and(|i| is_in("git gh rg grep echo", t[i])) && (assigns || named);
         drops |= t.iter().enumerate().any(|(i, w)| match base(w) {
             "env" => drops_env(&t[i + 1..], 'i'),
             "exec" => drops_env(&t[i + 1..], 'c'),
