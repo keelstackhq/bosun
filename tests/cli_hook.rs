@@ -875,8 +875,8 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
     }
 }
 
-/// D-019, end to end through `bosun hook pre-tool-use`: every way of changing the caller's
-/// identity in a command that runs `bosun merge` is denied; the bare command is not.
+/// D-019, end to end through `bosun hook pre-tool-use`: any command that names an identity
+/// variable or drops the environment is denied, whether or not it is spelled `bosun merge`.
 #[test]
 fn bosun_merge_env_tamper_is_denied_through_the_hook() {
     let (fake, tmp) = (FakeGithub::start(), repo());
@@ -889,18 +889,24 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "export CLAUDE_CODE_CHILD_SESSION=0; bosun merge 1",
         "export BOSUN_ORIGIN=local && bosun merge 1",
         "unset CLAUDE_CODE_CHILD_SESSION; bosun merge 1",
-        "declare -x BOSUN_SESSION=x; bosun merge 1",
-        "set -a; bosun merge 1",
         "env -u CLAUDE_CODE_CHILD_SESSION bosun merge 1",
         "env -i bosun merge 1",
-        "(export BOSUN_ORIGIN=local; bosun merge 1)",
-        "b=bosun; $b merge 1",
-        "x=CLAUDE_CODE_CHILD_SESSION; unset ${!x}; bosun merge 1",
-        "n=BOSUN_SESSION; export ${!n}=orch; bosun merge 1",
+        "exec -c bosun merge 1",
+        "command env -i ${b}un merge 1",
+        "{ \\env - bosun merge 1; }",
+        "(export BOSUN_ORIGIN=local; ${b}un merge 1)",
+        "n=BOSUN_SESSION; export ${!n}=orch; xargs bosun merge 1",
     ] {
         let o = bash(c);
         assert!(o.stdout.contains("deny"), "{c}: {}", o.stdout);
+        assert!(o.stdout.contains("unmodified"), "{c}: {}", o.stdout);
     }
-    let o = bash("bosun merge 1");
-    assert!(!o.stdout.contains("deny"), "{}", o.stdout);
+    for c in [
+        "bosun merge 12",
+        "cargo test",
+        "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
+    ] {
+        let o = bash(c);
+        assert!(!o.stdout.contains("deny"), "{c}: {}", o.stdout);
+    }
 }
