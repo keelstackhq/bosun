@@ -47,12 +47,8 @@ pub(crate) fn cmd(program: &str) -> Command {
 pub fn isolate(private: &Path) {
     let home = std::env::var("HOME").unwrap_or_default();
     let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
-    let nogit = [
-        ("GIT_CONFIG_NOSYSTEM", "1"),
-        ("GIT_CONFIG_GLOBAL", "/dev/null"),
-    ];
-    let mut env: Vec<_> = nogit.map(|(k, v)| (k, v.to_string())).into();
-    env.push(("RUSTUP_HOME", rustup));
+    let mut env = vec![("RUSTUP_HOME", rustup), ("GIT_CONFIG_NOSYSTEM", "1".into())];
+    env.push(("GIT_CONFIG_GLOBAL", "/dev/null".into()));
     let keep = "PATH LANG LC_ALL TERM HTTPS_PROXY https_proxy NO_PROXY SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE GIT_SSL_CAINFO REQUESTS_CA_BUNDLE";
     for n in keep.split(' ') {
         env.extend(std::env::var(n).ok().map(|v| (n, v)));
