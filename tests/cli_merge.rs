@@ -840,8 +840,8 @@ fn merge_refuses_a_cargo_dir_above_the_temp_repo() {
 /// Each gate gets its own HOME, CARGO_HOME and TMPDIR: nothing one gate leaves reaches the next.
 #[test]
 fn merge_gives_every_gate_fresh_homes() {
-    let fmt = "echo \"$HOME $CARGO_HOME $TMPDIR\" > .gl";
-    let lint = "for v in $HOME $CARGO_HOME $TMPDIR; do ! grep -qF \"$v\" .gl || exit 1; done";
+    let fmt = "echo \"$HOME $CARGO_HOME $TMPDIR\" > ../.gl";
+    let lint = "for v in $HOME $CARGO_HOME $TMPDIR; do ! grep -qF \"$v\" ../.gl || exit 1; done";
     let (fake, dir) = merge_ready(fmt);
     fake.content(
         ".bosun/profiles/rust.toml",
@@ -850,6 +850,33 @@ fn merge_gives_every_gate_fresh_homes() {
     );
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 0, "{v}");
+}
+
+/// Gate directories have fresh random names: a planted `../gate1/cargo/config.toml` is never read.
+#[test]
+fn merge_gate_dirs_cannot_be_preplanted() {
+    let both = "for n in 1 2; do mkdir -p ../gate$n/cargo; echo x > ../gate$n/cargo/config.toml; done; test ! -f \"$CARGO_HOME/config.toml\"";
+    let (fmt, lint) = (both, both);
+    let (fake, dir) = merge_ready(fmt);
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, lint),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+/// Any change to the working tree (a new file, not only the commit) is caught: exit 5.
+#[test]
+fn merge_refuses_a_gate_that_adds_a_file() {
+    let (fake, dir) = merge_ready("echo x > planted.rs");
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("changed"),
+        "{v}"
+    );
 }
 
 /// A gate that plants a `.cargo` above the repo (a cargo runner) stops the next gate: exit 5.

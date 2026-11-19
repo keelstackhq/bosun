@@ -103,11 +103,13 @@ impl Overlay {
         }
         Ok(())
     }
+}
 
-    /// Whether every file in `root` is still exactly the base's (or absent where the base lacks it).
-    fn intact(&self, root: &Path) -> bool {
-        (self.files.iter()).all(|(rel, text)| std::fs::read_to_string(root.join(rel)).ok() == *text)
-    }
+/// The tree id of everything in `wt` (ignored files too, build output under `target` aside), staged.
+fn snapshot(wt: &Path) -> Result<String, BosunError> {
+    let add = ["add", "-A", "-f", "--", ".", ":(exclude,glob)**/target"];
+    gates::git(wt, &add)?;
+    Ok(gates::git(wt, &["write-tree"])?.trim().to_string())
 }
 
 fn non_empty(all: Vec<String>) -> Result<Vec<String>, BosunError> {
@@ -120,13 +122,13 @@ fn non_empty(all: Vec<String>) -> Result<Vec<String>, BosunError> {
     Ok(all)
 }
 
-/// A fresh empty directory (mode 0700) under the temp dir, with an unpredictable name.
-fn fresh_dir(tag: &str) -> Result<PathBuf, BosunError> {
+/// A new directory (mode 0700, create-new: it fails if the name exists) under `parent`, with a random name.
+fn fresh_dir(parent: &Path, tag: &str) -> Result<PathBuf, BosunError> {
     let mut raw = [0u8; 12];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw)
         .map_err(|_| BosunError::error("no random bytes for a temp dir", "retry"))?;
     let rnd = raw.iter().fold(String::new(), |a, b| format!("{a}{b:02x}"));
-    let p = std::env::temp_dir().join(format!("bosun-{tag}-{rnd}"));
+    let p = parent.join(format!("bosun-{tag}-{rnd}"));
     let mut dir = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
@@ -165,7 +167,7 @@ fn clean_above(repo: &Path, gate: &Path) -> Result<(), BosunError> {
 
 /// The gates a PR must pass, from the default branch's config at its current sha.
 pub fn required_gates(gh: &dyn Github) -> Result<Vec<String>, BosunError> {
-    let tmp = Private(fresh_dir("gates")?);
+    let tmp = Private(fresh_dir(&std::env::temp_dir(), "gates")?);
     let overlay = Overlay::load(gh, &default_ref(gh)?)?;
     overlay.apply(&tmp.0)?;
     non_empty(stamps::ready_gates(&tmp.0)?)
@@ -183,7 +185,7 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
             format!("rerun `bosun merge {n}` once GitHub reports real commit ids"),
         ));
     }
-    let private = Private(fresh_dir(&format!("merge-{n}"))?);
+    let private = Private(fresh_dir(&std::env::temp_dir(), &format!("merge-{n}"))?);
     let repo = private.0.join("repo");
     std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
     gates::isolate(&private.0.join("setup"));
@@ -217,23 +219,23 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
             ),
         ));
     }
-    let tree = gates::git(&repo, &["rev-parse", &format!("{head}^{{tree}}")])?;
     gates::git(&repo, &["checkout", "-q", "--detach", head])?;
-    run_gates(app, pull, &repo, tree.trim())
+    run_gates(app, pull, &repo)
 }
 
-fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String>, BosunError> {
+fn run_gates(app: &App, pull: &Pull, wt: &Path) -> Result<Vec<String>, BosunError> {
     // The PR's base commit, not the branch name: it cannot move between the checks and the run.
     let overlay = Overlay::load(app.gh.as_ref(), &pull.base_sha)?;
     overlay.apply(wt)?;
     let all = non_empty(stamps::ready_gates(wt)?)?;
     let config = &overlay.config;
+    let want = snapshot(wt)?;
     let mut failed = Vec::new();
     let private = wt.parent().unwrap_or(wt);
     for (i, gate) in all.iter().enumerate() {
         // Fresh before each gate, and checked after: an earlier gate (head code) cannot steer a later one.
         overlay.apply(wt)?;
-        let own = private.join(format!("gate{i}"));
+        let own = fresh_dir(private, &format!("gate{i}"))?;
         gates::isolate(&own);
         clean_above(wt, &own)?;
         let res = if gate == "test-integrity" {
@@ -247,11 +249,10 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
                 all: true,
             })
         };
-        let same = gates::git(wt, &["rev-parse", "HEAD^{tree}"]).is_ok_and(|t| t.trim() == tree);
-        if !overlay.intact(wt) || !same {
+        if snapshot(wt).ok().as_deref() != Some(&want) {
             return Err(BosunError::needs_human(
                 format!(
-                    "gate {gate} of PR #{} changed the base's config or tool files, or the checked-out commit",
+                    "gate {gate} of PR #{} changed the checked-out tree (head plus the base's files)",
                     pull.number
                 ),
                 "the author removes whatever in the head rewrites them; the owner reviews the head",
