@@ -1,13 +1,13 @@
 # Chat approval, no-CI mode, setup auto-detect Implementation Plan
 
-> **Ported 2026-11-18 onto 0.20.0.** The original PRs were rebuilt on the current main as a stack of
-> branches: `claude/chat-t10-merge` carries T1-T5, T8-T10; siblings `claude/chat-t6-guard` (T6),
+> **Ported 2026-11-18 onto 0.20.0; stacked, pending review and landing.** This plan lives on
+> `claude/chat-plan`. The original PRs were rebuilt on the current main as a stack of branches: `claude/chat-t10-merge` carries T1-T5, T8-T10; siblings `claude/chat-t6-guard` (T6),
 > `claude/chat-t7-user-hooks` (T7), `claude/chat-t12-intake` (T12); this docs task is
 > `claude/chat-t11-docs`. The new config keys (`[approvals] chat`, `chat_signed`, `[ci] provider`) are
 > read from the next release after 0.21.0 (0.22.0); 0.21.0 does not read them. Org decisions D-016 to D-020 now
 > govern (every owner approval asked in chat, `bosun merge` for `provider = "none"`).
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]` open, `- [x]` done) syntax for tracking.
 
 **Goal:** the owner approves every gated PR with one chat answer, from the first PR, with or
 without CI; an orchestrator records it and (owner decision a) `bosun merge` merges without CI.
@@ -25,7 +25,7 @@ batches).
 
 ## Global Constraints
 
-- One task = one PR from `origin/main`, ≤400 changed lines (tests, lockfiles excluded; D-013),
+- One task = one PR from `origin/main`, ≤400 changed lines (tests, lockfiles excluded; D-016),
   with `changelog.d/<branch>.md` and `docs/progress.d/<branch>.md` (branch `/` → `-`).
 - stdout one JSON object; exit codes 0/1/2/3/4/5/6; `error.fix` never empty; `src/core` no I/O;
   tests offline via `tests/common`; tokens never printed.
@@ -38,7 +38,7 @@ batches).
   Option<String>` in `{"github","circleci","none"}`; add to `KNOWN_APPROVALS` in
   `tests/pinned_config.rs` (a new row for the release that first reads them) / known sections. Older pins reject them: release ordering as usual.
 - Hook guard is best effort (option A): it stops confused workers, not liars. Say so in §8.
-- Fast checks before each commit: `cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo nextest run --locked`.
+- Fast checks before each commit: `cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked`.
 - Dependency T0 is settled: D-018 (chat approvals) and D-019 (`bosun merge` for
   `provider = "none"`) are in the org decisions, so T0 no longer blocks T2 or T10.
 - Looser than D-018 for now: `origin` `local`/`slack` sessions at depth 2 also count as
@@ -295,7 +295,7 @@ verdict from another session (exit 5) → chat record when gated (exit 5, `next`
 **Gated:** yes (merge path, D13). **Model:** opus. **Depends:** T9 (T0 settled by D-019).
 **Branch:** `claude/bosun-merge`.
 
-**Files:** Create `src/cli/merge.rs`; Modify `src/cli/mod.rs:91` (`Command::Merge(MergeArgs
+**Files:** Create `src/cli/merge.rs`; Modify `CLAUDE.md` (the D-019 merge exception), `src/cli/mod.rs:91` (`Command::Merge(MergeArgs
 {pr: u64, method: Option<String>})`, name `merge`), `src/lib.rs:23` dispatch, `src/github/mod.rs`
 (trait `fn merge_pull(&self, number: u64, sha: &str, method: &str) -> Result<()>` = PUT
 `/pulls/{n}/merge` with `sha`, `merge_method`; 405/409 → `BosunError` exit 3), `tests/common/fake.rs`
@@ -327,7 +327,7 @@ hooks, `.bosun/approvers.toml` optional, `[approvals] chat = false` opt-out, rel
 ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines,
 (T0 is settled, so nothing goes to Blocked.) Test: `tests/fragments.rs` passes.
 
-- [ ] Write; `cargo nextest run --locked --test fragments` PASS. Fragments. Commit, push, PR.
+- [ ] Write; `cargo test --locked --test fragments` PASS. Fragments. Commit, push, PR.
 
 ### Task 12: `bosun intake verify` accepts a chat record (D-014 as amended by decisions#19)
 
@@ -338,7 +338,7 @@ record by the T2 rules (`count_chat`), keep signatures working; tests in `tests/
 
 ## Port onto 0.20.0 (2026-11-18)
 
-The stack was ported onto main as PRs #633-#644 (T1-T12), plus these split-outs and follow-ups:
+The stack is open as stacked PRs #633-#644 (T1-T12), pending landing, plus these split-outs and follow-ups:
 
 - [ ] T4b (#670): guard lock on answers.json (split from T4 for size).
 - [ ] T13 (#671): only Reviewer keys count for no-CI review verdicts.
@@ -349,6 +349,26 @@ The stack was ported onto main as PRs #633-#644 (T1-T12), plus these split-outs 
 
 Trust model: the guards stop confused workers, not a worker that lies; `chat_signed` is the
 stronger opt-in.
+
+### Task 15: post-landing follow-up (one PR from main, split if over 400 lines)
+
+Gated, opus. Open once the stack has landed. Each item comes from a review round.
+
+- [ ] D-018 gap (MAJOR): `src/ctx.rs` lets `BOSUN_ORIGIN` override the origin, so a spawned
+  child can set `local` and record a chat approval; depth-2 `local`/`slack` sessions and a
+  missing origin (default `local`) also count as orchestrators. Derive the origin from the
+  registry join, refuse `local`/`slack` for depth-2 and spawned sessions, and require a known origin.
+- [ ] Cloud fail-closed: when `CLAUDE_CODE_REMOTE=true` or the agent proxy is set and the remote
+  session id is missing, refuse the identity-trusting commands.
+- [ ] Verdict independence compares orchestrator roots, not only session ids.
+- [ ] `trusted_identity` applies to every command, not only merge, approve, verdict and join.
+- [ ] The `BOSUN_SESSION` allowance word check uses real shell-word matching.
+- [ ] LOW items from the reviews: json.tool `--`/dash positionals (#670); PreCompact git limit
+  (#679); skip-worktree, filter attributes, lingering gate daemons, the Cargo.lock doc, a list of
+  changed paths, and a snapshot with a fresh `GIT_INDEX_FILE` plus a config/attributes reset
+  (#672); home-relative `.claude`, `cd -`, the `tar -x` claim (#676); `function` keyword bodies,
+  non-`=` setters, env-drop wrappers (#680); fragmented names, setpriv, sudo (#640); hold forms
+  and a min(at, posted) lead-window floor (#644); adopt:200-203, README:48/54, spec 01:21 (#641).
 
 ## Notes from the stacked PRs (pending, not yet on main)
 
