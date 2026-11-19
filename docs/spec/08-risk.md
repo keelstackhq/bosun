@@ -63,7 +63,7 @@ High-risk PRs:
   CODEOWNERS. The default way (D-012): the session asks the owner with a form in the Claude Code
   chat (repo, PR, head SHA; approve or hold), and on approve the orchestrator posts a chat record (`bosun approve --chat`) or the signed
   `bosun approve` comment (chat records and signed approvals, below). Chat records count under
-  every approval policy. Trust model: the guards stop confused workers, not a worker that lies; signed records (an enrolled ed25519 key) are the strong path, which comes with the follow-up PRs (#671-#673, #644). The owner's own review or comment is the
+  every approval policy except on trust-file and R-unseen PRs. Trust model: an unsigned record is forgeable by whoever can post as the owner; `chat_signed` is the strong path. The owner's own review or comment is the
   fallback. Either counts: a GitHub review that approves the head SHA (the owner's newest
   approve, request-changes or dismissed review on that SHA; read on the next run, as no review
   event runs the `risk` workflow: a push, a `/bosun recheck` comment or a re-run), or a PR comment by the owner whose

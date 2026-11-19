@@ -1,1 +1,1 @@
-- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults, spec 04 and 08 state what this stack implements and the trust model (guards stop confused workers; signed records are the strong path, with #671-#673, #644).
+- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults and spec 08 describe what the t12 base implements (chat records, `chat_signed`, intake) and its limits.
