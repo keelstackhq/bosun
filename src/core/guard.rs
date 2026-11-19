@@ -614,14 +614,12 @@ fn merge_env_tamper(command: &str) -> Option<String> {
             [
                 "cd" | "jq" | "tee" | "head" | "tail" | "grep" | "cat" | "sleep",
                 ..,
-            ] => true,
-            ["python3", "-m", "json.tool"] => true,
+            ]
+            | ["python3", "-m", "json.tool"] => true,
             ["export", p] => p
                 .strip_prefix("PATH=")
                 .and_then(|r| r.strip_suffix(":$PATH"))
-                .is_some_and(|d| {
-                    !d.is_empty() && !d.replace("$HOME", "").contains(['$', '`', '='])
-                }),
+                .is_some_and(|d| !d.replace("$HOME", "").contains(['$', '`', '='])),
             ["echo" | "printf", ..] => !w.iter().any(|x| x.starts_with("-v")),
             ["git", ..] => matches!(
                 w.get(if w.get(1) == Some(&"-C") { 3 } else { 1 }),
