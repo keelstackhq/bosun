@@ -586,8 +586,11 @@ fn merge_words(command: &str) -> Vec<String> {
 /// D-019: `bosun merge` judges the caller from its own environment (`BOSUN_*`,
 /// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command line that runs bosun
 /// to merge (the word may hide in a variable) is an allowlist: every segment must be `bosun ...`
-/// itself, `cd`, a read-only `git` verb (status, log, diff, show, rev-parse, fetch), `echo` or
-/// `printf` without `-v`, or a `jq`, `tee` or `head`; no `${...}` and no `((`. Anything else
+/// itself (exactly `bosun` or an absolute path ending `/bosun`), `cd`, a read-only `git` verb
+/// (status, log, diff, show, rev-parse; a fetch is refused here and by the fetch rule), `echo` or
+/// `printf` without `-v`, `jq`, `tee`, `head`, `tail`, `grep`, `cat`, `sleep`, `python3 -m
+/// json.tool` or `export PATH=<dir>:$PATH`; no `${...}` (but `${PWD}`, `${HOME}`) and no `((`.
+/// A bosun command word with `$ \ { ? * [` or a backtick in a later word counts as a merge. Anything else
 /// (export, env, eval, `NAME=`, `wait -p`, `set -a`, a function, `time`) is refused. Best effort
 /// against a confused worker, not a liar: a script run by other means is missed.
 fn merge_env_tamper(command: &str) -> Option<String> {
@@ -595,25 +598,49 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     let runs_bosun = words
         .iter()
         .any(|w| base(w) == "bosun" || w.ends_with("=bosun") || w.starts_with("bosun"));
-    if !runs_bosun || !words.iter().any(|w| w == "merge") {
+    // A bosun (or `$x`, backtick) command word whose later words hide text (`bosun $m 1`) may be
+    // a merge: it is judged as one.
+    let hidden = rough_segments(command).iter().any(|seg| {
+        let mut t = seg.split_whitespace();
+        let cmd = t.next().map_or("", |c| c.trim_matches(['(', '"', '\'']));
+        let bosun = cmd == "bosun" || cmd.ends_with("/bosun") || cmd.starts_with('$');
+        (bosun || cmd.contains('`')) && t.any(|w| w.contains(['$', '\\', '{', '?', '*', '[', '`']))
+    });
+    if !hidden && (!runs_bosun || !words.iter().any(|w| w == "merge")) {
         return None;
     }
     let text = ["2>&1", "1>&2", ">&2"]
         .iter()
         .fold(command.to_string(), |t, r| t.replace(r, " "));
+    // `${PWD}` and `${HOME}` are plain reads; `${!n}`, `${n:=x}` stay refused.
+    let text = text.replace("${PWD}", "v").replace("${HOME}", "v");
     let allowed = |seg: &[String]| {
         let w: Vec<&str> = seg.iter().map(String::as_str).collect();
         match w[..] {
-            ["cd", ..] | ["jq" | "tee" | "head", ..] => true,
+            ["cd", ..]
+            | [
+                "jq" | "tee" | "head" | "tail" | "grep" | "cat" | "sleep",
+                ..,
+            ] => true,
+            ["python3", "-m", "json.tool"] => true,
+            ["export", p] => p
+                .strip_prefix("PATH=")
+                .and_then(|r| r.strip_suffix(":$PATH"))
+                .is_some_and(|d| {
+                    !d.is_empty() && !d.replace("$HOME", "").contains(['$', '`', '='])
+                }),
             ["echo" | "printf", ..] => !w.iter().any(|x| x.starts_with("-v")),
             ["git", ..] => {
                 let verb = w.get(if w.get(1) == Some(&"-C") { 3 } else { 1 });
                 matches!(
                     verb,
-                    Some(&("status" | "log" | "diff" | "show" | "rev-parse" | "fetch"))
+                    Some(&("status" | "log" | "diff" | "show" | "rev-parse"))
                 )
             }
-            [first, ..] => base(first) == "bosun",
+            [first, ..] => {
+                first == "bosun"
+                    || (first.starts_with('/') && first.ends_with("/bosun") && !first.contains('='))
+            }
             [] => true,
         }
     };
@@ -621,8 +648,9 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     (text.contains("${") || text.contains("((") || !words.split(|w| w == SEP).all(allowed)).then(
         || {
             "a command that runs `bosun merge` may only also run cd, read-only git \
-             (status, log, diff, show, rev-parse, fetch), echo or printf without -v, and jq, tee \
-             or head: the merge checks the caller's own identity (D-019); run `bosun merge <pr>` bare"
+             (status, log, diff, show, rev-parse), echo or printf without -v, jq, tee, \
+             head, tail, grep, cat, sleep and `export PATH=<dir>:$PATH`, and a hidden command \
+             word (`bosun $m 1`) is judged the same way: the merge checks the caller's own identity (D-019); run `bosun merge <pr>` bare"
                 .to_string()
         },
     )
@@ -7375,6 +7403,21 @@ mod tests {
             "set -o allexport; bosun merge 1",
             "echo ${BOSUN_SESSION:=x}; bosun merge 1",
             "git status; time bosun merge 1",
+            "git fetch origin && bosun merge 1",
+            "git -C /r fetch origin; bosun merge 1",
+            "m=merge; bosun $m 1",
+            "m=merge; bosun \"$m\" 1",
+            "m=erge; bosun m$m 1",
+            "m=merge; bosun m* 1",
+            "bosun m\\erge 1; x=1",
+            "x=1; bosun `echo merge` 1",
+            "m=merge; $(which bosun) $m 1",
+            "BOSUN_SESSION=x/bosun bosun merge",
+            "BOSUN_SESSION=x/bosun merge 1; bosun merge 1",
+            "export PATH=$X:$PATH && bosun merge 1",
+            "export PATH=/a:$PATH:/b && bosun merge 1",
+            "export FOO=/a:$PATH && bosun merge 1",
+            "python3 -m json.tool in out; bosun merge 1",
         ] {
             assert!(hit(c), "{c}");
         }
@@ -7382,6 +7425,14 @@ mod tests {
             "cd /r && bosun merge 1 2>&1 | jq .data",
             "git -C /r status && git log -1 && bosun merge 1 | tee /tmp/o | head -5",
             "echo merging; printf '%s' x; /usr/bin/bosun merge 1 &",
+            "bosun merge 1 2>&1 | tail -5",
+            "bosun merge 1 2>&1 | grep ok",
+            "bosun merge 1 2>&1 | python3 -m json.tool",
+            "bosun merge 1 > /tmp/x; cat /tmp/x",
+            "sleep 5 && bosun merge 1",
+            "echo \"${PWD}\" && bosun merge 1",
+            "export PATH=/r/target/debug:$PATH && bosun merge 1",
+            "export PATH=\"$HOME/.cargo/bin:$PATH\" && bosun merge 1",
         ] {
             assert!(!hit(ok), "{ok}");
         }
