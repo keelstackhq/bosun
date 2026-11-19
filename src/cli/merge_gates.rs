@@ -107,8 +107,10 @@ impl Overlay {
 
 /// The tree id of everything in `wt` (ignored files too), staged; new build output in `target/` aside.
 fn snapshot(wt: &Path) -> Result<String, BosunError> {
-    let add = ["add", "-A", "-f", "--", ".", ":(exclude,glob)**/target/**"];
-    gates::git(wt, &add)?;
+    gates::git(
+        wt,
+        &["add", "-A", "-f", "--", ".", ":(exclude,glob)**/target/**"],
+    )?;
     gates::git(wt, &["add", "-u", "--", "."])?;
     Ok(gates::git(wt, &["write-tree"])?.trim().to_string())
 }
