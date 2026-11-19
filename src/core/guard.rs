@@ -585,21 +585,17 @@ fn merge_words(command: &str) -> Vec<String> {
 
 /// D-019: `bosun merge` judges the caller from its own environment (`BOSUN_*`,
 /// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). A command line that runs bosun
-/// to merge (the word may hide in a variable) is an allowlist: every segment must be `bosun ...`
-/// itself (exactly `bosun` or an absolute path ending `/bosun`), `cd`, a read-only `git` verb
-/// (status, log, diff, show, rev-parse; a fetch is refused here and by the fetch rule), `echo` or
-/// `printf` without `-v`, `jq`, `tee`, `head`, `tail`, `grep`, `cat`, `sleep`, `python3 -m
-/// json.tool` or `export PATH=<dir>:$PATH`; no `${...}` (but `${PWD}`, `${HOME}`) and no `((`.
-/// A bosun command word with `$ \ { ? * [` or a backtick in a later word counts as a merge. Anything else
-/// (export, env, eval, `NAME=`, `wait -p`, `set -a`, a function, `time`) is refused. Best effort
-/// against a confused worker, not a liar: a script run by other means is missed.
+/// to merge (a bosun command word with `$ \ { ? * [` or a backtick later in its segment counts)
+/// is an allowlist: every segment is `bosun ...` (that word, or an absolute path ending
+/// `/bosun`), `cd`, read-only `git` (no fetch), `echo`/`printf` without `-v`, a viewer
+/// (`jq tee head tail grep cat sleep`, `python3 -m json.tool`) or `export PATH=<dir>:$PATH`; no
+/// `${...}` but `${PWD}`, `${HOME}`, and no `((`. Anything else is refused. Best effort against a
+/// confused worker, not a liar.
 fn merge_env_tamper(command: &str) -> Option<String> {
     let words = merge_words(command);
     let runs_bosun = words
         .iter()
         .any(|w| base(w) == "bosun" || w.ends_with("=bosun") || w.starts_with("bosun"));
-    // A bosun (or `$x`, backtick) command word whose later words hide text (`bosun $m 1`) may be
-    // a merge: it is judged as one.
     let hidden = rough_segments(command).iter().any(|seg| {
         let mut t = seg.split_whitespace();
         let cmd = t.next().map_or("", |c| c.trim_matches(['(', '"', '\'']));
@@ -609,11 +605,9 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     if !hidden && (!runs_bosun || !words.iter().any(|w| w == "merge")) {
         return None;
     }
-    let text = ["2>&1", "1>&2", ">&2"]
+    let text = ["2>&1", "1>&2", ">&2", "${PWD}", "${HOME}"]
         .iter()
         .fold(command.to_string(), |t, r| t.replace(r, " "));
-    // `${PWD}` and `${HOME}` are plain reads; `${!n}`, `${n:=x}` stay refused.
-    let text = text.replace("${PWD}", "v").replace("${HOME}", "v");
     let allowed = |seg: &[String]| {
         let w: Vec<&str> = seg.iter().map(String::as_str).collect();
         match w[..] {
@@ -647,10 +641,10 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     let words = shell_words(&text);
     (text.contains("${") || text.contains("((") || !words.split(|w| w == SEP).all(allowed)).then(
         || {
-            "a command that runs `bosun merge` may only also run cd, read-only git \
-             (status, log, diff, show, rev-parse), echo or printf without -v, jq, tee, \
-             head, tail, grep, cat, sleep and `export PATH=<dir>:$PATH`, and a hidden command \
-             word (`bosun $m 1`) is judged the same way: the merge checks the caller's own identity (D-019); run `bosun merge <pr>` bare"
+            "a command that runs `bosun merge` (or `bosun $x`) may only also run cd, read-only \
+             git (no fetch), echo, printf, jq, tee, head, tail, grep, cat, sleep and `export \
+             PATH=<dir>:$PATH`: the merge checks the caller's own identity (D-019); run \
+             `bosun merge <pr>` bare"
                 .to_string()
         },
     )
