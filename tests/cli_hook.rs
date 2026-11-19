@@ -896,6 +896,8 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "{ \\env - bosun merge 1; }",
         "(export BOSUN_ORIGIN=local; ${b}un merge 1)",
         "n=BOSUN_SESSION; export ${!n}=orch; xargs bosun merge 1",
+        "BOSUN_SESSION=x bosun merge 1",
+        "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
     ] {
         let o = bash(c);
         assert!(o.stdout.contains("deny"), "{c}: {}", o.stdout);
@@ -905,6 +907,10 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "bosun merge 12",
         "cargo test",
         "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
+        "BOSUN_SESSION=session_x/12 bosun claim 12",
+        "export BOSUN_SESSION=session_x/12 && bosun heartbeat 12",
+        "BOSUN_ORIGIN=routine bosun join",
+        "rg -n BOSUN_SESSION src",
     ] {
         let o = bash(c);
         assert!(!o.stdout.contains("deny"), "{c}: {}", o.stdout);
