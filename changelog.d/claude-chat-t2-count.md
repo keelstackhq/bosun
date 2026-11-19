@@ -1,0 +1,1 @@
+- risk-check counts a chat approval record as the owner's approval of the exact head under every policy; with no owners file the repo owner (or an admin PR author) stands in; it never carries to a new head.

@@ -304,10 +304,13 @@ pub struct RepoInfo {
     pub owner: Option<Login>,
 }
 
-/// A GitHub account as the API nests it (`{"login": ...}`).
+/// A GitHub account as the API nests it (`{"login": ..., "type": ...}`).
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Login {
     pub login: String,
+    /// `User` or `Organization`; empty when GitHub did not say.
+    #[serde(rename = "type", default)]
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
