@@ -2,6 +2,7 @@
 //! `<tree>` is the tree of the working state (HEAD plus `git add -A`, built in a temporary index). The pure naming is in `core::stamps`.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::config::Config;
 use crate::core::stamps::{rel_path, required_gates, safe_name};
@@ -10,7 +11,7 @@ use crate::output::BosunError;
 
 /// Stdout of `git <args>` in `dir`, trimmed; `None` when git fails or prints nothing.
 fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = crate::gates::cmd("git")
+    let out = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -51,7 +52,7 @@ pub fn working_tree(dir: &Path) -> Option<String> {
     )?);
     let index = git_dir.join(format!("bosun-stamp-index-{}", std::process::id()));
     let run = |args: &[&str]| {
-        crate::gates::cmd("git")
+        Command::new("git")
             .arg("-C")
             .arg(dir)
             .env("GIT_INDEX_FILE", &index)

@@ -49,21 +49,8 @@ pub fn isolate(private: &Path) {
     let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
     let mut env = vec![("RUSTUP_HOME", rustup), ("GIT_CONFIG_NOSYSTEM", "1".into())];
     env.push(("GIT_CONFIG_GLOBAL", "/dev/null".into()));
-    const KEEP: [&str; 12] = [
-        "PATH",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "HTTPS_PROXY",
-        "https_proxy",
-        "NO_PROXY",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "CURL_CA_BUNDLE",
-        "GIT_SSL_CAINFO",
-        "REQUESTS_CA_BUNDLE",
-    ];
-    for n in KEEP {
+    let keep = "PATH LANG LC_ALL TERM HTTPS_PROXY https_proxy NO_PROXY SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE GIT_SSL_CAINFO REQUESTS_CA_BUNDLE";
+    for n in keep.split(' ') {
         env.extend(std::env::var(n).ok().map(|v| (n, v)));
     }
     for (k, v) in [("HOME", "home"), ("CARGO_HOME", "cargo"), ("TMPDIR", "tmp")] {
@@ -107,7 +94,7 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 
 /// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
 fn git_has(root: &Path, spec: &str) -> bool {
-    cmd("git")
+    Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["cat-file", "-e", spec])
@@ -316,7 +303,7 @@ fn execute(
         .split('\0')
         .filter(|f| !f.is_empty())
         {
-            let out = cmd("git")
+            let out = Command::new("git")
                 .arg("-C")
                 .arg(req.root)
                 .args(["diff", "--no-index", "--", "/dev/null", f])
@@ -394,7 +381,7 @@ fn execute(
 
 /// Workspace packages with a library target (`lib`, `rlib` or `proc-macro`).
 fn lib_packages(dir: &Path) -> Vec<String> {
-    let Ok(out) = cmd("cargo")
+    let Ok(out) = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(dir)
         .output()
@@ -425,7 +412,7 @@ fn lib_packages(dir: &Path) -> Vec<String> {
 /// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
 fn nextest_installed() -> bool {
     std::env::var_os("BOSUN_NO_NEXTEST").is_none()
-        && cmd("cargo")
+        && Command::new("cargo")
             .args(["nextest", "--version"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

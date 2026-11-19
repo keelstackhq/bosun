@@ -1,2 +1,2 @@
 - `bosun merge` without CI never trusts stamp files: it reruns the base's required gates on a temporary worktree of the exact head (base tool configs overlaid, symlinks refused); tool-config files are R-ci.
-- `bosun merge` gives each gate a new HOME, CARGO_HOME and TMPDIR, refuses a planted `.cargo` before every gate, routes helper git/cargo calls through the cleared environment, names the private-repo case (exit 5), and honours `BOSUN_GIT_URL` in debug builds only.
+- `bosun merge` gives each gate a new HOME, CARGO_HOME and TMPDIR, refuses a planted `.cargo` before every gate, names the private-repo case (exit 5), and honours `BOSUN_GIT_URL` in debug builds only.
