@@ -571,24 +571,54 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
     })
 }
 
-const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): a command may not name CLAUDE_CODE*, a *_SESSION or *_ORIGIN variable, nor drop the environment (`env -i`, `env -`, `exec -c`); the orchestrator runs `bosun merge <pr>` unmodified";
+const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): a command that merges may not set or unset CLAUDE_CODE*, *_SESSION or *_ORIGIN variables, nor use `${!x}` or drop the environment (`env -i`, `env -`, `exec -c`); the orchestrator runs `bosun merge <pr>` unmodified";
+
+/// Commands that set or clear a variable; with a word naming an identity variable they are a setter.
+const SETTERS: [&str; 11] = [
+    "export", "unset", "declare", "typeset", "readonly", "local", "env", "printf", "read", "eval",
+    "set",
+];
 
 /// D-019: `bosun merge` judges the caller from its environment (`BOSUN_SESSION`, `BOSUN_ORIGIN`,
-/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). Whatever the command is, it
-/// is refused when its text (quotes and backslashes removed) contains `CLAUDE_CODE`, `_SESSION`,
-/// `_ORIGIN`, `BOSUN_$` or `CLAUDE_$`, or when `env` / `exec` / a `$` command word is given
-/// options that drop the environment (`-i`, `-`, `--ignore-environment`; `exec -c`). Text only:
-/// a name built in a way this does not read, or a liar, gets past it.
+/// `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_REMOTE_SESSION_ID`). Text (quotes and backslashes
+/// removed) is refused everywhere for `${!` and for options that drop the environment (`env` /
+/// `exec` / a `$` command word with `-i`, `-`, `--ignore-environment`; `exec -c`). A setter of an
+/// identity name (`NAME=v`, or export, unset, declare, ... with a word containing `CLAUDE_CODE`,
+/// `_SESSION`, `_ORIGIN`, `BOSUN_$` or `CLAUDE_$`) is refused only when the command also looks like
+/// `bosun merge` (a `merge` word, a `$` command word, a `$` word after `bosun`), so the wave-agent
+/// forms (`BOSUN_SESSION=s/12 bosun claim 12`) and mere mentions stay allowed. Text only: a name
+/// built in a way this does not read, or a liar, gets past it; it stops confused workers
+/// (`bosun merge` refuses child sessions at run time).
 fn identity_tamper(text: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
+    let plain = plain.replace("${IFS}", " ").replace("$IFS", " ");
     let names = ["CLAUDE_CODE", "_SESSION", "_ORIGIN", "BOSUN_$", "CLAUDE_$"];
-    let drops = plain.split([';', '&', '|', '\n']).any(|seg| {
+    let mention = |w: &str| names.iter().any(|n| w.contains(n));
+    let (mut merge, mut setter) = (false, false);
+    // Indirect expansion; `${!arr[@]}` and `${!prefix@}` (names, not values) are not.
+    let mut drops = plain.split("${!").skip(1).any(|r| {
+        let name = r.split('}').next().unwrap_or("");
+        !["[@]", "[*]", "@", "*"].iter().any(|e| name.ends_with(e))
+    });
+    for seg in plain.split([';', '&', '|', '\n']) {
         let t: Vec<&str> = seg
             .split(|c: char| c.is_whitespace() || "()`".contains(c))
             .filter(|w| !w.is_empty())
             .collect();
         let first = t.iter().position(|w| !w.contains('='));
-        t.iter().enumerate().any(|(i, w)| match base(w) {
+        merge |= first.is_some_and(|i| t[i].starts_with('$'))
+            || t.iter().enumerate().any(|(i, w)| {
+                *w == "merge" || (i > 0 && base(t[i - 1]) == "bosun" && w.contains('$'))
+            });
+        // Text commands only mention a name (a commit message, a search pattern).
+        let text_cmd =
+            first.is_some_and(|i| ["git", "gh", "rg", "grep", "echo"].contains(&base(t[i])));
+        setter |= !text_cmd
+            && (t
+                .iter()
+                .any(|w| w.contains('=') && w.split('=').next().is_some_and(mention))
+                || (t.iter().any(|w| SETTERS.contains(&base(w))) && t.iter().any(|w| mention(w))));
+        drops |= t.iter().enumerate().any(|(i, w)| match base(w) {
             "env" => drops_env(&t[i + 1..], 'i'),
             "exec" => drops_env(&t[i + 1..], 'c'),
             _ => {
@@ -596,9 +626,9 @@ fn identity_tamper(text: &str) -> Option<String> {
                     && w.contains('$')
                     && ['i', 'c'].iter().any(|b| drops_env(&t[i + 1..], *b))
             }
-        })
-    });
-    (drops || names.iter().any(|n| plain.contains(n))).then(|| IDENTITY_FIX.to_string())
+        });
+    }
+    (drops || (merge && setter)).then(|| IDENTITY_FIX.to_string())
 }
 
 /// Whether the options of `env` (`bad` = `i`) or `exec` (`c`) drop the environment: a short
@@ -7341,16 +7371,20 @@ mod tests {
         };
         for c in [
             "export BOSUN_SESSION=x && bosun merge 1",
-            "unset CLAUDE_CODE_CHILD_SESSION",
-            "echo $BOSUN_ORIGIN",
+            "BOSUN_SESSION=x bosun merge 1",
+            "export CLAUDE_CODE_CHILD_SESSION= ; bosun merge 1",
+            "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
+            "x=CLAUDE_CODE; unset ${x}_CHILD_SESSION; bosun merge 1",
+            "x=BOSUN; export ${x}_SESSION=o; \"bos\"un \"mer\"ge 1",
+            "printf -v ${x}_SESSION_ID o; ${b}un 1",
+            "CLAUDE_CODE_REMOTE_SESSION_ID=o command bosun merge 1",
+            "bash -c 'unset CLAUDE_\"CODE\"_CHILD_SESSION; bosun merge 1'",
+            "unset BOSUN_$a; xargs bosun m${x} 1",
+            "env -u CLAUDE_CODE_CHILD_SESSION nice bosun merge 1",
             "n=BOSUN_SESSION; export ${!n}=x",
-            "x=CLAUDE_CODE; unset ${x}_CHILD_SESSION",
-            "x=BOSUN; export ${x}_SESSION=o",
-            "printf -v ${x}_SESSION_ID o",
-            "CLAUDE_CODE_REMOTE_SESSION_ID=o bosun merge 1",
-            "bash -c 'unset CLAUDE_\"CODE\"_CHILD_SESSION'",
-            "unset CLAUDE_CODE_$a",
-            "unset BOSUN_$a",
+            "echo ${!x}",
+            "env -i claim",
+            "exec -c ls",
             "${b}un merge 1; env -i x",
             "env -i bosun merge 1",
             "\\env -i bosun merge 1",
@@ -7392,6 +7426,15 @@ mod tests {
             "export PATH=/r/target/debug:$PATH && bosun merge 1",
             "cd /r && bosun merge 1 2>&1 | jq .data",
             "git log -i --grep x; \\bosun merge 1 | grep -i ok",
+            "BOSUN_SESSION=session_x/12 bosun claim 12",
+            "export BOSUN_SESSION=session_x/12 && bosun heartbeat 12",
+            "export BOSUN_SESSION=$SID; bosun pr 12",
+            "BOSUN_ORIGIN=routine bosun join",
+            "echo $BOSUN_ORIGIN; bosun merge 1",
+            "rg -n BOSUN_SESSION src && sed -n 1,5p x",
+            "grep -rn 'unset CLAUDE_CODE_CHILD_SESSION' docs",
+            "git commit -m 'unset BOSUN_SESSION in the merge docs'",
+            "echo $DBUS_SESSION_BUS_ADDRESS $AWS_SESSION_TOKEN $TMUX_SESSION; bosun merge 1",
         ] {
             assert!(!hit(ok), "{ok}");
         }
