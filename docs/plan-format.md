@@ -70,7 +70,7 @@ The state machine, stop rules and resume.
      it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
      edit hook and `bosun pr` will adopt this in later tasks.
    - `depends:` (optional) task IDs of the same item, or `<item>/<task>` for another item.
-   - `size:` (optional) the planned changed lines. There is no cap (D-016); `size:` is only the
+   - `size:` (optional) the planned changed lines. There is no cap (D-021); `size:` is only the
      plan the review compares the PR with: a PR over twice the planned lines of the tasks it
      closes gets a drift note in `bosun review-pack`. A `risk: high` task over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
@@ -112,21 +112,24 @@ The state machine, stop rules and resume.
 
 ## Choosing the PR shape
 
-The shape follows the goal, not a line count (D-016): there is no cap on task or PR size.
+The shape follows the goal, not a line count (D-021): there is no cap on task or PR size, gated
+tasks included.
 
 A task is gated when it is `risk: high`, or when one of its `touch` globs (with the lockfile
 companions) reaches a risk path (`.bosun/risk.toml`, else the built-in rules): a rule glob matches
 the touch entry itself (any case), or the entry overlaps a rule glob that does not start with `**`
 (`.github/**` reaches `.github/workflows/**`). A wide touch such as `src/**` is not gated by a
 match-anywhere rule like `**/agents.md`; risk-check still judges each real file of the PR.
-A gated task always gets its own single-task PR and is never bundled, and it is at most 400 changed lines (D-016): a gated task with `size:` over 400 is a plan error at its `size:` line (`plan check`, `import` and `amend` all refuse it; `import` and `amend` judge the risk paths by `.bosun/risk.toml` on the default branch, `plan check` by the working tree). `bosun plan check` lists
-them as `gated`.
+A gated task shapes and bundles like any task and has no line cap (D-021); its PR needs the
+owner's approval (risk-check still rates its gated paths high). `bosun plan check` lists them as
+`gated` (by the working tree; `import` and `amend` judge the risk paths by `.bosun/risk.toml` on
+the default branch).
 
 A wildcard touch (`*` or `?`, e.g. `packages/**`) is also resolved against the default branch's file tree: it is gated when a file it matches is matched by a risk path (`packages/a/hoist.toml` ~ `**/hoist.toml`). `import` and `amend` read the tree once; when it is unreadable or truncated, a wildcard touch that no risk path settles is a plan error at the task line (fix: narrow the touch to the paths the task edits, or mark it `risk: high`). `plan check` has no GitHub and keeps the advisory working-tree view of anchored paths only.
 
-`shape: auto` (the default) decides on the other tasks, in this order:
+`shape: auto` (the default) decides on all the tasks, in this order:
 
-1. At most one task is not gated: `single` ("one task", or "N gated tasks run alone").
+1. At most one task: `single` ("one task").
 2. `split` only when the tasks are independent: at least 2 run side by side (tasks divided by
    the longest `depends` chain), no two touch overlapping paths, and the item has more than one
    UC.
@@ -134,7 +137,7 @@ A wildcard touch (`*` or `?`, e.g. `packages/**`) is also resolved against the d
    gain, one UC (the goal is testable only whole).
 
 `bosun plan check` prints `shape`, `shape_reasons` and `gated` for each item. An explicit
-`shape: single` or `shape: split` is honoured; gated tasks are split out of a `single` item.
+`shape: single` or `shape: split` is honoured; a `single` item keeps its gated tasks in the bundle.
 
 A single item is one wave entry: `bosun wave plan` returns the lowest ready issue with a
 `bundle` of the others, and one PR closes every bundled task (`Closes #N` per issue).

@@ -8,7 +8,7 @@ changes this file in the same PR.
 
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
-| Task size | no cap, except gated tasks: at most 400 lines (plan error); drift note at 2x planned | D-016: the shape follows the goal. A PR over twice the planned `size:` of its tasks (tests and lockfiles excluded) gets a drift note in `review-pack`. |
+| Task size | no cap, gated tasks included; drift note at 2x planned | D-021: the shape follows the goal, with no line cap. A PR over twice the planned `size:` of its tasks (tests and lockfiles excluded) gets a drift note in `review-pack`. |
 | Review chunk | 40000 patch bytes per reviewer subagent | Estimate: keeps each subagent's diff well inside its context. |
 | Risky task size | under 100 changed lines | A high-risk PR waits for a human. A small diff keeps the owner's check short and a revert cheap. Estimate. |
 | Critical path per item | at most 4 tasks | With 30-60 min per task, 4 sequential tasks keep an epic inside one working day; a longer path is a sign the item is two items. Estimate. |
@@ -43,7 +43,7 @@ changes this file in the same PR.
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
 | `budget.daily_usd` | 150 | Estimate (Q3). About 4 sessions working a full day on sonnet. Review after M4 with real `usage.cost_usd` data. |
-| `budget.per_task_usd` | 25 | Estimate (Q3). Several times the expected cost of one 400-line task, so only a stuck task reaches it. |
+| `budget.per_task_usd` | 25 | Estimate (Q3). Several times the expected cost of one typical task, so only a stuck task reaches it. |
 | Spend guard | 80 % no new work, 100 % stop | 80 % leaves room for the tasks already running to finish and for mainfix work. |
 | Day boundary | 00:00 UTC | One clock for all sessions and Routines. |
 | `generic` provider prices | in `.bosun/bosun.toml [prices]` | The estimate needs per-model token prices. S9 fills the defaults from the published price list on the day it lands and records the date here. |

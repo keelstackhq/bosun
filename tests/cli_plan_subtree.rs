@@ -43,14 +43,11 @@ fn world(entries: &[(&str, &str, &str, &str)], truncated: bool) -> (tempfile::Te
 }
 
 #[test]
-fn a_subtree_holding_a_gated_file_makes_a_big_task_a_size_error() {
+fn a_subtree_holding_a_gated_file_makes_a_big_task_gated_but_no_error() {
+    // D-021: gated tasks have no line cap.
     let (tmp, fake) = world(&[("packages/a/hoist.toml", "100644", "blob", "s1")], false);
-    for cmd in ["import", "amend"] {
-        let (code, v) = plan(&fake, tmp.path(), cmd);
-        assert_eq!(code, 1, "{cmd}: {v}");
-        let m = v["data"]["errors"][0]["message"].as_str().unwrap();
-        assert!(m.contains("over 400 changed lines for a gated task"), "{v}");
-    }
+    let (code, v) = plan(&fake, tmp.path(), "import");
+    assert_eq!(code, 0, "{v}");
 }
 
 #[test]

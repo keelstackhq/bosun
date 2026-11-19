@@ -1,4 +1,5 @@
-//! D-016: while the lead holds a bundle, the bundled issues of a single epic are not claimable.
+//! While the lead holds a bundle, the bundled issues of a single epic are not claimable, gated
+//! ones included (D-021: gated work bundles like any task).
 
 mod common;
 
@@ -49,17 +50,23 @@ fn a_bundled_issue_is_not_claimable_while_the_lead_is_active() {
 }
 
 #[test]
-fn gated_split_and_lone_tasks_stay_claimable() {
-    // The claimed task is gated.
+fn gated_tasks_are_bundled_too() {
+    // The claimed task is gated: it is in the lead's bundle all the same.
     let fake = epic("single");
     task(&fake, 11, "building", "src/a/**", "");
     task(&fake, 12, "ready", "src/b/**", r#","gated":true"#);
-    assert_eq!(claim(&fake, 12).0, 0);
-    // The active task is gated: it is not a bundle lead.
+    let (code, v) = claim(&fake, 12);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["error"]["message"], "#12 is bundled into #11's PR");
+    // The active task is gated: it leads the bundle.
     let fake = epic("single");
     task(&fake, 11, "building", "src/a/**", r#","risk":"high""#);
     task(&fake, 12, "ready", "src/b/**", "");
-    assert_eq!(claim(&fake, 12).0, 0);
+    assert_eq!(claim(&fake, 12).0, 3);
+}
+
+#[test]
+fn split_and_lone_tasks_stay_claimable() {
     // A split epic.
     let fake = epic("split");
     task(&fake, 11, "building", "src/a/**", "");
@@ -73,51 +80,16 @@ fn gated_split_and_lone_tasks_stay_claimable() {
 }
 
 #[test]
-fn a_gated_touch_cannot_grow_into_a_bundled_task() {
+fn a_gated_touch_may_grow_a_bundled_task() {
+    // D-021: a bundle may hold gated work; risk-check asks the owner on the PR.
     let gated = ".github/workflows/x.yml";
-    let want = format!(
-        "--touch {gated} is a gated path: gated work runs as its own task, not inside the bundle"
-    );
-    // A first claim with a gated --touch.
     let fake = epic("single");
     task(&fake, 11, "ready", "src/a.rs", "");
     let (code, v) = run(&fake, "session_b", NOW, &["claim", "11", "--touch", gated]);
-    assert_eq!(code, 3, "{v}");
-    assert_eq!(v["error"]["message"], want.as_str());
-    assert_eq!(
-        v["error"]["fix"],
-        "drop the gated path and plan it as its own task (plan amend)"
-    );
-    // Growing a live lease with it.
+    assert_eq!(code, 0, "{v}");
     let fake = epic("single");
     task(&fake, 11, "ready", "src/a.rs", "");
     assert_eq!(claim(&fake, 11).0, 0);
     let (code, v) = run(&fake, "session_b", NOW, &["claim", "11", "--touch", gated]);
-    assert_eq!(code, 3, "{v}");
-    assert_eq!(v["error"]["message"], want.as_str());
-    // A split epic, a gated task, and a plain glob are fine.
-    let fake = epic("split");
-    task(&fake, 11, "ready", "src/a.rs", "");
-    assert_eq!(
-        run(&fake, "session_b", NOW, &["claim", "11", "--touch", gated]).0,
-        0
-    );
-    let fake = epic("single");
-    task(&fake, 11, "ready", "src/a.rs", r#","gated":true"#);
-    assert_eq!(
-        run(&fake, "session_b", NOW, &["claim", "11", "--touch", gated]).0,
-        0
-    );
-    let fake = epic("single");
-    task(&fake, 11, "ready", "src/a.rs", "");
-    assert_eq!(
-        run(
-            &fake,
-            "session_b",
-            NOW,
-            &["claim", "11", "--touch", "src/b.rs"]
-        )
-        .0,
-        0
-    );
+    assert_eq!(code, 0, "{v}");
 }

@@ -531,7 +531,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
-    // The plan rates a task high on more than paths (D-016); the PR never rates lower.
+    // The plan rates a task high on more than paths (D-021: owner approval stays); the PR never rates lower.
     if !plan_high.is_empty() {
         matches.push(risk::Match {
             rule: "R-plan".into(),
@@ -602,11 +602,6 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         })
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
-    matches.extend(risk::bundle_gated(
-        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &app.ctx.repo.to_string())?.count(),
-        &files,
-        &rules,
-    ));
     if let Some((_, evidence)) = revert_findings(gh, &rules, &pull, &pr_files)
         && !evidence.is_empty()
     {

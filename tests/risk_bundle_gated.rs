@@ -1,4 +1,4 @@
-//! R-bundle: risk-check re-judges a PR that closes several tasks and changes a gated path (D-016).
+//! D-021: risk-check has no R-bundle; a bundle with a gated path is high by that path's rule.
 
 mod common;
 
@@ -34,42 +34,18 @@ fn rules(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn two_closes_and_a_gated_file_is_r_bundle_owner() {
+fn a_bundle_changing_a_gated_file_is_judged_by_the_path_rule_alone() {
+    // D-021: gated work may bundle; the gated path still rates high, no R-bundle on top.
     let (code, v) = check("Closes #7\nCloses #8", "hoist.toml");
     assert_eq!(code, 5, "{v}");
-    assert!(rules(&v).contains(&"R-bundle".to_string()), "{v}");
-    assert_eq!(v["data"]["requirement"], "owner", "{v}");
+    let r = rules(&v);
+    assert!(!r.is_empty() && !r.contains(&"R-bundle".to_string()), "{v}");
+    assert_eq!(v["data"]["level"], "high", "{v}");
 }
 
 #[test]
-fn this_repo_qualified_and_url_forms_count() {
-    let body = "Closes #7\nCloses acme/widget#8\nFixes https://github.com/acme/widget/issues/9";
-    let (code, v) = check(body, "hoist.toml");
-    assert_eq!(code, 5, "{v}");
-    assert!(rules(&v).contains(&"R-bundle".to_string()), "{v}");
-}
-
-#[test]
-fn the_same_issue_in_two_forms_counts_once() {
-    let (_, v) = check("Closes #7\nCloses acme/widget#7", "hoist.toml");
-    assert!(!rules(&v).contains(&"R-bundle".to_string()), "{v}");
-}
-
-#[test]
-fn another_repos_issue_does_not_count() {
-    let (_, v) = check("Closes #7\nFixes keelstackhq/splice#40", "hoist.toml");
-    assert!(!rules(&v).contains(&"R-bundle".to_string()), "{v}");
-}
-
-#[test]
-fn one_close_is_not_a_bundle() {
-    let (_, v) = check("Closes #7", "hoist.toml");
-    assert!(!rules(&v).contains(&"R-bundle".to_string()), "{v}");
-}
-
-#[test]
-fn two_closes_on_ordinary_code_is_not_r_bundle() {
+fn two_closes_on_ordinary_code_is_normal() {
     let (code, v) = check("Closes #7\nCloses #8", "src/a.rs");
     assert_eq!(code, 0, "{v}");
-    assert!(!rules(&v).contains(&"R-bundle".to_string()), "{v}");
+    assert!(rules(&v).is_empty(), "{v}");
 }

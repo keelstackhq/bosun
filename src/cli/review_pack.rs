@@ -96,7 +96,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         eprintln!("bosun: review-pack: gate stamps: {}", e.message);
         Value::Null
     });
-    // Size is a drift signal only (D-016): a note for the reviewer, never an error.
+    // Size is a drift signal only (D-021): a note for the reviewer, never an error.
     if let Some(d) = pack["drift"].as_object() {
         let (planned, actual) = (d["planned"].as_u64(), d["actual"].as_u64());
         pack["note"] = json!(format!(

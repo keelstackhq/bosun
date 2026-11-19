@@ -60,7 +60,7 @@ fn meta(epic: u64, extra: &str) -> String {
     format!(r#"Do it. <!-- bosun:task {{"item":"M1","task":"T","epic":{epic}{extra}}} -->"#)
 }
 
-/// Epic #10 (single), lead #11 (building, leased), ready bundle tasks #12 and #13, a gated #14,
+/// Epic #10 (single), lead #11 (building, leased), ready bundle tasks #12, #13 and gated #14,
 /// a task #15 of another single epic #20, and a split epic #30 with task #31.
 fn world() -> FakeGithub {
     world_with_lead("")
@@ -113,8 +113,8 @@ fn a_new_pr_closes_the_lead_and_every_bundled_issue() {
 }
 
 #[test]
-fn a_gated_other_epic_or_split_bundle_issue_is_refused_before_any_change() {
-    for bad in ["14", "15", "31", "11", "99"] {
+fn an_other_epic_or_split_bundle_issue_is_refused_before_any_change() {
+    for bad in ["15", "31", "11", "99"] {
         let fake = world();
         let (code, v) = run_pr(&fake, &["--bundle", "12", "--bundle", bad]);
         assert_eq!(code, 1, "{bad}: {v}");
@@ -148,28 +148,22 @@ fn an_existing_pr_missing_a_closes_is_a_conflict() {
 }
 
 #[test]
-fn a_new_bundle_pr_changing_a_gated_file_is_refused() {
+fn gated_work_bundles_like_any_task() {
+    // D-021: a gated bundled issue, a gated lead and a gated file are all fine.
     let fake = world();
     fake.compare_file("main", BRANCH, "hoist.toml", "@@ -1 +1 @@");
-    let (code, v) = run_pr(&fake, &["--bundle", "12"]);
-    assert_eq!(code, 3, "{v}");
+    fake.issue(16, "t", &[READY], &meta(10, r#","touch":["hoist.toml"]"#));
+    let (code, v) = run_pr(&fake, &["--bundle", "14", "--bundle", "16"]);
+    assert_eq!(code, 0, "{v}");
+    let body = fake.pull_body(v["data"]["pr"].as_u64().unwrap());
     assert!(
-        v["error"]["message"].as_str().unwrap().contains("D-016"),
-        "{v}"
+        body.starts_with("Closes #11\nCloses #14\nCloses #16\n"),
+        "{body}"
     );
-}
 
-#[test]
-fn a_bundled_issue_or_lead_whose_touch_is_gated_is_refused() {
-    let touch = r#","touch":["hoist.toml"]"#;
-    let fake = world();
-    fake.issue(16, "t", &[READY], &meta(10, touch));
-    let (code, v) = run_pr(&fake, &["--bundle", "16"]);
-    assert_eq!(code, 1, "bundled: {v}");
-
-    let fake = world_with_lead(touch);
+    let fake = world_with_lead(r#","touch":["hoist.toml"]"#);
     let (code, v) = run_pr(&fake, &["--bundle", "12"]);
-    assert_eq!(code, 1, "lead: {v}");
+    assert_eq!(code, 0, "lead: {v}");
 }
 
 #[test]
@@ -178,14 +172,4 @@ fn a_closed_lead_is_refused() {
     fake.close_issue(11, "2026-10-22T09:00:00Z");
     let (code, v) = run_pr(&fake, &["--bundle", "12"]);
     assert_eq!(code, 1, "{v}");
-}
-
-#[test]
-fn another_repos_closes_does_not_make_a_gated_pr_a_bundle() {
-    let fake = world();
-    fake.pull(3, "t", BRANCH, "Closes #11\nFixes keelstackhq/splice#40");
-    fake.pull_file(3, "hoist.toml", "modified", 1, 0, Some("@@ -1 +1 @@\n+x"));
-    let (_, v) = run_pr(&fake, &[]);
-    let msg = v["error"]["message"].as_str().unwrap_or("");
-    assert!(!msg.contains("D-016"), "{v}");
 }

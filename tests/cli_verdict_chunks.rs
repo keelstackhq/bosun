@@ -1,4 +1,4 @@
-//! D-016: a verdict for a PR with several review chunks must list every chunk it reviewed.
+//! D-021: a verdict for a PR with several review chunks must list every chunk it reviewed.
 
 mod common;
 

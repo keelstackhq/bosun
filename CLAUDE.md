@@ -63,7 +63,7 @@ Run the fast checks before every commit.
 ## How to work here
 
 - Test first: failing test, watch it fail, implement, watch it pass.
-- One plan task per PR of at most 400 changed lines, with its progress fragment.
+- One plan task per PR (or the bundle the plan sets; no line cap, D-021), with its progress fragment.
 - Ask (in the PR or to the orchestrator) before adding a crate not in the plan's Tech Stack.
 - Show real command output before claiming something works.
 - Human-only items (repo settings, releases, Routines) go to Blocked in `docs/PROGRESS.md`.
