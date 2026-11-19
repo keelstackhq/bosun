@@ -836,3 +836,44 @@ fn merge_refuses_a_cargo_dir_above_the_temp_repo() {
         "{v}"
     );
 }
+
+/// Each gate gets its own HOME, CARGO_HOME and TMPDIR: nothing one gate leaves reaches the next.
+#[test]
+fn merge_gives_every_gate_fresh_homes() {
+    let fmt = "echo \"$HOME $CARGO_HOME $TMPDIR\" > .gl";
+    let lint = "for v in $HOME $CARGO_HOME $TMPDIR; do ! grep -qF \"$v\" .gl || exit 1; done";
+    let (fake, dir) = merge_ready(fmt);
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, lint),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A gate that plants a `.cargo` above the repo (a cargo runner) stops the next gate: exit 5.
+#[test]
+fn merge_refuses_a_cargo_dir_planted_between_gates() {
+    let (fake, dir) = merge_ready("mkdir ../.cargo");
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains(".cargo"),
+        "{v}"
+    );
+}
+
+/// A private repo cannot be fetched anonymously: its own error, exit 5, the owner merges.
+#[test]
+fn merge_names_a_private_repo() {
+    let (fake, dir) = merge_ready("true");
+    fake.repo_set("visibility", json!("private"));
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    let (m, f) = (
+        v["error"]["message"].as_str().unwrap(),
+        v["error"]["fix"].as_str().unwrap(),
+    );
+    assert!(m.contains("private") && f.contains("owner"), "{v}");
+}

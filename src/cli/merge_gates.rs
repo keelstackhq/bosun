@@ -163,6 +163,19 @@ const FETCH_CONFIG: [&str; 9] = [
     "http.lowSpeedTime=60",
 ];
 
+/// Exit 5 when a `.cargo` exists in any parent of the repo or of the gate's new HOME, CARGO_HOME
+/// or TMPDIR (so also `/tmp` and `/`): cargo reads those, and a runner there would run code.
+fn clean_above(repo: &Path, gate: &Path) -> Result<(), BosunError> {
+    let at = [repo.parent().unwrap_or(repo), gate];
+    let bad = (at.iter().flat_map(|d| d.ancestors()))
+        .find(|a| a.join(".cargo").symlink_metadata().is_ok());
+    let Some(bad) = bad else { return Ok(()) };
+    Err(BosunError::needs_human(
+        format!("{}/.cargo exists above the gates' temp repo", bad.display()),
+        "remove it or point TMPDIR at a clean directory, then rerun `bosun merge`",
+    ))
+}
+
 /// The gates a PR must pass, from the default branch's config at its current sha.
 pub fn required_gates(gh: &dyn Github) -> Result<Vec<String>, BosunError> {
     let tmp = fresh_dir("gates")?;
@@ -192,18 +205,29 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     let private = Private(fresh_dir(&format!("merge-{}", pull.number))?);
     let repo = private.0.join("repo");
     std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
-    gates::isolate(&private.0);
-    // cargo reads `.cargo/config.toml` of every parent directory: a runner planted there runs code.
-    let cargo = (repo.ancestors().map(|a| a.join(".cargo"))).find(|c| c.symlink_metadata().is_ok());
-    if let Some(bad) = cargo {
+    gates::isolate(&private.0.join("setup"));
+    clean_above(&repo, &private.0)?;
+    let info = app.gh.repo_info().ok().flatten();
+    if info.is_some_and(|i| i.visibility.is_some_and(|v| v != "public")) {
         return Err(BosunError::needs_human(
-            format!("{} exists above the gates' temp repo", bad.display()),
-            "remove it or point TMPDIR at a clean directory, then rerun `bosun merge`",
+            format!(
+                "{} is a private repo (not public), so `bosun merge` cannot fetch PR #{} to run its gates",
+                app.ctx.repo, pull.number
+            ),
+            format!(
+                "the owner merges PR #{} on GitHub once the checks are green",
+                pull.number
+            ),
         ));
     }
     // Never the shared checkout (its config and objects are not trusted): fetch by sha, no token.
     let host = format!("https://github.com/{}.git", app.ctx.repo);
-    let url = std::env::var("BOSUN_GIT_URL").unwrap_or(host);
+    // The test source exists only in debug builds: a release build always fetches from GitHub.
+    let url = if cfg!(debug_assertions) {
+        std::env::var("BOSUN_GIT_URL").unwrap_or(host)
+    } else {
+        host
+    };
     gates::git(&repo, &["init", "-q"])?;
     let mut args: Vec<&str> = FETCH_CONFIG.iter().flat_map(|c| ["-c", *c]).collect();
     args.extend(["fetch", "-q", "--no-tags", &url, head, &pull.base_sha]);
@@ -232,9 +256,13 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
     let all = non_empty(stamps::ready_gates(wt)?)?;
     let config = &overlay.config;
     let mut failed = Vec::new();
-    for gate in &all {
+    let private = wt.parent().unwrap_or(wt);
+    for (i, gate) in all.iter().enumerate() {
         // Fresh before each gate, and checked after: an earlier gate (head code) cannot steer a later one.
         overlay.apply(wt)?;
+        let own = private.join(format!("gate{i}"));
+        gates::isolate(&own);
+        clean_above(wt, &own)?;
         let res = if gate == "test-integrity" {
             super::test_integrity::check_with(Some(wt), Some(&pull.base_sha), &pull.body, &[])
         } else {

@@ -11,7 +11,7 @@ pub mod ts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -29,33 +29,50 @@ pub struct Request<'a> {
     pub all: bool,
 }
 
-/// Set once by `bosun merge`: gate children and git calls then get exactly this environment.
-static ISOLATED: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+/// Set by `bosun merge` (again before each gate): children and git calls then get exactly this environment.
+static ISOLATED: Mutex<Option<Vec<(&'static str, String)>>> = Mutex::new(None);
 
 /// A command that, once [`isolate`] ran, sees only the allow-listed environment.
 pub(crate) fn cmd(program: &str) -> Command {
     let mut c = Command::new(program);
-    if let Some(env) = ISOLATED.get() {
-        c.env_clear().envs(env.iter().cloned());
+    if let Some(env) = ISOLATED.lock().ok().and_then(|g| g.clone()) {
+        c.env_clear().envs(env);
     }
     c
 }
 
-/// From now on gate children and git get `PATH`, `LANG`, `TERM`, the rustup home, a private
-/// `HOME`, `CARGO_HOME` and `TMPDIR` under `private`, and no system or global git config.
+/// From now on gate children and git get `PATH`, `LANG`, `TERM`, the proxy and CA variables, the
+/// rustup home, a new `HOME`, `CARGO_HOME` and `TMPDIR` under `private`, and no system or global
+/// git config. Call it again with a new directory to replace all three.
 pub fn isolate(private: &Path) {
     let home = std::env::var("HOME").unwrap_or_default();
     let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
     let mut env = vec![("RUSTUP_HOME", rustup), ("GIT_CONFIG_NOSYSTEM", "1".into())];
     env.push(("GIT_CONFIG_GLOBAL", "/dev/null".into()));
-    for n in ["PATH", "LANG", "LC_ALL", "TERM"] {
+    const KEEP: [&str; 12] = [
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "REQUESTS_CA_BUNDLE",
+    ];
+    for n in KEEP {
         env.extend(std::env::var(n).ok().map(|v| (n, v)));
     }
     for (k, v) in [("HOME", "home"), ("CARGO_HOME", "cargo"), ("TMPDIR", "tmp")] {
         let _ = std::fs::create_dir_all(private.join(v));
         env.push((k, private.join(v).to_string_lossy().into_owned()));
     }
-    let _ = ISOLATED.set(env);
+    if let Ok(mut g) = ISOLATED.lock() {
+        *g = Some(env);
+    }
 }
 
 /// Run `git <args>` in `root`; stdout on success.
@@ -90,7 +107,7 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 
 /// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
 fn git_has(root: &Path, spec: &str) -> bool {
-    Command::new("git")
+    cmd("git")
         .arg("-C")
         .arg(root)
         .args(["cat-file", "-e", spec])
@@ -299,7 +316,7 @@ fn execute(
         .split('\0')
         .filter(|f| !f.is_empty())
         {
-            let out = Command::new("git")
+            let out = cmd("git")
                 .arg("-C")
                 .arg(req.root)
                 .args(["diff", "--no-index", "--", "/dev/null", f])
@@ -377,7 +394,7 @@ fn execute(
 
 /// Workspace packages with a library target (`lib`, `rlib` or `proc-macro`).
 fn lib_packages(dir: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("cargo")
+    let Ok(out) = cmd("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(dir)
         .output()
@@ -408,7 +425,7 @@ fn lib_packages(dir: &Path) -> Vec<String> {
 /// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
 fn nextest_installed() -> bool {
     std::env::var_os("BOSUN_NO_NEXTEST").is_none()
-        && Command::new("cargo")
+        && cmd("cargo")
             .args(["nextest", "--version"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

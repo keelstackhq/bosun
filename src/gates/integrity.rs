@@ -2,7 +2,6 @@
 //! a deleted test, a new skip, fewer assertions, or a snapshot change without a reason.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Value, json};
 
@@ -87,7 +86,7 @@ fn untracked(root: &Path) -> Result<String, BosunError> {
 
 /// The text of `path` at `base`, or none when it did not exist there.
 fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
-    let out = Command::new("git")
+    let out = super::cmd("git")
         .arg("-C")
         .arg(root)
         .arg("show")
