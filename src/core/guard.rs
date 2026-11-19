@@ -479,7 +479,9 @@ fn answers_read_only(command: &str) -> bool {
         let Some(first) = it.next() else { return true };
         match first.rsplit('/').next().unwrap_or(first) {
             "python3" | "python" => {
-                it.next().is_some_and(|w| w == "-m") && it.next().is_some_and(|w| w == "json.tool")
+                it.next().is_some_and(|w| w == "-m")
+                    && it.next().is_some_and(|w| w == "json.tool")
+                    && it.filter(|w| !w.starts_with('-')).count() <= 1
             }
             c => matches!(
                 c,
@@ -510,7 +512,8 @@ fn is_answers_path(path: &str) -> bool {
 }
 
 /// Only a `git commit` or `gh pr|issue create|edit|comment` message, title or body names the file
-/// (`-m`, `--message`, `-b`, `--body`, `--title`, `-t`); no `$(...)` or backticks.
+/// (`-m`, `--message`, `-b`, `--body`, `--title`, `-t`); no `$(...)` or backticks, and the text
+/// holds no `<` or `>` (`-m "x">answers.json` is one word, a redirect).
 fn names_only_in_text(cmd: &str) -> bool {
     if cmd.contains(['`']) || cmd.contains("$(") {
         return false;
@@ -524,7 +527,7 @@ fn names_only_in_text(cmd: &str) -> bool {
         let rest = g.iter().all(|w| {
             let text = ["-m", "--message", "-b", "--body", "--title", "-t"].contains(&prev);
             prev = w;
-            text || !names_answers(w)
+            (text && !w.contains(['<', '>'])) || !names_answers(w)
         });
         rest && (msg || !names_answers(&g.join(" ")))
     })
@@ -7327,6 +7330,11 @@ mod tests {
             "git commit -m 'answers.json' > .git/bosun/answers.json",
             "git commit -m x && cp f answers.json",
             "git commit -m x -F answers.json",
+            "git commit -m \"x\">.git/bosun/answers.json",
+            "git commit -m \"x\" > .git/bosun/answers.json",
+            "gh pr create --body 'a>.git/bosun/answers.json'",
+            "python3 -m json.tool in .git/bosun/answers.json",
+            "python3 -m json.tool .git/bosun/answers.json out.json",
         ] {
             assert!(bash(w), "{w}");
         }
