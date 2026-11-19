@@ -8,6 +8,7 @@ fn verdict(cmd: &str, branch: &str) -> Option<String> {
         &json!({ "command": cmd }),
         &|_| Some(branch.into()),
         "main",
+        "",
     )
 }
 
@@ -100,7 +101,7 @@ fn env_dumps_are_not_called_secret_decryption() {
 fn commit_and_reset_follow_the_target_directory() {
     // branch_at sees the -C / cd chain: main only for the empty chain.
     let at = |d: &[String]| Some(if d.is_empty() { "main" } else { "feature" }.to_string());
-    let run = |c: &str| tool_rules("Bash", &json!({ "command": c }), &at, "main");
+    let run = |c: &str| tool_rules("Bash", &json!({ "command": c }), &at, "main", "");
     assert!(run("git commit -m x").is_some());
     assert!(run("git reset --hard HEAD~1").is_some());
     assert!(run("git -C wt commit -m x").is_none());
