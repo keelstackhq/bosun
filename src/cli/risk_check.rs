@@ -1665,7 +1665,7 @@ struct Registry<'a> {
 
 /// The owners a chat record counts for when the base has no owners file: the repo's owner for
 /// a user repo; for an org repo the PR author when an admin of the repo; else none.
-fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
+pub(crate) fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
     let Some(owner) = gh.repo_info()?.and_then(|r| r.owner) else {
         return Ok(Vec::new());
     };
@@ -1684,7 +1684,7 @@ fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
 pub(crate) fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => Config::parse(&t, CONFIG_FILE)
-            .map_err(|e| eprintln!("bosun: risk-check: chat records are off: {}", e.message))
+            .map_err(|e| eprintln!("bosun: chat records are off: {}", e.message))
             .is_ok_and(|c| c.approvals.chat_enabled()),
         None => true,
     })
@@ -1705,6 +1705,12 @@ pub(crate) fn chat_signed(gh: &dyn Github) -> Result<bool> {
 const CHAT_SIG_LAG: i64 = 600;
 const CHAT_SIG_LEAD: i64 = 60;
 
+/// Whether a signing time `at` is at most [`CHAT_SIG_LAG`] before and [`CHAT_SIG_LEAD`] after
+/// `posted`, and not before `since`.
+pub(crate) fn sig_fresh(at: i64, posted: Timestamp, since: Option<Timestamp>) -> bool {
+    (-CHAT_SIG_LEAD..=CHAT_SIG_LAG).contains(&(posted.0 - at)) && since.is_none_or(|s| at >= s.0)
+}
+
 /// Whether the record carries a valid signature of an enrolled owner key over repo, PR, head,
 /// question id, session and signing time (`bosun-chat v2 ...`), made no earlier than `since`
 /// and within [`CHAT_SIG_LAG`] before and [`CHAT_SIG_LEAD`] after `posted`: a copy of an old signed record never counts again.
@@ -1714,16 +1720,22 @@ fn chat_signature_ok(
     (pr, head): (u64, &str),
     (posted, since): (Timestamp, Option<Timestamp>),
 ) -> bool {
-    let (Some(q), Some((id, sig)), Some(at)) = (&r.question, &r.sig, r.at) else {
+    let (Some(q), Some(at)) = (&r.question, r.at) else {
         return false;
     };
-    if !(-CHAT_SIG_LEAD..=CHAT_SIG_LAG).contains(&(posted.0 - at))
-        || since.is_some_and(|s| at < s.0)
-    {
+    if !sig_fresh(at, posted, since) {
         return false;
     }
     let msg =
         approve::signed_message_chat((&repo.owner, &repo.name, pr), head, (q, &r.session, at));
+    chat_sig_valid(r, keys, &msg)
+}
+
+/// Whether the record's `chat-sig` line is a valid signature of an enrolled owner key over `msg`.
+pub(crate) fn chat_sig_valid(r: &approve::ChatRecord, keys: &[ApproverKey], msg: &str) -> bool {
+    let Some((id, sig)) = &r.sig else {
+        return false;
+    };
     keys.iter()
         .find(|k| k.id == *id && k.role == Role::Owner)
         .and_then(|k| b64::decode(&k.ed25519).zip(b64::decode(sig)))
