@@ -107,6 +107,35 @@ pub fn session_id(bosun_session: Option<&str>, remote_session: Option<&str>, hos
     format!("local-{host}")
 }
 
+/// The session's own id (`session_id` from the environment, a `/<task>` suffix cut off). The
+/// PreToolUse hook's input `session_id` is Claude's UUID, not bosun's, so it is not used.
+pub fn own_session() -> String {
+    let id = session_id(
+        env("BOSUN_SESSION").as_deref(),
+        env("CLAUDE_CODE_REMOTE_SESSION_ID").as_deref(),
+        &hostname(),
+    );
+    id.split('/').next().unwrap_or_default().to_string()
+}
+
+/// Commands that trust the identity (merge, approve --chat, verdict, join --origin) refuse a
+/// `BOSUN_SESSION` that is not `<own>` or `<own>/<task>`; `<own>` is the remote session id
+/// (checkable only when `CLAUDE_CODE_REMOTE_SESSION_ID` is set).
+pub fn trusted_identity() -> Result<(), BosunError> {
+    let (Some(set), Some(remote)) = (env("BOSUN_SESSION"), env("CLAUDE_CODE_REMOTE_SESSION_ID"))
+    else {
+        return Ok(());
+    };
+    let (set, own) = (set.trim(), session_id(None, Some(&remote), ""));
+    if set.is_empty() || set == own || crate::core::guard::task_of(set, &own).is_some() {
+        return Ok(());
+    }
+    Err(BosunError::needs_human(
+        format!("BOSUN_SESSION={set:?} is not this session ({own}) or {own}/<task>"),
+        "unset BOSUN_SESSION, or set it to this session's id with an optional /<task>; the owner can run the command",
+    ))
+}
+
 pub(crate) fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()

@@ -453,3 +453,46 @@ fn merge_default_branch_github_head_none_takes_the_ci_path() {
     assert_ne!(code, 0, "{v}");
     assert!(merge_puts(&fake).is_empty(), "{v}");
 }
+
+/// The identity-trusting commands refuse a `BOSUN_SESSION` that is not the session's own id or
+/// `<own>/<task>` (exit 5, with a fix), before any GitHub call.
+#[test]
+fn identity_trusting_commands_refuse_a_foreign_session() {
+    let dir = repo();
+    let run = |session: &str, args: &[&str]| {
+        let out = bosun()
+            .current_dir(dir.path())
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_own")
+            .env("BOSUN_SESSION", session)
+            .args(args)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap(), one_object(&out.stdout))
+    };
+    for args in [
+        &["merge", "20"][..],
+        &["approve", "20@abc", "--chat"],
+        &["verdict", "post"],
+        &["join", "--origin", "local"],
+    ] {
+        for bad in [
+            "session_other",
+            "session_other/12",
+            "session_own/a/b",
+            "session_own/",
+        ] {
+            let (code, v) = run(bad, args);
+            assert_eq!(code, 5, "{args:?} {bad}: {v}");
+            assert!(!v["error"]["fix"].as_str().unwrap().is_empty(), "{v}");
+        }
+        for ok in ["session_own", "session_own/12"] {
+            let (code, v) = run(ok, args);
+            assert_ne!(v["error"]["fix"].as_str().unwrap_or("").len(), 0, "{v}");
+            let msg = v["error"]["message"].as_str().unwrap_or("");
+            assert!(
+                !msg.contains("is not this session"),
+                "{args:?} {ok}: {v} {code}"
+            );
+        }
+    }
+}
