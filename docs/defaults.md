@@ -10,7 +10,7 @@ changes this file in the same PR.
 | ----- | ------- | -------- |
 | Task size | no cap, gated tasks included; drift note at 2x planned | D-021: the shape follows the goal, with no line cap. A PR over twice the planned `size:` of its tasks (tests and lockfiles excluded) gets a drift note in `review-pack`. |
 | Review chunk | 40000 patch bytes per reviewer subagent | Estimate: keeps each subagent's diff well inside its context. |
-| Risky task size | under 100 changed lines | A high-risk PR waits for a human. A small diff keeps the owner's check short and a revert cheap. Estimate. |
+| Risky task size | no cap or warning (D-021) | A high-risk PR waits for the owner whatever its size; chunked review keeps a big diff readable. |
 | Critical path per item | at most 4 tasks | With 30-60 min per task, 4 sequential tasks keep an epic inside one working day; a longer path is a sign the item is two items. Estimate. |
 | UC per "Done when" line | 1 | One line, one test, so `bosun accept` is a mechanical check. |
 

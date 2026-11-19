@@ -41,6 +41,7 @@ fn a_bundle_changing_a_gated_file_is_judged_by_the_path_rule_alone() {
     let r = rules(&v);
     assert!(!r.is_empty() && !r.contains(&"R-bundle".to_string()), "{v}");
     assert_eq!(v["data"]["level"], "high", "{v}");
+    assert_eq!(v["data"]["requirement"], "owner", "{v}");
 }
 
 #[test]

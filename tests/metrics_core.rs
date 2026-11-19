@@ -129,7 +129,7 @@ fn proposals_need_ten_blocks_no_catch_and_never_a_floor_rule() {
         all.push(block(r, &ten, 0));
     }
     all.push(block("r-gov", &ten, 0));
-    all.push(block("R-bundle", &ten, 0));
+    all.push(block("R-bundle", &ten, 0)); // retired by D-021: a stale id
     let mut defined: Vec<String> = ["R-docs2", "R-api", "R-docs", "r-gov"]
         .map(String::from)
         .into();

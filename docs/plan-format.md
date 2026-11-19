@@ -72,7 +72,7 @@ The state machine, stop rules and resume.
    - `depends:` (optional) task IDs of the same item, or `<item>/<task>` for another item.
    - `size:` (optional) the planned changed lines. There is no cap (D-021); `size:` is only the
      plan the review compares the PR with: a PR over twice the planned lines of the tasks it
-     closes gets a drift note in `bosun review-pack`. A `risk: high` task over 100 is a warning.
+     closes gets a drift note in `bosun review-pack`.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
    - `done-by:` (optional) `#N` (or `N`): PR N already did this task. `bosun plan import` and
