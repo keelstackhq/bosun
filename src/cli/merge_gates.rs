@@ -71,22 +71,21 @@ impl Overlay {
             let file = format!(".bosun/profiles/{}.toml", stack.profile);
             files.push((file.clone(), gh.file_at(&file, git_ref)?));
         }
+        dirs.sort();
         dirs.dedup();
-        for d in dirs {
-            for f in TOOL_FILES {
-                let rel = format!("{d}{f}");
-                if !files.iter().any(|(p, _)| *p == rel) {
-                    files.push((rel.clone(), gh.file_at(&rel, git_ref)?));
-                }
-            }
+        for rel in dirs
+            .iter()
+            .flat_map(|d| TOOL_FILES.map(|f| format!("{d}{f}")))
+        {
+            files.push((rel.clone(), gh.file_at(&rel, git_ref)?));
         }
         Ok(Overlay { files, config })
     }
 
     /// Put the base's files into `root`, deleting any it lacks; a symlink target touches nothing.
     fn apply(&self, root: &Path) -> Result<(), BosunError> {
-        no_symlink(root, ".bosun/profiles")?;
-        for (rel, _) in &self.files {
+        let rels = self.files.iter().map(|(r, _)| r.as_str());
+        for rel in rels.chain([".bosun/profiles"]) {
             no_symlink(root, rel)?;
         }
         let _ = std::fs::remove_dir_all(root.join(".bosun/profiles"));
@@ -99,9 +98,7 @@ impl Overlay {
                     }
                     std::fs::write(&path, t).map_err(|e| io_err("overlay", e))?;
                 }
-                None => {
-                    let _ = std::fs::remove_file(&path);
-                }
+                None => drop(std::fs::remove_file(&path)),
             }
         }
         Ok(())
