@@ -227,7 +227,7 @@ fn carries_or_passes(fake: &FakeGithub) -> bool { let (code, _, _) = go(fake); c
     fake.review(1, "ada", "APPROVED", H); assert!(carries(&fake));
     let fake = world(); // a chat record of h does not: it belongs to the head it names
     fake.issue(50, "bosun registry", &["bosun:registry"], "");
-    fake.comment(50, r#"{"bosun":"join","session":"session_orch","origin":"spawned","depth":1,"expires":"2026-10-22T11:00:00Z"}"#);
+    fake.comment(50, r#"{"bosun":"join","session":"session_orch","origin":"local","depth":1,"expires":"2026-10-22T11:00:00Z"}"#);
     let rec = format!("/bosun approve {H} chat\nApproved by the owner in chat (session session_orch, 2026-10-22T09:00:00Z).\n<!-- bosun:chat-approval v1 session=session_orch head={H} question=1-a000000-1792659600 -->");
     fake.comment_at(1, "ada", &rec, "2026-10-22T09:00:00Z"); fake.last_comment(|c| c.via_app = Some("claude".into()));
     assert!(!carries(&fake));

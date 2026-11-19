@@ -251,12 +251,29 @@ fn failed_repo_or_permission_read_does_not_approve() {
 #[test]
 fn chat_record_after_session_expired_not_counted() {
     let fake = high_pr(true);
-    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    // The question id is fresh for the comment time (2026-11-10T12:00:00Z), so only the join's
+    // expiry (11:00) can fail.
+    let q = format!("1-0123456-{}", NOW_UNIX + 19 * 86_400 + 7_200);
+    app_comment(&fake, "ada", &chat_q(HEAD, "session_orch", &q));
     fake.last_comment(|c| {
         c.created_at = "2026-11-10T12:00:00Z".into();
         c.updated_at = "2026-11-10T12:00:00Z".into();
     });
-    refused(&fake);
+    assert!(fix_of(&fake).contains("left or expired"));
+}
+
+#[test]
+fn chat_record_older_than_a_dismissal_is_withdrawn_a_newer_one_counts() {
+    let dismissed = |record_at: &str| {
+        let fake = high_pr(true);
+        fake.review(1, "ada", "DISMISSED", HEAD);
+        fake.dismiss_event(1, 1, "2026-10-22T10:30:00Z");
+        fake.comment_at(1, "ada", &chat(HEAD, "session_orch"), record_at);
+        fake.last_comment(|c| c.via_app = Some("claude".into()));
+        fake
+    };
+    refused(&dismissed("2026-10-22T10:00:00Z"));
+    assert_eq!(approved(&dismissed("2026-10-22T10:45:00Z")), "ada");
 }
 
 const ESCALATED: &str =
