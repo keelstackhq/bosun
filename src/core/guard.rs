@@ -633,8 +633,7 @@ fn merge_env_tamper(command: &str) -> Option<String> {
     let words = shell_words(&text);
     (text.contains("${") || text.contains("((") || !words.split(|w| w == SEP).all(allowed)).then(
         || {
-            "a command that runs `bosun merge` (or `bosun $x`) may only also run cd, read-only git \
-             (no fetch), echo, printf, viewers and `export PATH=<dir>:$PATH` (D-019): run it bare"
+            "run `bosun merge` bare, with only cd, read-only git (no fetch), echo, viewers around it (D-019)"
                 .to_string()
         },
     )
