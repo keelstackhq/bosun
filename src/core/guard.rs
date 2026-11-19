@@ -582,10 +582,11 @@ const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019)
 /// claim 12` and mere mentions pass. It stops confused workers, not liars.
 fn identity_tamper(text: &str) -> Option<String> {
     let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
-    let plain = plain.replace("${IFS}", " ").replace("$IFS", " ");
+    let plain = plain.replace("$IFS", " ").replace("${IFS}", " ");
     let names = ["CLAUDE_CODE", "_SESSION", "_ORIGIN", "BOSUN_$", "CLAUDE_$"];
     let setters = "export unset declare typeset readonly local env printf read eval set";
     let mention = |w: &str| names.iter().any(|n| w.contains(n));
+    let is_in = |list: &str, w: &str| list.split(' ').any(|c| c == base(w));
     let (mut merge, mut setter) = (false, false);
     // `${!arr[@]}` and `${!prefix@}` list names and pass.
     let mut drops = plain.split("${!").skip(1).any(|r| {
@@ -603,13 +604,13 @@ fn identity_tamper(text: &str) -> Option<String> {
                 *w == "merge" || (i > 0 && base(t[i - 1]) == "bosun" && w.contains('$'))
             });
         // git, gh, rg, grep, echo only mention a name (a commit message, a pattern).
-        let text = first.is_some_and(|i| "git gh rg grep echo".split(' ').any(|c| c == base(t[i])));
+        let text = first.is_some_and(|i| is_in("git gh rg grep echo", t[i]));
+        let named = t.iter().any(|w| mention(w));
         setter |= !text
             && (t
                 .iter()
                 .any(|w| w.split_once('=').is_some_and(|(n, _)| mention(n)))
-                || (t.iter().any(|w| setters.split(' ').any(|s| s == base(w)))
-                    && t.iter().any(|w| mention(w))));
+                || (named && t.iter().any(|w| is_in(setters, w))));
         drops |= t.iter().enumerate().any(|(i, w)| match base(w) {
             "env" => drops_env(&t[i + 1..], 'i'),
             "exec" => drops_env(&t[i + 1..], 'c'),
