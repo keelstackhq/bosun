@@ -822,6 +822,37 @@ fn merge_never_runs_the_checkouts_git_config() {
     assert!(!marker.exists());
 }
 
+/// A real cargo gate writes `target/`: that build output is not a change, and the merge passes.
+#[test]
+fn merge_passes_a_real_cargo_gate_that_writes_target() {
+    let manifest = "[package]\nname = \"tiny\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+    let lock = "version = 4\n\n[[package]]\nname = \"tiny\"\nversion = \"0.0.0\"\n";
+    let files = [
+        ("Cargo.toml", manifest),
+        ("Cargo.lock", lock),
+        ("src/lib.rs", ""),
+    ];
+    let (fake, dir) = setup_files(false, Some(NO_CI), &files);
+    let build = profile("cargo build --locked --offline && test -d target", "true");
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", &build);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge_with(&fake, dir.path(), &[("CARGO_NET_OFFLINE", "true")]);
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A tracked file under a `target` directory still counts: a gate that edits it exits 5.
+#[test]
+fn merge_refuses_a_gate_that_edits_a_tracked_file_under_target() {
+    let (fake, dir) = setup_files(false, Some(NO_CI), &[("src/target/keep.txt", "a")]);
+    let edit = profile("echo b > src/target/keep.txt", "true");
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", &edit);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+}
+
 /// A `.cargo` above the gates' temp repo could hold a runner: refuse (exit 5).
 #[test]
 fn merge_refuses_a_cargo_dir_above_the_temp_repo() {
