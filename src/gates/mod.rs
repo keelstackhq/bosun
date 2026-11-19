@@ -41,9 +41,8 @@ pub(crate) fn cmd(program: &str) -> Command {
     c
 }
 
-/// From now on gate children and git get `PATH`, `LANG`, `TERM`, the proxy and CA variables, the
-/// rustup home, a new `HOME`, `CARGO_HOME` and `TMPDIR` under `private`, and no system or global
-/// git config. Call it again with a new directory to replace all three.
+/// From now on children get `PATH`, `LANG`, `TERM`, the proxy and CA variables, the rustup home, a
+/// new `HOME`, `CARGO_HOME` and `TMPDIR` under `private` (call again for new ones), no global git config.
 pub fn isolate(private: &Path) {
     let home = std::env::var("HOME").unwrap_or_default();
     let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
@@ -64,7 +63,6 @@ pub fn isolate(private: &Path) {
 
 /// Run `git <args>` in `root`; stdout on success.
 pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
-    // Hooks and fsmonitor never run, replace refs never apply: a head under test could plant them.
     let out = cmd("git")
         .arg("-C")
         .arg(root)

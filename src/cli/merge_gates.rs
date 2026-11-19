@@ -190,8 +190,7 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     clean_above(&repo, &private.0)?;
     let vis = app.gh.repo_info().ok().flatten().and_then(|i| i.visibility);
     let public = vis.is_none_or(|v| v == "public");
-    // Never the shared checkout (its config and objects are not trusted): fetch by sha, no token.
-    // `BOSUN_GIT_URL` (a test source) counts in debug builds only.
+    // Never the shared checkout: fetch by sha, no token; `BOSUN_GIT_URL` (test source) in debug builds only.
     let host = format!("https://github.com/{}.git", app.ctx.repo);
     let url = (std::env::var("BOSUN_GIT_URL")
         .ok()
@@ -258,7 +257,6 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
                 "the author removes whatever in the head rewrites them; the owner reviews the head",
             ));
         }
-        // A gate that skipped vouches for nothing.
         if !res.is_ok_and(|o| !o.data.to_string().contains("\"skipped\":true")) {
             failed.push(gate.clone());
         }
