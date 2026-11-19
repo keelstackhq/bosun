@@ -320,11 +320,11 @@ head_sha, merged: true}`.
 ### Task 11: docs — migration + approvers optional
 
 **Gated:** no (docs). **Model:** sonnet. **Depends:** T5, T7, T10.
-**Branch:** `claude/chat-approval-docs`.
+**Branch:** `claude/chat-t11-docs`.
 
 **Files:** Modify `docs/adopt-existing-repo.md` (chat approval, `[ci] provider`, user-scope
 hooks, `.bosun/approvers.toml` optional, `[approvals] chat = false` opt-out, release pin
-ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines,
+ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines.
 (T0 is settled, so nothing goes to Blocked.) Test: `tests/fragments.rs` passes.
 
 - [ ] Write; `cargo test --locked --test fragments` PASS. Fragments. Commit, push, PR.
@@ -350,25 +350,45 @@ The stack is open as stacked PRs #633-#644 (T1-T12), pending landing, plus these
 Trust model: the guards stop confused workers, not a worker that lies; `chat_signed` is the
 stronger opt-in.
 
-### Task 15: post-landing follow-up (one PR from main, split if over 400 lines)
+### Task 15: post-landing LOW follow-up (one PR from main, split if over 400 lines)
 
-Gated, opus. Open once the stack has landed. Each item comes from a review round.
+Gated, opus. Open once the stack has landed. Only the LOW items from the review rounds:
 
-- [ ] D-018 gap (MAJOR): `src/ctx.rs` lets `BOSUN_ORIGIN` override the origin, so a spawned
-  child can set `local` and record a chat approval; depth-2 `local`/`slack` sessions and a
-  missing origin (default `local`) also count as orchestrators. Derive the origin from the
-  registry join, refuse `local`/`slack` for depth-2 and spawned sessions, and require a known origin.
-- [ ] Cloud fail-closed: when `CLAUDE_CODE_REMOTE=true` or the agent proxy is set and the remote
-  session id is missing, refuse the identity-trusting commands.
-- [ ] Verdict independence compares orchestrator roots, not only session ids.
-- [ ] `trusted_identity` applies to every command, not only merge, approve, verdict and join.
-- [ ] The `BOSUN_SESSION` allowance word check uses real shell-word matching.
-- [ ] LOW items from the reviews: json.tool `--`/dash positionals (#670); PreCompact git limit
-  (#679); skip-worktree, filter attributes, lingering gate daemons, the Cargo.lock doc, a list of
-  changed paths, and a snapshot with a fresh `GIT_INDEX_FILE` plus a config/attributes reset
-  (#672); home-relative `.claude`, `cd -`, the `tar -x` claim (#676); `function` keyword bodies,
-  non-`=` setters, env-drop wrappers (#680); fragmented names, setpriv, sudo (#640); hold forms
-  and a min(at, posted) lead-window floor (#644); adopt:200-203, README:48/54, spec 01:21 (#641).
+- [ ] json.tool `--`/dash positionals (#670); PreCompact git limit (#679).
+- [ ] Gates (#672): skip-worktree, filter attributes, lingering gate daemons, the Cargo.lock doc, a
+  list of changed paths, and a snapshot with a fresh `GIT_INDEX_FILE` plus a config/attributes reset.
+- [ ] Settings lock (#676): home-relative `.claude`, `cd -`, the `tar -x` claim.
+- [ ] Child-flag guard (#680): `function` keyword bodies, non-`=` setters, env-drop wrappers.
+- [ ] Identity guard (#640): fragmented names, setpriv, sudo (also listed as limits in spec §4).
+- [ ] Intake (#644): more hold forms; a min(at, posted) lead-window floor.
+- [ ] Docs (#641): adopt:200-203, README:48/54, spec 01:21.
+
+### Task 16: close the D-018 orchestrator-identity gap (blocks the 0.22.0 release)
+
+**Gated:** yes (identity, approvals). **Model:** opus. **Depends:** the stack (T1-T14) on main.
+**Branch:** `claude/chat-t16-origin`.
+**Gate:** blocks the 0.22.0 release. 0.22.0 is the first release that reads `[approvals] chat`
+(unset means on), so until this task lands no repo can pin a release that counts chat records.
+Until then no repo turns chat records on: keep the pin below 0.22.0, or set `[approvals] chat = false`.
+
+The gap: `src/ctx.rs` lets `BOSUN_ORIGIN` override the origin, so a spawned child can set `local`
+and record a chat approval; a session with no origin defaults to `local`, and depth-2 `local`/
+`slack` sessions count as orchestrators. That is looser than D-018.
+
+**Files:** Modify `src/ctx.rs` (origin from the registry join; an unknown or missing origin is not
+`local`), `src/core/approve.rs` (`is_orchestrator`: depth 1 and no parent only), `src/cli/join.rs`
+(`--origin local|slack` refused when the registry already has a spawned or routine record for
+the session, not only by env), `src/cli/approve_chat.rs`, `src/cli/risk_check.rs`, spec §4/§8.
+Tests: `tests/cli_approve_chat.rs`, `tests/cli_join.rs`, unit tests in `src/core/approve.rs`.
+
+- [ ] Tests: a spawned child with `BOSUN_ORIGIN=local` is refused (`approve --chat` exit 5, and a
+  record it writes does not count); a depth-2 `local` session is not counted; a missing origin is
+  refused; `join --origin local` after a spawned registry record is refused.
+- [ ] Also: cloud fail-closed (when `CLAUDE_CODE_REMOTE=true` or the agent proxy is set and the remote
+  session id is missing, refuse the identity-trusting commands); verdict independence compares
+  orchestrator roots; `trusted_identity` applies to every command; the `BOSUN_SESSION` allowance uses
+  real shell-word matching; the question id's unix part is checked (#634 review).
+- [ ] Implement; PASS. Spec §4/§8. Fragments. Commit, push, PR.
 
 ## Notes from the stacked PRs (pending, not yet on main)
 
