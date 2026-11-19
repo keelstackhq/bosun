@@ -1,6 +1,5 @@
-//! The no-CI gates (spec §4, D-019). What must pass is read from the default branch's config and
-//! profiles at its current sha, never from a checkout or from the PR. `bosun merge` runs those
-//! gates itself on a private repo at the exact PR head; stamp files are never trusted.
+//! The no-CI gates (spec §4, D-019): the base's required gates, run on a private repo at the exact
+//! PR head; stamp files are never trusted.
 
 use std::path::{Path, PathBuf};
 
@@ -30,8 +29,7 @@ const TOOL_FILES: [&str; 9] = [
     ".rustfmt.toml",
 ];
 
-/// Exit 5 when `rel` or any parent of it below `root` is a symlink: a write there would land
-/// outside the worktree.
+/// Exit 5 when `rel` or a parent of it below `root` is a symlink (a write would leave the worktree).
 fn no_symlink(root: &Path, rel: &str) -> Result<(), BosunError> {
     let mut at = root.to_path_buf();
     for part in rel.split('/') {
@@ -48,8 +46,8 @@ fn no_symlink(root: &Path, rel: &str) -> Result<(), BosunError> {
     Ok(())
 }
 
-/// The default branch's `.bosun/bosun.toml`, profiles and [`TOOL_FILES`] (also under each stack
-/// directory and its parents), as `(path, text or none)`. `None` means the base lacks the file.
+/// The base's `.bosun/bosun.toml`, profiles and [`TOOL_FILES`] (also in each stack directory and its
+/// parents) as `(path, text)`; `None` means the base lacks the file.
 struct Overlay {
     files: Vec<(String, Option<String>)>,
     config: Config,
@@ -85,8 +83,7 @@ impl Overlay {
         Ok(Overlay { files, config })
     }
 
-    /// Put the base's files into `root`, deleting any the base lacks. Nothing is touched when a
-    /// target is a symlink.
+    /// Put the base's files into `root`, deleting any it lacks; a symlink target touches nothing.
     fn apply(&self, root: &Path) -> Result<(), BosunError> {
         no_symlink(root, ".bosun/profiles")?;
         for (rel, _) in &self.files {
@@ -149,8 +146,7 @@ impl Drop for Private {
     }
 }
 
-/// Fetch settings: verify every object, https only (`file` just for a `BOSUN_GIT_URL` test source),
-/// no credential helper or prompt, give up on a stalled transfer.
+/// Fetch settings: verify objects, https only (`file` for the test source), no credentials, no stalls.
 const FETCH_CONFIG: [&str; 9] = [
     "transfer.fsckObjects=true",
     "fetch.fsckObjects=true",
@@ -190,9 +186,9 @@ fn sha40(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Run the required gates on a private repo holding only `pull`'s head and base, fetched by sha;
-/// exit 5 with the failing gates unless all pass. The repo is always removed. The gates execute the
-/// head's code (tests, build scripts): the signed verdict and the owner's approval are the control.
+/// Run the required gates on a private repo of `pull`'s head and base (fetched by sha, removed on
+/// every path); exit 5 with the failing gates. They run the head's code: the signed verdict and the
+/// owner's approval are the control.
 pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
     let (head, n) = (pull.head_sha.as_str(), pull.number);
     if !sha40(head) || !sha40(&pull.base_sha) {
@@ -277,8 +273,7 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String
             ));
         }
         // A gate that skipped vouches for nothing.
-        let ran = res.is_ok_and(|o| !o.data.to_string().contains("\"skipped\":true"));
-        if !ran {
+        if !res.is_ok_and(|o| !o.data.to_string().contains("\"skipped\":true")) {
             failed.push(gate.clone());
         }
     }
