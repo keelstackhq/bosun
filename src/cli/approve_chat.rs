@@ -113,10 +113,10 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
     let session = &app.ctx.session;
     // The child flag is read directly too: BOSUN_ORIGIN can relabel `ctx.origin`, the flag
     // Claude Code sets for a child session cannot be dropped by it.
-    let child_flag = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
+    let child_flag = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| !v.trim().is_empty());
     if child_flag || app.ctx.origin == Origin::Spawned {
         return Err(BosunError::needs_human(
-            "this session is a spawned child (CLAUDE_CODE_CHILD_SESSION=1 or BOSUN_ORIGIN=spawned); only an orchestrator records a chat approval",
+            "this session is a spawned child (CLAUDE_CODE_CHILD_SESSION set or BOSUN_ORIGIN=spawned); only an orchestrator records a chat approval",
             "hand the PR to the orchestrator with `bosun handoff-pr`; it asks the owner and records the answer",
         ));
     }
