@@ -1085,6 +1085,63 @@ fn no_origin_remote_with_a_bosun_dir_is_adopted() {
     assert!(o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
 }
 
+/// A local `git replace` ref must not fake `.bosun/version` at the remote's head.
+#[test]
+fn a_local_replace_ref_cannot_fake_adoption() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    let commit = |m: &str| {
+        let c = ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q"];
+        git(r, &[&c[..], &["--allow-empty", "-m", m]].concat());
+    };
+    let rev = |what: &str| {
+        let mut c = Command::new("git");
+        let o = c
+            .arg("-C")
+            .arg(r)
+            .args(["rev-parse", what])
+            .output()
+            .unwrap();
+        String::from_utf8(o.stdout).unwrap().trim().to_string()
+    };
+    commit("plain");
+    git(r, &["push", "-q", "origin", "main"]);
+    let plain = rev("HEAD");
+    std::fs::create_dir_all(r.join(".bosun")).unwrap();
+    std::fs::write(r.join(".bosun/version"), "0.21.0\n").unwrap();
+    git(r, &["add", "."]);
+    commit("fake");
+    git(r, &["replace", &plain, &rev("HEAD")]);
+    std::fs::remove_file(r.join(".bosun/version")).unwrap();
+    assert!(adopted_start(r).contains("bosun adopt --policy"));
+}
+
+/// Changing `origin` invalidates the cached answer.
+#[test]
+fn the_adopted_cache_key_includes_the_origin_url() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    let start = || {
+        let input = json!({"hook_event_name":"SessionStart","cwd":r.to_str().unwrap()});
+        let out = bosun()
+            .current_dir(r)
+            .env("BOSUN_SESSION", "session_a")
+            .env("BOSUN_NOW", T0)
+            .env("BOSUN_ADOPTED_CACHE_SECS", "600")
+            .args(["hook", "session-start"])
+            .write_stdin(input.to_string())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains("bosun adopt --policy")
+    };
+    assert!(start());
+    adopted_on_remote(r);
+    assert!(start(), "same origin: cached");
+    let url = format!("{}/", r.join(".git/remote.git").display());
+    git(r, &["remote", "set-url", "origin", &url]);
+    assert!(!start(), "another origin asks again");
+}
+
 /// The adopted answer is cached per session for ten minutes in the git dir: a burst of hooks asks
 /// the remote once, and the next ask after the TTL sees a later adoption.
 #[test]

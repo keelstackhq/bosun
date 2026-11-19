@@ -1,0 +1,1 @@
+- 2026-11-19 · chat T7b hooks follow-up · src/hooks/session_start.rs, spec §11 · this PR
