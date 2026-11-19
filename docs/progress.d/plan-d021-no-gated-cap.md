@@ -1,0 +1,1 @@
+- 2026-11-19 · Plan D21 (D-021 no gated cap) · plans/d021-no-gated-cap.md: one risk-high task with allow delete-test, fewer-asserts for the removed gated-cap tests · plan PR
