@@ -1,5 +1,5 @@
 format = 1
-splice = "0.3.1"
+splice = "0.6.0"
 
 [channel]
 name = "decisions"
@@ -9,8 +9,8 @@ exclude = []
 
 [template]
 source = "gh:keelstackhq/decisions//channel"
-version = "0.0.0+g67fec03"
-commit = "67fec03d711293fed5b8d7620be93a6b1473ddf0"
+version = "0.0.0+g0669d5b"
+commit = "0669d5b5c9b80b4729c6ef8a7533c6d02fd96665"
 
 [vars]
 
@@ -25,7 +25,7 @@ name = "import-claude"
 vars = {}
 
 [files]
-"docs/agents/org-decisions.md" = { class = "owned", sha256 = "23c050d5206670b8c3b5e3b1526208e3916519d66d12630dc92e7ef8ec3c8985" }
+"docs/agents/org-decisions.md" = { class = "owned", sha256 = "4ed8b100441974a0bfc81233c29a6b141b28d0e3c3d7b1ca3f0c7e8479ec0fc2" }
 
 [sections]
 "CLAUDE.md" = { sha256 = "fa8a562d118a28c7b4f663d29089cef4b8038229fb9cbd56c649dd58764ed2d2", created = false }

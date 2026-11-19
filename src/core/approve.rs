@@ -626,6 +626,7 @@ pub fn parse_chat_record(body: &str, head: &str, pr: Option<u64>) -> Option<Chat
         if q_short != &head[..7] || pr.is_some_and(|n| q_pr != n.to_string()) {
             return None;
         }
+        question_unix(q)?;
     }
     Some(ChatRecord {
         head: head.into(),
@@ -653,6 +654,21 @@ pub fn is_orchestrator(members: &[Member], session: &str, now: Timestamp) -> boo
                 && !matches!(m.origin.as_str(), "spawned" | "routine")
                 && (m.depth == 1 || matches!(m.origin.as_str(), "local" | "slack"))
         })
+}
+
+/// The unix part of a question id: all digits and an `i64`.
+pub fn question_unix(q: &str) -> Option<i64> {
+    let u = q.splitn(3, '-').nth(2)?;
+    if u.is_empty() || !u.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    u.parse().ok()
+}
+
+/// Whether a question id's time suits a comment created at `at` (unix secs): at most 60 s
+/// later, at most 14 days earlier. A record without a question has no time to check.
+pub fn question_fresh(q: Option<&str>, at: i64) -> bool {
+    q.is_none_or(|q| question_unix(q).is_some_and(|u| u <= at + 60 && u >= at - 14 * 86_400))
 }
 
 /// The id bosun puts in an approval question: `<pr>-<short head>-<unix secs>`.
@@ -844,6 +860,32 @@ mod tests {
         let indented = format!("    {ok}");
         assert_eq!(parse_chat_record(&indented, H), None);
         assert!(parse_chat_record(&ok, H).is_some());
+    }
+
+    #[test]
+    fn question_unix_part_is_checked() {
+        let rec = |q: &str| {
+            let body = format!(
+                "/bosun approve {H} chat\n<!-- bosun:chat-approval v1 session=s head={H} question={q} -->"
+            );
+            parse_chat_record(&body, H)
+        };
+        assert!(rec("12-abcdef1-1700000000").is_some());
+        for bad in [
+            "12-abcdef1",
+            "12-abcdef1-",
+            "12-abcdef1-17x",
+            "12-abcdef1--5",
+            "12-abcdef1-99999999999999999999",
+        ] {
+            assert!(rec(bad).is_none(), "{bad}");
+        }
+        let q = Some("12-abcdef1-1000");
+        assert!(question_fresh(q, 1000) && question_fresh(q, 1000 - 60));
+        assert!(!question_fresh(q, 1000 - 61));
+        assert!(question_fresh(q, 1000 + 14 * 86_400));
+        assert!(!question_fresh(q, 1000 + 14 * 86_400 + 1));
+        assert!(question_fresh(None, 5));
     }
 
     #[test]
