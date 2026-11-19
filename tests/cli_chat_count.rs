@@ -13,10 +13,17 @@ const OLD: &str = "1111111111111111111111111111111111111111";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
 const REG: u64 = 50;
 
-fn chat(head: &str, session: &str) -> String {
+/// Unix seconds of the time the fake stamps on every comment (2026-10-22T10:00:00Z).
+const NOW_UNIX: i64 = 1_792_663_200;
+
+fn chat_q(head: &str, session: &str, question: &str) -> String {
     format!(
-        "/bosun approve {head} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} head={head} question=1-0123456-1 -->"
+        "/bosun approve {head} chat\nApproved by the owner in chat (session {session}, {NOW}).\n<!-- bosun:chat-approval v1 session={session} head={head} question={question} -->"
     )
+}
+
+fn chat(head: &str, session: &str) -> String {
+    chat_q(head, session, &format!("1-0123456-{NOW_UNIX}"))
 }
 
 fn join(fake: &FakeGithub, session: &str, origin: &str, parent: Option<&str>, depth: u32) {
@@ -94,6 +101,22 @@ fn chat_record_edited_or_stale_not_counted() {
     let fake = high_pr(true);
     app_comment(&fake, "ada", &chat(OLD, "session_orch"));
     refused(&fake);
+}
+
+#[test]
+fn chat_record_question_time_must_suit_the_comment() {
+    let ok = |q: String| {
+        let fake = high_pr(true);
+        app_comment(&fake, "ada", &chat_q(HEAD, "session_orch", &q));
+        check(&fake).0 == 0
+    };
+    assert!(ok(format!("1-0123456-{}", NOW_UNIX - 14 * 86_400)));
+    assert!(ok(format!("1-0123456-{}", NOW_UNIX + 60)));
+    assert!(!ok(format!("1-0123456-{}", NOW_UNIX - 14 * 86_400 - 1)));
+    assert!(!ok(format!("1-0123456-{}", NOW_UNIX + 61)));
+    assert!(!ok("1-0123456-1".into()));
+    assert!(!ok("1-0123456-12ab".into()));
+    assert!(!ok("1-0123456-99999999999999999999".into()));
 }
 
 #[test]

@@ -1757,6 +1757,9 @@ fn chat_comment_by<'a>(
                 let Some(at) = parse_rfc3339(&c.created_at) else {
                     return false;
                 };
+                if !approve::question_fresh(r.question.as_deref(), at.0) {
+                    return false;
+                }
                 let before: Vec<Note> = (reg.notes.iter())
                     .filter(|n| n.id < c.id)
                     .cloned()
