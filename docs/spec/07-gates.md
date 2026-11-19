@@ -10,7 +10,8 @@ Gate contract (stack-agnostic):
 - mutants, smoke, snapshots: in the merge queue.
 - test-integrity: always, as a gate job.
 - risk-check, review-verdict, main-open: always, each its own required check (D15); commit
-  statuses today, check runs of the bosun App pinned in the ruleset after B2 (§15, D33).
+  statuses today, check runs of the bosun App pinned in the ruleset after B2 (§15, D33);
+  `bosun gate sources --pr N` checks which App posted each (read-only, §15).
 
 CI templates call only `bosun gate <name>`. The channel's bosun.yml runs every gate in one job
 `ci-ok` (or `bosun-ok`), which fails unless all succeeded: every job is billed as at least one

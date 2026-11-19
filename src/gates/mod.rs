@@ -7,6 +7,7 @@ pub mod integrity;
 pub mod main_open;
 pub mod packages;
 pub mod profile;
+pub mod sources;
 pub mod ts;
 
 use std::path::{Path, PathBuf};

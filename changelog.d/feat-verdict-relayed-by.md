@@ -1,1 +1,0 @@
-- `bosun verdict comment --from <file>` relays a verdict comment body: it keeps the original reviewer, model and chunks, adds `<!-- bosun:relayed_by <session> -->` when another session posts it, and `verdict comment` / `verdict apply` report `relayed_by` (`comment` also `reviewer`).

@@ -1,1 +1,0 @@
-- 2026-11-18 · verdict relay keeps the reviewer · src/core/verdict.rs, src/cli/verdict.rs, src/schema/data.rs, spec §7 · this PR
