@@ -623,6 +623,27 @@ fn a_hold_written_after_the_record_and_edited_again_still_holds_while_it_reads_a
     refused(&fake, "chat_held");
 }
 
+/// A hold edited to "ok", then an exact copy of the record reposted: the copy's signing time
+/// precedes that edit, so it does not count.
+#[test]
+fn a_reposted_record_signed_before_an_edited_hold_does_not_count() {
+    let at = "2026-11-10T09:30:00Z";
+    let fake = setup(true);
+    post(&fake, "ada", &record_at(&sha(), "session_orch", at), at);
+    post(&fake, "ada", "/bosun hold", "2026-11-10T09:31:00Z");
+    fake.last_comment(|c| {
+        c.body = "ok".into();
+        c.updated_at = "2026-11-10T09:33:00Z".into();
+    });
+    post(
+        &fake,
+        "ada",
+        &record_at(&sha(), "session_orch", at),
+        "2026-11-10T09:35:00Z",
+    );
+    refused(&fake, "chat_unsigned");
+}
+
 #[test]
 fn an_edited_owner_comment_after_the_record_holds_fail_closed() {
     let at = "2026-11-10T09:30:00Z";

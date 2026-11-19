@@ -365,10 +365,14 @@ fn verify_chat(
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
     let now = Timestamp::now();
-    // A signing time may not precede the newest owner hold (current text, edit time counts).
+    // A signing time may not precede the newest owner hold (current text, edit time counts), nor
+    // any owner comment edited after it was posted (an edit may have erased a hold).
     let since = comments
         .iter()
-        .filter(|h| is_hold(&h.body) && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user)))
+        .filter(|h| {
+            (is_hold(&h.body) || !h.unedited())
+                && owners.iter().any(|o| o.eq_ignore_ascii_case(&h.user))
+        })
         .filter_map(|h| parse_rfc3339(&h.updated_at).max(parse_rfc3339(&h.created_at)))
         .max();
     let mut why = None;
