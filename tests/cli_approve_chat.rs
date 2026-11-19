@@ -37,14 +37,24 @@ fn repo() -> tempfile::TempDir {
 }
 
 /// The hook input with the session transcript it must be backed by: the AskUserQuestion
-/// `tool_use` and its `tool_result`, as JSONL under the repo's `.git`.
+/// `tool_use` and its `tool_result` (naming the picked labels), as JSONL at the pinned
+/// `$HOME/.claude/projects/<dir>/<session_id>.jsonl`, with `$HOME` = `<repo>/.home`.
 fn with_transcript(repo: &Path, mut input: Value) -> Value {
     let id = &input["tool_use_id"];
+    let said: Vec<String> = (input["tool_response"]["answers"]
+        .as_object()
+        .into_iter()
+        .flatten())
+    .map(|(q, a)| format!("\"{q}\"=\"{}\"", a.as_str().unwrap_or("")))
+    .collect();
     let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
         {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
     let done = json!({"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}});
-    let file = repo.join(".git").join("t.jsonl");
+        {"type": "tool_result", "tool_use_id": id, "content":
+            format!("User has answered your questions: {}. You can now continue.", said.join(", "))}]}});
+    let dir = repo.join(".home/.claude/projects/p");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("{}.jsonl", input["session_id"].as_str().unwrap()));
     std::fs::write(&file, format!("{call}\n{done}")).unwrap();
     input["transcript_path"] = json!(file);
     input
@@ -196,6 +206,7 @@ fn chat_end_to_end_with_the_hook_stored_answer_in_cloud() {
     };
     let mut hook = cloud(bosun());
     let out = hook
+        .env("HOME", tmp.path().join(".home"))
         .args(["hook", "post-tool-use"])
         .write_stdin(with_transcript(tmp.path(), input).to_string())
         .output()
@@ -692,6 +703,7 @@ fn chat_end_to_end_from_the_hook_input() {
             .current_dir(tmp.path())
             .env("BOSUN_NOW", NOW)
             .env("BOSUN_SESSION", session)
+            .env("HOME", tmp.path().join(".home"))
             .args(["hook", "post-tool-use"])
             .write_stdin(with_transcript(tmp.path(), input.clone()).to_string())
             .output()
