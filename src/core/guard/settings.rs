@@ -1,0 +1,596 @@
+//! Settings-lock (spec §4): an agent may not edit the files that switch the guard off, the
+//! repo's `.claude/settings*.json` and anything under the user's `~/.claude`, nor write
+//! `disableAllHooks`. Best effort and lexical, like the rest of the guard; it fails closed.
+
+use std::sync::LazyLock;
+
+use regex::Regex;
+use serde_json::Value;
+
+use super::writes::command_of;
+use super::{
+    SEP, bash_writes, edited_path, prose, read_only, shell_words, split_heredocs, strings,
+    word_scripts,
+};
+
+const FIX: &str = "the hooks and permissions in .claude/settings*.json and ~/.claude are the \
+    owner's: ask the orchestrator to ask the owner in chat to change them, and do not set \
+    disableAllHooks";
+
+const HOME: &str = r"(?:~[\w.-]*|\$\{?HOME\}?|/root|/home/[^/\s]+|/Users/[^/\s]+)";
+
+/// A path (file tool or redirect target) the lock covers.
+static PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:{HOME}/\.claude(?:/|$)|(?:.*/)?\.claude/settings[^/]*\.json$)"
+    ))
+    .expect("settings path regex")
+});
+
+/// The same targets anywhere in a command's text, with globs that could reach them.
+static TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{HOME}/\.claude\b|\.claude/(?:set|s\*|\*|\?|\[)|\.claude/settings[^/\s]*\.json"
+    ))
+    .expect("settings text regex")
+});
+
+/// A `disableAllHooks` key or assignment (`"disableAllHooks": true`, `.disableAllHooks=true`).
+static HOOKS_OFF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)disableAllHooks["'\\]{0,3}\s*[:=]"#).expect("disableAllHooks regex")
+});
+
+/// Lexical clean-up: `//`, `/./` and `x/../` collapse; the result is only used for matching.
+fn normalize(path: &str) -> String {
+    let abs = path.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if out.last().is_some_and(|l| *l != "..") => {
+                out.pop();
+            }
+            p => out.push(p),
+        }
+    }
+    format!("{}{}", if abs { "/" } else { "" }, out.join("/"))
+}
+
+/// `path` without quotes and backslashes (`.cla''ude`), then cleaned lexically.
+fn plain(path: &str) -> String {
+    let bare: String = path
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    normalize(&bare)
+}
+
+fn protected(path: &str) -> bool {
+    PATH.is_match(&plain(path))
+}
+
+/// A word naming a target of a mutating command: a settings file, a glob that could reach one, or
+/// the `.claude` directory itself (`rm -rf .claude`, `git checkout -- .claude`).
+static TARGET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("{}|(?:^|/)\\.claude/?$", TEXT.as_str())).expect("settings target regex")
+});
+
+/// Interpreters and shells: the code they run is only seen as text, so a target in it counts.
+const INTERP: [&str; 12] = [
+    "python", "python3", "node", "perl", "ruby", "php", "bash", "sh", "zsh", "dash", "eval", "deno",
+];
+
+/// MCP tools that write a repo file, by the name after the server prefix.
+const FILE_TOOLS: [&str; 5] = [
+    "create_or_update_file",
+    "push_files",
+    "delete_file",
+    "update_file",
+    "create_file",
+];
+
+fn target(word: &str) -> bool {
+    TARGET.is_match(&plain(word))
+}
+
+/// The value of an option given as `-t X`, `-tX`, `--long X` or `--long=X`.
+fn opt<'a>(args: &[&'a str], short: &str, long: &str) -> Option<&'a str> {
+    args.iter().enumerate().find_map(|(i, a)| match *a {
+        a if a == short || a == long => args.get(i + 1).copied(),
+        a => a
+            .strip_prefix(format!("{long}=").as_str())
+            .or(a.strip_prefix(short)),
+    })
+}
+
+/// The index of the git subcommand: the first word that is not an option or its value.
+fn git_sub(args: &[&str]) -> Option<usize> {
+    let valued = ["-C", "-c", "--work-tree", "--git-dir", "--namespace"];
+    (0..args.len())
+        .find(|&i| !args[i].starts_with('-') && !(i > 0 && valued.contains(&args[i - 1])))
+}
+
+/// The directories git moves to before its subcommand: every `-C D` (cumulative) and
+/// `--work-tree D` or `--work-tree=D`.
+fn git_dirs<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let end = git_sub(args).unwrap_or(args.len());
+    (0..end)
+        .filter_map(|i| match args[i] {
+            "-C" | "--work-tree" => args.get(i + 1).copied(),
+            a => a.strip_prefix("--work-tree="),
+        })
+        .collect()
+}
+
+/// Whether a word is a redirection (`>f`, `2>f`, `&>f`), which ends a command's operands.
+fn is_redir(word: &str) -> bool {
+    word.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
+        .starts_with('>')
+}
+
+/// Where `cp` or `install` puts its files: the `-t` value (`-t D`, `-tD`, `-rt D`,
+/// `--target-directory[=]D`), else the last operand.
+fn destination<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let args: Vec<&str> = args.iter().copied().take_while(|a| !is_redir(a)).collect();
+    let dir = args.iter().enumerate().find_map(|(i, a)| {
+        let next = args.get(i + 1).copied().unwrap_or("");
+        if let Some(v) = a.strip_prefix("--target-directory=") {
+            return Some(v);
+        }
+        let short = a.starts_with('-') && !a.starts_with("--");
+        let at = a.find('t').filter(|_| short || *a == "--target-directory");
+        at.map(|at| {
+            Some(&a[at + 1..])
+                .filter(|r| short && !r.is_empty())
+                .unwrap_or(next)
+        })
+    });
+    dir.or_else(|| args.iter().rev().find(|a| !a.starts_with('-')).copied())
+}
+
+/// Whether `dir` is `.claude` or below it.
+fn inside(dir: &str) -> bool {
+    static IN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?:^|/)\.claude(?:/|$)").expect("inside regex"));
+    IN.is_match(&plain(dir))
+}
+
+/// The directory after moving to `to`, when it is (still) in `.claude`: `from` is where the
+/// command runs now, if that is in `.claude`. An unknown word (`cd -`, `cd $X`) stays inside.
+fn enter(from: Option<&str>, to: &str) -> Option<String> {
+    let free = to.starts_with(['/', '~']);
+    let at = match from {
+        Some(d) if !free => format!("{d}/{to}"),
+        _ => to.into(),
+    };
+    inside(&at).then_some(at)
+}
+
+/// A word as a path from `dir`, for a command that runs there (`rm settings.json`).
+fn at(dir: &str, word: &str) -> String {
+    let free = word.starts_with(['-', '/', '~', '$', '>']) || word.contains('>');
+    if free {
+        word.into()
+    } else {
+        format!("{dir}/{word}")
+    }
+}
+
+/// The settings-lock for one tool call; `None` allows it.
+pub fn settings_rule(tool: &str, input: &Value, cwd: &str) -> Option<String> {
+    if tool == "Bash" {
+        let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        return bash(command, cwd);
+    }
+    let name = tool.rsplit("__").next().unwrap_or(tool);
+    let hit = if FILE_TOOLS.contains(&name) {
+        let files = input.get("files").and_then(Value::as_array);
+        let paths = files.into_iter().flatten().chain([input]);
+        paths.filter_map(|f| f.get("path")?.as_str()).any(protected)
+    } else {
+        let path = edited_path(tool, input)?;
+        let path = enter(Some(cwd).filter(|c| inside(c)), &path).unwrap_or(path);
+        // A `disableAllHooks` key only counts in a JSON file: a spec or test may name it.
+        let sets = path.ends_with(".json") && strings(input).iter().any(|t| HOOKS_OFF.is_match(t));
+        protected(&path) || sets
+    };
+    hit.then(|| format!("`{tool}` edits the guard's own settings: {FIX}"))
+}
+
+/// Whether one command word, with its arguments, mutates a target (never a read of one).
+fn mutates(cmd: &str, args: &[&str]) -> bool {
+    let any = |a: &[&str]| a.iter().any(|w| !w.starts_with('>') && target(w));
+    match cmd {
+        "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "touch" | "chmod" | "chown" | "ln"
+        | "mv" => any(args),
+        // `bash_writes` skips `~` and `$HOME` targets: judge them here (a path word only).
+        // The destination is the `-t` value (also in a cluster: `-rt DIR`) or the last operand,
+        // and may be the `.claude` directory itself.
+        "cp" | "install" => destination(args).is_some_and(target),
+        "tee" => args.iter().any(|a| protected(a)),
+        "sed"
+            if args.iter().any(|a| {
+                a.starts_with("--in-place")
+                    || (a.starts_with('-') && !a.starts_with("--") && a.contains('i'))
+            }) =>
+        {
+            args.iter().any(|a| protected(a))
+        }
+        "find" => {
+            let acts = ["-delete", "-exec", "-execdir", "-ok", "-fprint", "-fprintf"];
+            let named = args
+                .iter()
+                .any(|a| a.starts_with("settings") && a.ends_with(".json"));
+            args.iter().any(|a| acts.contains(a)) && (any(args) || named)
+        }
+        "tar" => {
+            let x = |a: &&str| {
+                matches!(*a, "--extract" | "--get")
+                    || (a.starts_with('-') && !a.starts_with("--") && a.contains('x'))
+            };
+            let bundled = args
+                .first()
+                .is_some_and(|a| !a.starts_with('-') && a.contains('x'));
+            (args.iter().any(x) || bundled)
+                && (any(args) || opt(args, "-C", "--directory").is_some_and(target))
+        }
+        "git" => {
+            let sub = git_sub(args);
+            let ops = ["checkout", "restore", "stash", "reset", "clean", "rm", "mv"];
+            sub.is_some_and(|i| ops.contains(&args[i]) && any(&args[i + 1..]))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a redirection in the segment (`>f`, `>> f`, `2>f`) writes a target; unlike
+/// `bash_writes` it also sees `~` and `$HOME` paths.
+fn redirects(seg: &[String], dir: Option<&str>) -> bool {
+    seg.iter().enumerate().any(|(i, w)| {
+        let op = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        let rest = op.strip_prefix('>').map(|r| r.trim_start_matches('>'));
+        // `2>&1` duplicates a descriptor: no file.
+        let to = rest.map(|r| match r.strip_prefix('&').unwrap_or(r) {
+            "" => seg.get(i + 1).map_or("", |n| n),
+            fd if r.starts_with('&') && fd.chars().all(|c| c.is_ascii_digit() || c == '-') => "",
+            _ => r,
+        });
+        to.is_some_and(|t| !t.is_empty() && target(&dir.map_or(t.into(), |d| at(d, t))))
+    })
+}
+
+/// Whether the commands in `text` mutate a target. `cwd` is set once a `cd`, `pushd`, `git -C`,
+/// `env -C` or `sudo -D` goes into `.claude`: relative words then count as paths in it (sticky
+/// to the end, which only makes it stricter). Subshell groups are scanned in line; `sh -c`,
+/// `eval` and `env -S` strings are scanned again with the current `cwd`.
+fn mutated(text: &str, mut cwd: Option<String>, depth: usize) -> bool {
+    let words = shell_words(&split_heredocs(text).0);
+    for seg in words.split(|w| w == SEP) {
+        let (cmd, args, dirs) = command_of(seg);
+        let git = if cmd == "git" {
+            git_dirs(&args)
+        } else {
+            vec![]
+        };
+        let mut here = cwd.clone();
+        for d in dirs.iter().map(String::as_str).chain(git) {
+            here = enter(here.as_deref(), d).or(here);
+        }
+        // Git's options and subcommand are words, not paths.
+        let lead = if cmd == "git" {
+            git_sub(&args).map_or(args.len(), |i| i + 1)
+        } else {
+            0
+        };
+        let paths: Vec<String> = (args.iter().enumerate())
+            .map(|(i, a)| match &here {
+                Some(d) if i >= lead => at(d, a),
+                _ => a.to_string(),
+            })
+            .collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        if mutates(cmd, &refs) || redirects(seg, here.as_deref()) {
+            return true;
+        }
+        if matches!(cmd, "cd" | "pushd") {
+            let to = args.iter().find(|a| !a.starts_with('-'));
+            cwd = to.and_then(|d| enter(cwd.as_deref(), d));
+        }
+    }
+    depth < 4 && (word_scripts(text).iter()).any(|s| mutated(s, cwd.clone(), depth + 1))
+}
+
+/// `python -m json.tool [opts] [FILE]`: reads one file (a second operand would be the output).
+fn json_read(cmd: &str, args: &[&str]) -> bool {
+    let ops = (args.iter().skip(2)).filter(|a| !a.starts_with('-') && a.parse::<u8>().is_err());
+    matches!(cmd, "python" | "python3")
+        && args.starts_with(&["-m", "json.tool"])
+        && ops.take_while(|a| !is_redir(a)).count() <= 1
+}
+
+fn bash(command: &str, cwd: &str) -> Option<String> {
+    let text = prose::strip_prose(command);
+    let dequoted: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    let words = shell_words(&split_heredocs(&text).0);
+    let interp = (words.split(|w| w == SEP)).any(|seg| {
+        let (cmd, args, _) = command_of(seg);
+        INTERP.contains(&cmd) && !json_read(cmd, &args)
+    });
+    // `read_only` ignores redirections: a `>` in code that runs counts as a write.
+    let reads = read_only(&text, 0) && !text.contains('>');
+    let sets = (HOOKS_OFF.is_match(&text) || HOOKS_OFF.is_match(&dequoted))
+        && dequoted.contains(".json")
+        && !reads;
+    let code = interp && TEXT.is_match(&dequoted) && !reads;
+    let writes = bash_writes(command).iter().any(|p| protected(p));
+    let start = Some(cwd.to_string()).filter(|c| inside(c));
+    (mutated(&text, start, 0) || code || sets || writes)
+        .then(|| format!("the command writes the guard's own settings: {FIX}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The rule from a hook running in `/repo` (shadows the glob import).
+    fn settings_rule(tool: &str, input: &Value) -> Option<String> {
+        super::settings_rule(tool, input, "/repo")
+    }
+    fn file(tool: &str, path: &str) -> Option<String> {
+        settings_rule(tool, &json!({"file_path": path, "content": "{}"}))
+    }
+    fn sh(cmd: &str) -> Option<String> {
+        settings_rule("Bash", &json!({"command": cmd}))
+    }
+    fn sh_in(cwd: &str, cmd: &str) -> Option<String> {
+        super::settings_rule("Bash", &json!({"command": cmd}), cwd)
+    }
+
+    #[test]
+    fn the_hooks_directory_is_the_start_and_dotdot_resolves() {
+        let (c, cc) = ("/repo/.claude", "/repo/.claude/commands");
+        assert!(sh_in(c, "rm settings.json").is_some());
+        assert!(sh_in(c, "echo {} > settings.local.json").is_some());
+        assert!(sh_in(cc, "rm ../settings.json").is_some());
+        assert!(sh_in("/repo", "cd .claude/commands && rm ../settings.json").is_some());
+        assert!(sh_in("/repo", "cd .claude/commands && cd .. && rm settings.json").is_some());
+        assert!(super::settings_rule("Edit", &json!({"file_path": "settings.json"}), c).is_some());
+        assert!(sh_in(c, "cat settings.json").is_none());
+        assert!(sh_in(cc, "rm x.md").is_none());
+        assert!(sh_in(c, "cd .. && rm settings.json").is_none());
+        assert!(sh_in("/repo/src", "rm settings.json").is_none());
+        assert!(sh_in("/repo", "cd src && rm settings.json").is_none());
+    }
+
+    #[test]
+    fn git_dirs_repeat_and_spaced_forms_count() {
+        for c in [
+            "git -C a -C .claude rm settings.json",
+            "git -C .claude/commands -C .. rm settings.json",
+            "git --work-tree .claude checkout -- settings.json",
+            "git --work-tree=.claude checkout -- settings.json",
+            "git --git-dir x --work-tree .claude restore settings.json",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+        assert!(sh("git --work-tree src checkout -- settings.json").is_none());
+    }
+
+    #[test]
+    fn fd_duplication_and_json_tool_reads_pass() {
+        for c in [
+            "cd .claude && ls 2>&1",
+            "cd .claude && ls >&2",
+            "cd .claude && cat settings.json 2>&1 | head",
+            "python3 -m json.tool .claude/settings.json",
+            "python3 -m json.tool --indent 2 ~/.claude/settings.json",
+            "python3 -m json.tool .claude/settings.json | head",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
+        }
+        for c in [
+            "python3 -m json.tool a.json .claude/settings.json",
+            "python3 -m json.tool a.json > .claude/settings.json",
+            "python3 -c \"print(1)\" .claude/settings.json",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn file_tools_are_denied_on_settings_and_home_claude() {
+        for tool in ["Edit", "Write", "MultiEdit"] {
+            for p in [
+                ".claude/settings.json",
+                ".claude/settings.local.json",
+                "/repo/.claude/settings.json",
+                "sub/../.claude//settings.json",
+                "/repo/./.claude/settings.x.json",
+                "~/.claude/settings.json",
+                "$HOME/.claude/hooks/x.sh",
+                "${HOME}/.claude/CLAUDE.md",
+                "/root/.claude/settings.json",
+                "/home/dev/.claude/commands/a.md",
+                "/Users/dev/.claude",
+            ] {
+                assert!(file(tool, p).is_some(), "{tool} {p}");
+            }
+        }
+        let why = file("Edit", ".claude/settings.json").unwrap();
+        assert!(why.contains("ask the orchestrator"), "{why}");
+    }
+
+    #[test]
+    fn other_paths_and_reads_pass() {
+        for p in [
+            ".claude/commands/x.md",
+            "src/settings.json",
+            ".claude/settings.md",
+            "/repo/.claude",
+        ] {
+            assert!(file("Edit", p).is_none(), "{p}");
+        }
+        for c in [
+            "cat .claude/settings.json",
+            "grep hooks ~/.claude/settings.json",
+            "git commit -m 'note .claude/settings.json'",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn disable_all_hooks_is_denied_in_any_file_or_command() {
+        for t in ["Edit", "Write", "MultiEdit"] {
+            let input = json!({"file_path": "x.json", "new_string": "{\"disableAllHooks\": true}"});
+            assert!(settings_rule(t, &input).is_some());
+        }
+        let prose = json!({"file_path": "docs/x.md", "new_string": "the disableAllHooks key"});
+        assert!(settings_rule("Write", &prose).is_none());
+        assert!(sh("echo '{\"disableAllHooks\":true}' > x.json").is_some());
+        assert!(sh("jq '.disableAllHooks = true' a.json > b.json").is_some());
+        assert!(sh("printf 'disableAllHooks=1' | tee out.json").is_some());
+        // Prose in a spec or a test, or a non-JSON file, may name the key.
+        let spec =
+            json!({"file_path": "docs/spec/04.md", "new_string": "\"disableAllHooks\": true"});
+        assert!(settings_rule("Edit", &spec).is_none());
+        assert!(sh("sed -i 's/a/disableAllHooks=1/' tests/x.rs").is_none());
+    }
+
+    #[test]
+    fn bash_writes_are_denied_dequoted() {
+        for c in [
+            "echo {} > .claude/settings.json",
+            "echo {} >> ~/.claude/settings.json",
+            "sed -i s/a/b/ .claude/settings.local.json",
+            "sed -i '' 's/a/b/' $HOME/.claude/settings.json",
+            "echo x | tee ~/.claude/settings.json",
+            "cp x .claude/settings.json",
+            "mv x \"$HOME/.claude/settings.json\"",
+            "rm .claude/settings.json",
+            "rm -rf ~/.claude",
+            "rm -rf $HOME/.claude/hooks",
+            "rm .cla''ude/settings.json",
+            "rm .claude/set\\tings.json",
+            "cd x && rm /root/.claude/settings.json",
+            "bash -c 'echo {} > .claude/settings.json'",
+            "rm .claude/sett*",
+            "rm .claude/*",
+            "python3 -c \"open('.claude/settings.json','w').write('{}')\"",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn destructive_and_indirect_commands_are_denied() {
+        for c in [
+            "rm -rf .claude",
+            "mv .claude/settings.json /tmp/x",
+            "mv x .claude/settings.local.json",
+            "find .claude -delete",
+            "find . -name 'settings*.json' -delete",
+            "find ~/.claude -exec rm {} +",
+            "git checkout -- .claude",
+            "git checkout HEAD~1 -- .claude/settings.json",
+            "git -C . restore .claude/settings.json",
+            "git stash push -- .claude/settings.json",
+            "git reset HEAD~1 -- .claude",
+            "git rm .claude/settings.json",
+            "cp -t .claude x.json",
+            "cp --target-directory=.claude/ x.json",
+            "install -t ~/.claude x",
+            "tar -xf a.tar -C .claude",
+            "tar xf a.tar -C.claude",
+            "ln -s x .claude/settings.json",
+            "ln -sfn /tmp/d .claude",
+            "ln -s .claude/settings.json link",
+            "cp f .claude/",
+            "cp f ./.claude/",
+            "cp f .claude",
+            "cp f .claude 2>/dev/null",
+            "install -m 644 f ~/.claude",
+            "cp -rt .claude f",
+            "cp -t.claude f",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn a_directory_change_into_claude_makes_relative_words_targets() {
+        for c in [
+            "cd .claude && rm settings.json",
+            "cd ./.claude; echo {} > settings.json",
+            "pushd .claude && cp x settings.local.json",
+            "cd ~/.claude && rm -rf *",
+            "cd .claude && rm -rf .",
+            "git -C .claude checkout -- settings.json",
+            "env -C .claude rm settings.json",
+            "sudo -D .claude rm settings.json",
+            "(cd .claude && rm settings.json)",
+            "sh -c 'cd .claude && rm settings.json'",
+            "eval \"cd ~/.claude; echo {} > settings.json\"",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+        for c in [
+            "cd .claude && cat settings.json",
+            "cd .claude && ls",
+            "cd .claude && cp settings.json /tmp/x",
+            "cd src && rm a.rs",
+            "cp -t /tmp .claude/settings.json",
+            "git -C .claude status",
+            "env -C src rm a.rs",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn reads_and_prose_are_not_over_denied() {
+        for c in [
+            "ls .claude 2>/dev/null",
+            "cat .claude/settings.json 2>/dev/null",
+            "grep hooks .claude/settings.json > /tmp/out.txt",
+            "cp .claude/settings.json /tmp/x",
+            "cp -r .claude/commands /tmp/y",
+            "tar -cf a.tar -C .claude .",
+            "sed -i 's/a/b/' docs/spec/04-lifecycle.md",
+            "sed -i 's#x#.claude/settings.json#' docs/spec/04-lifecycle.md",
+            "echo '.claude/settings.json' > notes.txt",
+            "git checkout -- src",
+            "git add .claude/settings.json",
+            "find . -name '*.rs' -delete",
+            "rm -rf target",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
+        }
+        let edit = json!({"file_path": "tests/x.rs", "new_string": ".claude/settings.json"});
+        assert!(settings_rule("Edit", &edit).is_none());
+    }
+
+    #[test]
+    fn github_file_tools_are_denied_on_settings() {
+        let one = |p: &str| json!({"owner": "o", "repo": "r", "path": p, "content": "{}"});
+        for t in [
+            "mcp__github__create_or_update_file",
+            "mcp__github__delete_file",
+        ] {
+            assert!(
+                settings_rule(t, &one(".claude/settings.json")).is_some(),
+                "{t}"
+            );
+            assert!(settings_rule(t, &one("a/.claude/settings.local.json")).is_some());
+            assert!(settings_rule(t, &one("docs/spec.md")).is_none());
+        }
+        let push = |p: &str| json!({"files": [{"path": "a.md"}, {"path": p, "content": "{}"}]});
+        let t = "mcp__github__push_files";
+        assert!(settings_rule(t, &push(".claude/settings.json")).is_some());
+        assert!(settings_rule(t, &push("src/x.rs")).is_none());
+    }
+}

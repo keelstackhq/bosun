@@ -14,7 +14,9 @@ use crate::core::meta::OPEN;
 mod interp;
 mod literals;
 mod prose;
+mod settings;
 pub use interp::{Script, script_rules};
+pub use settings::settings_rule;
 mod writes;
 pub use writes::bash_writes;
 
