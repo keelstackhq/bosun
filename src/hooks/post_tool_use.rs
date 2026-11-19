@@ -17,6 +17,10 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if input.get("tool_name").and_then(Value::as_str) != Some("AskUserQuestion") {
         return None;
     }
+    if std::env::var_os("CLAUDE_CODE_CHILD_SESSION").is_some_and(|v| !v.is_empty()) {
+        eprintln!("bosun: warning: a child session's answer is not stored");
+        return None;
+    }
     let mut items = parse(input, &Timestamp::now().to_string());
     if items.is_empty() {
         return None;
@@ -54,20 +58,60 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     None
 }
 
-/// Keep only the items the session transcript backs (`transcript_path` of the hook input): an
-/// assistant `tool_use` with this `tool_use_id`, named `AskUserQuestion`, whose question holds
-/// the same marker (id, PR and full head), and a `tool_result` for that id. The path must be a
-/// regular file, not a symlink. Anything else fails closed. A hint against forged hook input:
+/// The transcript must be `$HOME/.claude/projects/<dir>/<session_id>.jsonl` (`session_id` of the
+/// hook input), a regular file, not a symlink.
+fn pinned(path: &str, session: &str) -> bool {
+    let home = std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok());
+    let regular = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
+    let (real, name) = (
+        Path::new(path).canonicalize().ok(),
+        format!("{session}.jsonl"),
+    );
+    regular
+        && !session.is_empty()
+        && home.zip(real).is_some_and(|(h, r)| {
+            r.starts_with(h.join(".claude").join("projects"))
+                && r.file_name().is_some_and(|n| *n == *name)
+        })
+}
+
+/// Whether a transcript `tool_result` (`content`, `toolUseResult.answers`) holds exactly the
+/// labels `said` for `question`.
+fn agrees(content: &Value, structured: &Value, question: &str, said: &[String]) -> bool {
+    let blob = match content {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    let key = format!("\"{question}\"=\"");
+    let seen = (blob.split(&key).nth(1)).and_then(|r| r.split('"').next());
+    let seen = seen.or_else(|| structured.get(question).and_then(Value::as_str));
+    seen.is_some_and(|s| {
+        s.split(", ")
+            .map(str::trim)
+            .eq(said.iter().map(String::as_str))
+    })
+}
+
+/// Keep only the items the session transcript backs (`transcript_path` of the hook input, pinned
+/// by [`pinned`]): an assistant `tool_use` with this `tool_use_id`, named `AskUserQuestion`,
+/// whose question holds the same marker (id, PR and full head), and a `tool_result` for that
+/// id whose picked labels equal `tool_response.answers` (a mismatch stores nothing).
+/// Anything else fails closed. A hint against forged hook input:
 /// it stops confused workers, not liars (spec 14).
 fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String> {
     let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("");
-    let (path, id) = (Path::new(field("transcript_path")), field("tool_use_id"));
-    let regular = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
-    if field("transcript_path").is_empty() || id.is_empty() || !regular {
-        return Err("no transcript file (a symlink or missing path does not count)".into());
+    let (path, id) = (field("transcript_path"), field("tool_use_id"));
+    if id.is_empty() || !pinned(path, field("session_id")) {
+        return Err("no transcript at ~/.claude/projects/<dir>/<session_id>.jsonl".into());
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read transcript: {e}"))?;
-    let (mut asked, mut result) = (Vec::new(), false);
+    let (mut asked, mut result): (Vec<_>, bool) = (Vec::new(), false);
+    let mut results = Vec::new();
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -79,6 +123,8 @@ fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String
                 && b.get("tool_use_id").and_then(Value::as_str) == Some(id)
             {
                 result = true;
+                // what the tool returned: its text (`"<question>"="<labels>"`) or `toolUseResult`
+                results.push((b["content"].clone(), v["toolUseResult"]["answers"].clone()));
             }
             let ours = b.get("id").and_then(Value::as_str) == Some(id)
                 && b.get("name").and_then(Value::as_str) == Some("AskUserQuestion");
@@ -88,6 +134,19 @@ fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String
                     asked.extend(q.get("question").and_then(Value::as_str).map(markers));
                 }
             }
+        }
+    }
+    let qs = input
+        .pointer("/tool_input/questions")
+        .and_then(Value::as_array);
+    for text in qs
+        .into_iter()
+        .flatten()
+        .filter_map(|q| q.get("question")?.as_str())
+    {
+        let said = picked(input, text);
+        if !said.is_empty() && !results.iter().any(|(c, st)| agrees(c, st, text, &said)) {
+            return Err("the transcript's answer differs from the hook input".into());
         }
     }
     items.retain(|(qid, a)| {
