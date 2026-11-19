@@ -580,6 +580,26 @@ mod signed {
         refused(&fake);
     }
 
+    /// A signing time may be 600 s before the comment's creation, but at most 60 s after it.
+    #[test]
+    fn the_signing_time_may_lag_by_600_s_but_lead_by_only_60_s() {
+        for (skew, counts) in [(60, true), (61, false), (-600, true), (-601, false)] {
+            let fake = setup(ON);
+            let body = record_at(
+                1,
+                "k1",
+                ("acme/widget", 1, HEAD),
+                ("session_orch", AT + skew),
+            );
+            app_comment(&fake, "ada", &body);
+            if counts {
+                assert_eq!(approved(&fake), "ada", "skew {skew}");
+            } else {
+                refused(&fake);
+            }
+        }
+    }
+
     /// A signed record posted long after it was signed is stale: a copy of an old one never counts.
     #[test]
     fn a_stale_copy_of_a_signed_record_does_not_count() {
