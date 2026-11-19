@@ -17,7 +17,7 @@ const FIX: &str = "the hooks and permissions in .claude/settings*.json and ~/.cl
     owner's: ask the orchestrator to ask the owner in chat to change them, and do not set \
     disableAllHooks";
 
-const HOME: &str = r"(?:~|\$\{?HOME\}?|/root|/home/[^/\s]+|/Users/[^/\s]+)";
+const HOME: &str = r"(?:~[\w.-]*|\$\{?HOME\}?|/root|/home/[^/\s]+|/Users/[^/\s]+)";
 
 /// A path (file tool or redirect target) the lock covers.
 static PATH: LazyLock<Regex> = LazyLock::new(|| {
@@ -105,8 +105,21 @@ fn opt<'a>(args: &[&'a str], short: &str, long: &str) -> Option<&'a str> {
 
 /// The index of the git subcommand: the first word that is not an option or its value.
 fn git_sub(args: &[&str]) -> Option<usize> {
+    let valued = ["-C", "-c", "--work-tree", "--git-dir", "--namespace"];
     (0..args.len())
-        .find(|&i| !args[i].starts_with('-') && !(i > 0 && matches!(args[i - 1], "-C" | "-c")))
+        .find(|&i| !args[i].starts_with('-') && !(i > 0 && valued.contains(&args[i - 1])))
+}
+
+/// The directories git moves to before its subcommand: every `-C D` (cumulative) and
+/// `--work-tree D` or `--work-tree=D`.
+fn git_dirs<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let end = git_sub(args).unwrap_or(args.len());
+    (0..end)
+        .filter_map(|i| match args[i] {
+            "-C" | "--work-tree" => args.get(i + 1).copied(),
+            a => a.strip_prefix("--work-tree="),
+        })
+        .collect()
 }
 
 /// Whether a word is a redirection (`>f`, `2>f`, `&>f`), which ends a command's operands.
@@ -135,21 +148,39 @@ fn destination<'a>(args: &[&'a str]) -> Option<&'a str> {
     dir.or_else(|| args.iter().rev().find(|a| !a.starts_with('-')).copied())
 }
 
-/// A word as a path from `.claude`, for a command that runs there (`rm settings.json`).
-fn from_claude(word: &str) -> String {
+/// Whether `dir` is `.claude` or below it.
+fn inside(dir: &str) -> bool {
+    static IN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?:^|/)\.claude(?:/|$)").expect("inside regex"));
+    IN.is_match(&plain(dir))
+}
+
+/// The directory after moving to `to`, when it is (still) in `.claude`: `from` is where the
+/// command runs now, if that is in `.claude`. An unknown word (`cd -`, `cd $X`) stays inside.
+fn enter(from: Option<&str>, to: &str) -> Option<String> {
+    let free = to.starts_with(['/', '~']);
+    let at = match from {
+        Some(d) if !free => format!("{d}/{to}"),
+        _ => to.into(),
+    };
+    inside(&at).then_some(at)
+}
+
+/// A word as a path from `dir`, for a command that runs there (`rm settings.json`).
+fn at(dir: &str, word: &str) -> String {
     let free = word.starts_with(['-', '/', '~', '$', '>']) || word.contains('>');
     if free {
         word.into()
     } else {
-        format!(".claude/{word}")
+        format!("{dir}/{word}")
     }
 }
 
 /// The settings-lock for one tool call; `None` allows it.
-pub(super) fn settings_rule(tool: &str, input: &Value) -> Option<String> {
+pub fn settings_rule(tool: &str, input: &Value, cwd: &str) -> Option<String> {
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-        return bash(command);
+        return bash(command, cwd);
     }
     let name = tool.rsplit("__").next().unwrap_or(tool);
     let hit = if FILE_TOOLS.contains(&name) {
@@ -158,6 +189,7 @@ pub(super) fn settings_rule(tool: &str, input: &Value) -> Option<String> {
         paths.filter_map(|f| f.get("path")?.as_str()).any(protected)
     } else {
         let path = edited_path(tool, input)?;
+        let path = enter(Some(cwd).filter(|c| inside(c)), &path).unwrap_or(path);
         // A `disableAllHooks` key only counts in a JSON file: a spec or test may name it.
         let sets = path.ends_with(".json") && strings(input).iter().any(|t| HOOKS_OFF.is_match(t));
         protected(&path) || sets
@@ -213,18 +245,17 @@ fn mutates(cmd: &str, args: &[&str]) -> bool {
 
 /// Whether a redirection in the segment (`>f`, `>> f`, `2>f`) writes a target; unlike
 /// `bash_writes` it also sees `~` and `$HOME` paths.
-fn redirects(seg: &[String], cwd: bool) -> bool {
+fn redirects(seg: &[String], dir: Option<&str>) -> bool {
     seg.iter().enumerate().any(|(i, w)| {
         let op = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
         let rest = op.strip_prefix('>').map(|r| r.trim_start_matches('>'));
-        let to = rest.map(|r| {
-            if r.is_empty() {
-                seg.get(i + 1).map_or("", |n| n)
-            } else {
-                r
-            }
+        // `2>&1` duplicates a descriptor: no file.
+        let to = rest.map(|r| match r.strip_prefix('&').unwrap_or(r) {
+            "" => seg.get(i + 1).map_or("", |n| n),
+            fd if r.starts_with('&') && fd.chars().all(|c| c.is_ascii_digit() || c == '-') => "",
+            _ => r,
         });
-        to.is_some_and(|t| target(&if cwd { from_claude(t) } else { t.into() }))
+        to.is_some_and(|t| !t.is_empty() && target(&dir.map_or(t.into(), |d| at(d, t))))
     })
 }
 
@@ -232,54 +263,62 @@ fn redirects(seg: &[String], cwd: bool) -> bool {
 /// `env -C` or `sudo -D` goes into `.claude`: relative words then count as paths in it (sticky
 /// to the end, which only makes it stricter). Subshell groups are scanned in line; `sh -c`,
 /// `eval` and `env -S` strings are scanned again with the current `cwd`.
-fn mutated(text: &str, mut cwd: bool, depth: usize) -> bool {
+fn mutated(text: &str, mut cwd: Option<String>, depth: usize) -> bool {
     let words = shell_words(&split_heredocs(text).0);
     for seg in words.split(|w| w == SEP) {
         let (cmd, args, dirs) = command_of(seg);
-        let git = (cmd == "git")
-            .then(|| opt(&args, "-C", "--work-tree"))
-            .flatten();
-        let here = cwd || dirs.iter().map(String::as_str).chain(git).any(target);
+        let git = if cmd == "git" {
+            git_dirs(&args)
+        } else {
+            vec![]
+        };
+        let mut here = cwd.clone();
+        for d in dirs.iter().map(String::as_str).chain(git) {
+            here = enter(here.as_deref(), d).or(here);
+        }
         // Git's options and subcommand are words, not paths.
         let lead = if cmd == "git" {
             git_sub(&args).map_or(args.len(), |i| i + 1)
         } else {
             0
         };
-        let args: Vec<String> = (args.iter().enumerate())
-            .map(|(i, a)| {
-                if here && i >= lead {
-                    from_claude(a)
-                } else {
-                    a.to_string()
-                }
+        let paths: Vec<String> = (args.iter().enumerate())
+            .map(|(i, a)| match &here {
+                Some(d) if i >= lead => at(d, a),
+                _ => a.to_string(),
             })
             .collect();
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        if mutates(cmd, &refs) || redirects(seg, here) {
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        if mutates(cmd, &refs) || redirects(seg, here.as_deref()) {
             return true;
         }
         if matches!(cmd, "cd" | "pushd") {
-            cwd |= args
-                .iter()
-                .find(|a| !a.starts_with('-'))
-                .is_some_and(|d| target(d));
+            let to = args.iter().find(|a| !a.starts_with('-'));
+            cwd = to.and_then(|d| enter(cwd.as_deref(), d));
         }
     }
-    depth < 4
-        && word_scripts(text)
-            .iter()
-            .any(|s| mutated(s, cwd, depth + 1))
+    depth < 4 && (word_scripts(text).iter()).any(|s| mutated(s, cwd.clone(), depth + 1))
 }
 
-fn bash(command: &str) -> Option<String> {
+/// `python -m json.tool [opts] [FILE]`: reads one file (a second operand would be the output).
+fn json_read(cmd: &str, args: &[&str]) -> bool {
+    let ops = (args.iter().skip(2)).filter(|a| !a.starts_with('-') && a.parse::<u8>().is_err());
+    matches!(cmd, "python" | "python3")
+        && args.starts_with(&["-m", "json.tool"])
+        && ops.take_while(|a| !is_redir(a)).count() <= 1
+}
+
+fn bash(command: &str, cwd: &str) -> Option<String> {
     let text = prose::strip_prose(command);
     let dequoted: String = text
         .chars()
         .filter(|c| !matches!(c, '\'' | '"' | '\\'))
         .collect();
     let words = shell_words(&split_heredocs(&text).0);
-    let interp = (words.split(|w| w == SEP)).any(|seg| INTERP.contains(&command_of(seg).0));
+    let interp = (words.split(|w| w == SEP)).any(|seg| {
+        let (cmd, args, _) = command_of(seg);
+        INTERP.contains(&cmd) && !json_read(cmd, &args)
+    });
     // `read_only` ignores redirections: a `>` in code that runs counts as a write.
     let reads = read_only(&text, 0) && !text.contains('>');
     let sets = (HOOKS_OFF.is_match(&text) || HOOKS_OFF.is_match(&dequoted))
@@ -287,7 +326,8 @@ fn bash(command: &str) -> Option<String> {
         && !reads;
     let code = interp && TEXT.is_match(&dequoted) && !reads;
     let writes = bash_writes(command).iter().any(|p| protected(p));
-    (mutated(&text, false, 0) || code || sets || writes)
+    let start = Some(cwd.to_string()).filter(|c| inside(c));
+    (mutated(&text, start, 0) || code || sets || writes)
         .then(|| format!("the command writes the guard's own settings: {FIX}"))
 }
 
@@ -296,11 +336,69 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The rule from a hook running in `/repo` (shadows the glob import).
+    fn settings_rule(tool: &str, input: &Value) -> Option<String> {
+        super::settings_rule(tool, input, "/repo")
+    }
     fn file(tool: &str, path: &str) -> Option<String> {
         settings_rule(tool, &json!({"file_path": path, "content": "{}"}))
     }
     fn sh(cmd: &str) -> Option<String> {
         settings_rule("Bash", &json!({"command": cmd}))
+    }
+    fn sh_in(cwd: &str, cmd: &str) -> Option<String> {
+        super::settings_rule("Bash", &json!({"command": cmd}), cwd)
+    }
+
+    #[test]
+    fn the_hooks_directory_is_the_start_and_dotdot_resolves() {
+        let (c, cc) = ("/repo/.claude", "/repo/.claude/commands");
+        assert!(sh_in(c, "rm settings.json").is_some());
+        assert!(sh_in(c, "echo {} > settings.local.json").is_some());
+        assert!(sh_in(cc, "rm ../settings.json").is_some());
+        assert!(sh_in("/repo", "cd .claude/commands && rm ../settings.json").is_some());
+        assert!(sh_in("/repo", "cd .claude/commands && cd .. && rm settings.json").is_some());
+        assert!(super::settings_rule("Edit", &json!({"file_path": "settings.json"}), c).is_some());
+        assert!(sh_in(c, "cat settings.json").is_none());
+        assert!(sh_in(cc, "rm x.md").is_none());
+        assert!(sh_in(c, "cd .. && rm settings.json").is_none());
+        assert!(sh_in("/repo/src", "rm settings.json").is_none());
+        assert!(sh_in("/repo", "cd src && rm settings.json").is_none());
+    }
+
+    #[test]
+    fn git_dirs_repeat_and_spaced_forms_count() {
+        for c in [
+            "git -C a -C .claude rm settings.json",
+            "git -C .claude/commands -C .. rm settings.json",
+            "git --work-tree .claude checkout -- settings.json",
+            "git --work-tree=.claude checkout -- settings.json",
+            "git --git-dir x --work-tree .claude restore settings.json",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
+        assert!(sh("git --work-tree src checkout -- settings.json").is_none());
+    }
+
+    #[test]
+    fn fd_duplication_and_json_tool_reads_pass() {
+        for c in [
+            "cd .claude && ls 2>&1",
+            "cd .claude && ls >&2",
+            "cd .claude && cat settings.json 2>&1 | head",
+            "python3 -m json.tool .claude/settings.json",
+            "python3 -m json.tool --indent 2 ~/.claude/settings.json",
+            "python3 -m json.tool .claude/settings.json | head",
+        ] {
+            assert!(sh(c).is_none(), "{c}");
+        }
+        for c in [
+            "python3 -m json.tool a.json .claude/settings.json",
+            "python3 -m json.tool a.json > .claude/settings.json",
+            "python3 -c \"print(1)\" .claude/settings.json",
+        ] {
+            assert!(sh(c).is_some(), "{c}");
+        }
     }
 
     #[test]
