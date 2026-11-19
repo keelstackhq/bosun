@@ -43,6 +43,24 @@ cloud sessions install, and the optional Routines: create them from `data.routin
 `BOSUN_ROUTINES_OK=1`). Then write your first plan: section 6 of
 [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md), the long version, which also has undo.
 
+## Fresh cloud repo, full autonomy
+
+No CI. By default no key and no approvers file are needed: an unsigned chat record counts. Under
+`[approvals] chat_signed = true` the record must be signed, so first run `bosun keygen --enroll`
+(public half into `.bosun/approvers.toml`) and pass `--sign-key <pem>` to `bosun approve --chat`.
+The owner answers one chat form per gated PR (spec §8):
+
+1. Paste `bosun setup-snippet` once as the cloud environment's setup script.
+2. In the repo: `bosun adopt --ci none --policy autonomous --owner <login>`; commit, push, merge the
+   setup PR. The pin must be 0.21.0 or later (adopt checks) for `[ci] provider` and chat approvals.
+3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr>@<head> --chat --question <id>`
+   posts the record for that head. Without `chat_signed` it needs no key; `.bosun/approvers.toml` is optional.
+4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>`; it reads the gate stamps of its own checkout and does not rerun the gates. With CI, auto-merge does it.
+
+Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. Trust model: an unsigned record only shows who posted the comment; `chat_signed = true` (on the default branch) makes only records signed by an enrolled owner key count, and that is the strong path. A chat record never counts on a PR that changes trust files (`governance/owners.toml`, approvers) or whose diff bosun could not see (R-unseen): there only the owner's own GitHub approval counts. The `[approvals]` keys are known
+from release 0.21.0: pin that release first (the setup PR that moves `.bosun/version`), then set
+them in a later PR; an older pin rejects them.
+
 ## For agents
 
 Read [AGENTS.md](AGENTS.md). Every command prints one JSON object (`ok`, `exit_code`, `data`,
@@ -199,9 +217,10 @@ else console.log(`exit ${r.exit_code}, next step: ${r.error.fix}`); // e.g. 3: p
 ## Owner controls
 
 - **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,
-  head SHA; approve or hold); on approve the orchestrator posts the signed `bosun approve`
-  comment for that exact head (`bosun approve <pr>@<head> --sign-key <pem>`), the `risk`
-  workflow re-runs and `risk-check` turns green (D-012, spec §8, signed approvals). Fallback:
+  head SHA; approve or hold); on approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>`,
+  which posts the chat record for that exact head; `risk-check` counts it as an owner approval of that head
+  (spec §8, chat records). A signed `bosun approve <pr>@<head> --sign-key <pem>` still works
+  when you enrolled a key (D-012). Fallback:
   comment on the PR yourself, as a login in `governance/owners.toml`, with exactly
   `/bosun approve <head sha>` (the full 40-character SHA of the current head). A new push needs
   a new approval. A GitHub

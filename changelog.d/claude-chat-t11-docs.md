@@ -1,0 +1,1 @@
+- Chat approval docs: `bosun adopt --ci none --policy autonomous --owner <login>`, chat records, `chat_signed`, the trust-file and R-unseen exception, keys known from 0.21.0, `bosun merge` without CI.

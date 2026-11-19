@@ -1,0 +1,1 @@
+- Chat approval T11 docs: README, adopt guide, AGENTS.md, defaults and spec 08 describe what the t12 base implements (chat records, `chat_signed`, intake) and its limits.
