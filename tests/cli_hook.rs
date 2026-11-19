@@ -882,7 +882,8 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
     let (fake, tmp) = (FakeGithub::start(), repo());
     let cwd = tmp.path().to_str().unwrap();
     let bash = |c: &str| {
-        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        // The input's session_id (Claude's UUID) is not the identity: the env session is.
+        let i = json!({"hook_event_name":"PreToolUse","session_id":"1b2c-uuid","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
         hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
     };
     for c in [
@@ -898,18 +899,26 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "n=BOSUN_SESSION; export ${!n}=orch; xargs bosun merge 1",
         "BOSUN_SESSION=x bosun merge 1",
         "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
+        // Global, with a session_id in the hook input; until the allowance (t10b) every setter.
+        "BOSUN_SESSION=session_me/12 bosun claim 12",
+        "BOSUN_ORIGIN=routine bosun join",
+        "unset BOSUN_SESSION",
+        "env -u BOSUN_ORIGIN bosun status",
+        "echo ${!p*}",
     ] {
         let o = bash(c);
         assert!(o.stdout.contains("deny"), "{c}: {}", o.stdout);
-        assert!(o.stdout.contains("unmodified"), "{c}: {}", o.stdout);
+        assert!(
+            o.stdout.contains("identity environment"),
+            "{c}: {}",
+            o.stdout
+        );
     }
     for c in [
         "bosun merge 12",
         "cargo test",
         "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
-        "BOSUN_SESSION=session_x/12 bosun claim 12",
-        "export BOSUN_SESSION=session_x/12 && bosun heartbeat 12",
-        "BOSUN_ORIGIN=routine bosun join",
+        "export AWS_SESSION_TOKEN=x && gh pr view 1",
         "rg -n BOSUN_SESSION src",
     ] {
         let o = bash(c);
