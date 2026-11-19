@@ -1,4 +1,4 @@
-//! risk-check takes the linked task's `risk: high` from the plan (D-021: owner approval stays), not only the paths.
+//! risk-check takes the linked task's `risk: high` from the plan (D-016), not only the paths.
 
 mod common;
 

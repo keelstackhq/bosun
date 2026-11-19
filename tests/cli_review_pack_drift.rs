@@ -1,4 +1,4 @@
-//! D-021: the review pack compares the PR's changed lines with the planned `size:` of the tasks
+//! D-016: the review pack compares the PR's changed lines with the planned `size:` of the tasks
 //! it links; more than twice the plan is a drift note, never an error.
 
 mod common;
