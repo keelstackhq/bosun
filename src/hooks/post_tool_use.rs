@@ -100,7 +100,9 @@ fn agrees(content: &Value, structured: &Value, question: &str, said: &[String]) 
 /// Keep only the items the session transcript backs (`transcript_path` of the hook input, pinned
 /// by [`pinned`]): an assistant `tool_use` with this `tool_use_id`, named `AskUserQuestion`,
 /// whose question holds the same marker (id, PR and full head), and a `tool_result` for that
-/// id whose picked labels equal `tool_response.answers` (a mismatch stores nothing).
+/// id whose picked labels equal `tool_response.answers` (a mismatch stores nothing). Only lines whose
+/// `sessionId` equals the input's `session_id` count. Whether Claude Code writes the `tool_result`
+/// line before PostToolUse is unverified: if it is missing, the answer is not stored.
 /// Anything else fails closed. A hint against forged hook input:
 /// it stops confused workers, not liars (spec 14).
 fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String> {
@@ -116,6 +118,10 @@ fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        // every line that counts carries the hook input's `sessionId`; absent or other: ignored
+        if v.get("sessionId").and_then(Value::as_str) != Some(field("session_id")) {
+            continue;
+        }
         let blocks = (v.pointer("/message/content")).and_then(Value::as_array);
         for b in blocks.into_iter().flatten() {
             let kind = b.get("type").and_then(Value::as_str);
@@ -136,6 +142,9 @@ fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String
             }
         }
     }
+    if !result {
+        return Err("the transcript has no answer yet (no tool_result line for it)".into());
+    }
     let qs = input
         .pointer("/tool_input/questions")
         .and_then(Value::as_array);
@@ -155,11 +164,10 @@ fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String
             .flatten()
             .any(|m| m.0 == *qid && m.1 == a.pr && m.3 == a.head)
     });
-    match (items.is_empty(), result) {
-        (true, _) => Err("the transcript has no such AskUserQuestion with this marker".into()),
-        (_, false) => Err("the transcript has no tool_result for it".into()),
-        _ => Ok(()),
+    if items.is_empty() {
+        return Err("the transcript has no such AskUserQuestion with this marker".into());
     }
+    Ok(())
 }
 
 /// The marked PRs of `text`: `(question_id, pr, short, full head)`, one per line. Only a line's
