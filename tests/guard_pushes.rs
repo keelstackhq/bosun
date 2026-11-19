@@ -10,7 +10,6 @@ fn bash(cmd: &str, branch: &str) -> Option<String> {
         &json!({ "command": cmd }),
         &|_| Some(branch.into()),
         "main",
-        "",
     )
 }
 
