@@ -1,0 +1,1 @@
+- `bosun approve <pr>@<head> --chat --question <id>` (or `--slack-user U...`) lets an orchestrator record the owner's chat approval (D-018); the Claude Tag ask names the question id and full head.

@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T5 · `approve --chat` records the owner's chat approval; Claude Tag ask names question id and full head · this PR
