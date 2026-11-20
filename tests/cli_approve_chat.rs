@@ -14,7 +14,7 @@ const NOW: &str = "2026-11-10T10:00:00Z";
 const LIVE: &str = "2026-11-10T11:00:00Z";
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER: &str = "89abcdef0123456789abcdef0123456789abcdef";
-const Q: &str = "1-0123456-1762768800";
+const Q: &str = "1-0123456-1794304800";
 const REG: u64 = 50;
 const BOT: &str = "github-actions[bot]";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\nslack = \"U0ADA1\"\n";
@@ -318,7 +318,7 @@ fn chat_without_stored_answer_refused() {
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     refused(&fake, r, 5);
     // An id naming another PR, even with a matching stored answer.
-    let q2 = "2-0123456-1762768800";
+    let q2 = "2-0123456-1794304800";
     answer(tmp.path(), q2, "approve", 1, HEAD);
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", q2], &[]);
     refused(&fake, r, 5);
@@ -349,7 +349,7 @@ fn chat_slack_owner_ok() {
         &env,
     );
     refused(&fake, r, 5);
-    answer_at(tmp.path(), Q, "asked", NOW);
+    asked_by(tmp.path(), Q, "session_tag");
     let (code, v) = chat(
         &fake,
         tmp.path(),
@@ -403,7 +403,7 @@ fn chat_short_head_is_usage_error() {
 fn chat_slack_hold_refused() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
-    answer(tmp.path(), "1-0123456-1762768801", "hold", 1, HEAD);
+    answer(tmp.path(), "1-0123456-1794304801", "hold", 1, HEAD);
     let env = [("BOSUN_ORIGIN", "slack")];
     let r = chat(
         &fake,
@@ -420,7 +420,7 @@ fn chat_slack_wrong_question_prefix_refused() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
     let env = [("BOSUN_ORIGIN", "slack")];
-    for q in ["2-0123456-1762768800", "1-0000000-1762768800", "x"] {
+    for q in ["2-0123456-1794304800", "1-0000000-1794304800", "x"] {
         let r = chat(
             &fake,
             tmp.path(),
@@ -454,6 +454,104 @@ fn chat_wave_agent_id_refused() {
     answer(tmp.path(), Q, "approve", 1, HEAD);
     let r = chat(&fake, tmp.path(), "S1/task", &["--question", Q], &[]);
     refused(&fake, r, 5);
+}
+
+/// `session` has the owner's stored approve and passes every check but the orchestrator one.
+fn refused_as(session: &str, env: &[(&str, &str)], prepare: impl FnOnce(&FakeGithub)) {
+    let (fake, tmp) = (setup(), repo());
+    prepare(&fake);
+    answer_as(tmp.path(), Q, "approve", NOW, session);
+    let r = chat(&fake, tmp.path(), session, &["--question", Q], env);
+    let v = refused(&fake, r, 5);
+    assert!(v["error"]["fix"].as_str().unwrap().contains("handoff-pr"));
+}
+
+#[test]
+fn chat_without_registry_join_refused() {
+    refused_as("session_nojoin", &[], |_| {});
+}
+
+#[test]
+fn chat_join_with_parent_refused() {
+    refused_as("session_kid", &[], |f| {
+        join(f, "session_kid", "local", Some("session_orch"), 1)
+    });
+}
+
+#[test]
+fn chat_expired_join_refused() {
+    // The join expires at LIVE (11:00); the command runs at 12:00.
+    let later = [("BOSUN_NOW", "2026-11-10T12:00:00Z")];
+    refused_as("session_orch", &later, |_| {});
+}
+
+#[test]
+fn chat_spawned_or_routine_registry_origin_refused() {
+    for origin in ["spawned", "routine"] {
+        refused_as("session_x", &[], |f| join(f, "session_x", origin, None, 1));
+    }
+}
+
+#[test]
+fn chat_routine_origin_refused_whatever_the_registry_says() {
+    refused_as("session_orch", &[("BOSUN_ORIGIN", "routine")], |_| {});
+}
+
+#[test]
+fn chat_question_must_be_fresh_for_risk_check() {
+    const NOW_UNIX: i64 = 1_794_304_800;
+    let ok = |unix: i64| {
+        let (fake, tmp) = (setup(), repo());
+        let q = format!("1-0123456-{unix}");
+        answer(tmp.path(), &q, "approve", 1, HEAD);
+        let (code, _) = chat(&fake, tmp.path(), "session_orch", &["--question", &q], &[]);
+        match code {
+            0 => assert_eq!(chat_comments(&fake).len(), 1),
+            _ => assert!(chat_comments(&fake).is_empty()),
+        }
+        code == 0
+    };
+    assert!(ok(NOW_UNIX) && ok(NOW_UNIX + 60) && ok(NOW_UNIX - 14 * 86_400));
+    assert!(!ok(NOW_UNIX + 61) && !ok(NOW_UNIX - 14 * 86_400 - 1));
+    assert!(!ok(1_762_768_800));
+}
+
+#[test]
+fn chat_slack_ask_of_another_session_refused() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    asked_by(tmp.path(), Q, "session_other");
+    let args = ["--question", Q, "--slack-user", "U0ADA1"];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_tag",
+        &args,
+        &[("BOSUN_ORIGIN", "slack")],
+    );
+    refused(&fake, r, 5);
+}
+
+/// What `approve --chat` posts is what `risk-check` counts: the same fake, the comment as the
+/// owner's through the Claude app and created at NOW (the fake stamps comments earlier).
+#[test]
+fn chat_record_counts_in_risk_check() {
+    let (fake, tmp) = (setup(), repo());
+    let patch = Some("@@ -0,0 +1,1 @@\n+x");
+    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, patch);
+    fake.content("governance/owners.toml", "base0000", OWNERS);
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    assert_eq!(code, 0, "{v}");
+    fake.last_comment(|c| {
+        c.user = "ada".into();
+        c.via_app = Some("claude".into());
+        c.created_at = NOW.into();
+        c.updated_at = NOW.into();
+    });
+    let (code, v) = common::run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved_by"], "ada", "{v}");
 }
 
 fn usage_args(fake: &FakeGithub, tmp: &Path, args: &[&str]) -> i32 {
@@ -538,7 +636,7 @@ fn chat_later_hold_wins() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     let v = json!({
         Q: {"answer": "approve", "pr": 1, "head": HEAD, "at": NOW},
-        "1-0123456-1762769000": {"answer": "hold", "pr": 1, "head": HEAD, "at": NOW},
+        "1-0123456-1794305000": {"answer": "hold", "pr": 1, "head": HEAD, "at": NOW},
     });
     std::fs::write(file, v.to_string()).unwrap();
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
@@ -547,6 +645,15 @@ fn chat_later_hold_wins() {
 
 /// Add an answer to the stored file at time `at`.
 fn answer_at(dir: &Path, id: &str, answer: &str, at: &str) {
+    answer_as(dir, id, answer, at, "session_orch");
+}
+
+/// An ask `approve --list` stored for `session`.
+fn asked_by(dir: &Path, id: &str, session: &str) {
+    answer_as(dir, id, "asked", NOW, session);
+}
+
+fn answer_as(dir: &Path, id: &str, answer: &str, at: &str, session: &str) {
     let file = dir
         .join(git(dir, &["rev-parse", "--git-common-dir"]))
         .join("bosun/answers.json");
@@ -556,7 +663,7 @@ fn answer_at(dir: &Path, id: &str, answer: &str, at: &str) {
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| json!({}));
     map[id] = json!({"answer": answer, "repo": "acme/widget", "pr": 1, "head": HEAD, "at": at,
-        "session": "session_orch", "cli_session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d", "tool_use_id": "tu"});
+        "session": session, "cli_session_id": "3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d", "tool_use_id": "tu"});
     std::fs::write(file, map.to_string()).unwrap();
 }
 
@@ -567,7 +674,7 @@ fn a_future_dated_stored_answer_does_not_record() {
     // this question was hand-written a year ahead, so `get` ignores it and nothing records.
     answer_at(
         tmp.path(),
-        "1-0123456-1762768999",
+        "1-0123456-1794304999",
         "approve",
         "2026-11-10T09:00:00Z",
     );
@@ -582,7 +689,7 @@ fn chat_needs_the_newest_answer_for_the_head_to_be_an_approve() {
     answer_at(tmp.path(), Q, "approve", "2026-11-10T09:00:00Z");
     answer_at(
         tmp.path(),
-        "1-0123456-1762768999",
+        "1-0123456-1794304999",
         "hold",
         "2026-11-10T09:30:00Z",
     );
@@ -591,7 +698,7 @@ fn chat_needs_the_newest_answer_for_the_head_to_be_an_approve() {
     // The newer answer approves: now it records.
     answer_at(
         tmp.path(),
-        "1-0123456-1762769000",
+        "1-0123456-1794305000",
         "approve",
         "2026-11-10T09:45:00Z",
     );
@@ -664,7 +771,7 @@ fn slack_short(fake: &FakeGithub, dir: &Path, short: &str, q: &str) -> (i32, Val
 fn chat_slack_short_head_must_name_exactly_one_ready_pr() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
-    answer_at(tmp.path(), Q, "asked", NOW);
+    asked_by(tmp.path(), Q, "session_tag");
     // Nothing is ready: zero matches.
     let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], Q);
     assert_eq!(code, 3, "{v}");
@@ -682,9 +789,9 @@ fn chat_slack_short_head_with_one_match_records() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
     ready(&fake, 1, HEAD);
-    answer_at(tmp.path(), Q, "asked", NOW);
+    asked_by(tmp.path(), Q, "session_tag");
     // The question names another PR than the one the short head maps to.
-    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], "2-0123456-1762768800");
+    let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], "2-0123456-1794304800");
     assert_eq!(code, 3, "{v}");
     let (code, v) = slack_short(&fake, tmp.path(), &HEAD[..7], Q);
     assert_eq!(code, 0, "{v}");
