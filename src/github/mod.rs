@@ -99,6 +99,8 @@ pub trait Github {
     fn label_exists(&self, name: &str) -> Result<bool>;
     /// Whether the branch exists on GitHub (is pushed).
     fn branch_exists(&self, name: &str) -> Result<bool>;
+    /// Whether the git tag `name` exists in the repository (404 is `false`).
+    fn tag_exists(&self, name: &str) -> Result<bool>;
     /// Delete the label from the repository; one that does not exist is fine.
     fn delete_label(&self, name: &str) -> Result<()>;
     /// Create the label; one that already exists is fine.
@@ -581,6 +583,11 @@ impl Github for LiveGithub {
 
     fn branch_exists(&self, name: &str) -> Result<bool> {
         let path = self.path(&format!("/branches/{}", enc(name)));
+        Ok(self.http.get_json(&path)?.is_some())
+    }
+
+    fn tag_exists(&self, name: &str) -> Result<bool> {
+        let path = self.path(&format!("/git/ref/tags/{}", enc(name)));
         Ok(self.http.get_json(&path)?.is_some())
     }
 

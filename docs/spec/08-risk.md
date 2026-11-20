@@ -311,10 +311,7 @@ High-risk PRs:
     judges the PR; the risk workflow runs the base pin, and the policy is read from the base
     config, so a single PR cannot widen or narrow it. A change of the list ships in a release, and
     the pin-bump PR that adopts it is judged by the old binary.
-  - Accepted residual risk: `.bosun/version` is not trust root (that would make every pin bump
-    owner-only). A quorum-merged release plus a pin bump could change the judging binary. This is
-    mitigated by every judging file above being trust root, two independent reviewers, and
-    `bosun halt`.
+  - `.bosun/version` pin rule: an upgrade to a released version stays under quorum, but a change of the pin is trust root (owner only) when the head pin is a downgrade (head semver below base), not a published release, not plain `x.y.z` (no `v`, suffix or leading zeros; surrounding whitespace is fine), or deleted or renamed away. "Published" means the ref `v{version}` exists (`Github::tag_exists`, `GET /git/ref/tags/<name>`, 404 is no). The pin names releases of keelstackhq/bosun and the client is per repo, so the lookup runs only in bosun's own repo (`bosun_code`); in any other repo a changed pin fails closed (owner only), as does any API error reading the pin or the ref. The base pin is read at base, the head pin at head; the rule applies only when `.bosun/version` (or a rename from it) is among the changed files, in risk-check and in `bosun approve` alike (`risk::pin_change_trust_root`, pure; `risk_check::pin_trust_root`, I/O). Two identical versions (whitespace aside) are no change. A new pin where none stood needs only a released, plain version. Mitigations that remain: every judging file above is trust root, two independent reviewers, `bosun halt`.
   - Why `mode = "autonomous"` can map to quorum: base config plus the base-pinned binary judge
     each PR, so the switch takes effect only after an owner-approved pin bump (the bump PR is
     judged under the old autonomous policy, where `.bosun/**` is owner-only); before that, the

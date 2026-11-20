@@ -138,6 +138,8 @@ pub struct State {
     pub parents: HashMap<String, String>,
     /// Branches `GET /branches/<name>` answers 404 for; every other branch exists.
     pub missing_branches: Vec<String>,
+    /// Git refs `GET /git/ref/tags/<name>` answers 200 for; every other one is 404.
+    pub release_refs: Vec<String>,
 }
 
 type Mutation = Box<dyn FnOnce(&mut State) + Send>;
@@ -658,6 +660,11 @@ impl FakeGithub {
             .unwrap()
             .missing_branches
             .push(name.into());
+    }
+
+    /// Publish the release ref `name` (such as `v0.22.0`): `GET /git/ref/tags/<name>` answers 200.
+    pub fn release_ref(&self, name: &str) {
+        self.state.lock().unwrap().release_refs.push(name.into());
     }
 
     pub fn graphql_status(&self, status: u16, message: &str) {
@@ -1283,6 +1290,12 @@ fn route(
                 return msg(404, "Branch not found");
             }
             ok(json!({"name": name}))
+        }
+        ("GET", ["git", "ref", "tags", name]) => {
+            if s.release_refs.iter().any(|t| t == name) {
+                return ok(json!({"ref": format!("refs/tags/{name}")}));
+            }
+            msg(404, "Not Found")
         }
         ("GET", ["labels", name]) => match s.labels.iter().find(|l| l.0 == *name) {
             Some(l) => ok(json!({"name": l.0, "color": l.1})),

@@ -541,3 +541,70 @@ fn approve_does_not_count_the_signers_wave_agents_as_reviewers() {
     post_verdict(&fake, "session_o/x", HEAD);
     assert_eq!(sign(&fake, &k, "session_o").0, 1);
 }
+
+/// Quorum PR changing `.bosun/version` from `old` to `new` (`None`: deleted); in bosun's own repo
+/// (the code marker at base) when `own`.
+fn pin_pr(k: &Key, old: &str, new: Option<&str>, own: bool) -> FakeGithub {
+    let fake = pr(k, ".bosun/version", "quorum");
+    fake.content(".bosun/version", BASE, old);
+    match new {
+        Some(n) => fake.content(".bosun/version", HEAD, n),
+        None => fake.pull_file(1, ".bosun/version", "removed", 0, 1, Some(PLAIN)),
+    }
+    if own {
+        fake.content("src/cli/risk_check.rs", BASE, "x");
+    }
+    fake
+}
+
+#[test]
+fn a_pin_downgrade_unknown_version_garbage_and_deletion_stay_with_the_owner() {
+    for (old, new) in [
+        ("0.22.0\n", Some("0.21.0\n")),
+        ("0.22.0\n", Some("0.23.0\n")), // released? no tag: unknown version
+        ("0.22.0\n", Some("latest\n")),
+        ("0.22.0\n", Some("v0.23.0\n")),
+        ("0.22.0\n", None),
+    ] {
+        let k = key();
+        let fake = pin_pr(&k, old, new, true);
+        fake.release_ref("v0.21.0"); // a downgrade to a released version is still refused
+        let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+        assert_eq!(code, 5, "{new:?}: {v}");
+        owner_path(&fake, &v, &format!("{new:?}"));
+    }
+}
+
+#[test]
+fn a_pin_upgrade_to_a_released_version_passes_quorum() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), true);
+    fake.release_ref("v0.23.0");
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_pin_change_outside_bosuns_own_repo_fails_closed() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.release_ref("v0.23.0");
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 5, "{v}");
+    owner_path(&fake, &v, "other repo");
+}
+
+#[test]
+fn approve_refuses_a_pin_downgrade_and_signs_a_released_upgrade() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.21.0\n"), true);
+    fake.release_ref("v0.21.0");
+    post_verdict(&fake, "session_r", HEAD);
+    post_verdict(&fake, "session_s", HEAD);
+    assert_eq!(sign(&fake, &k, "session_o").0, 1);
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), true);
+    fake.release_ref("v0.23.0");
+    post_verdict(&fake, "session_r", HEAD);
+    post_verdict(&fake, "session_s", HEAD);
+    assert_eq!(sign(&fake, &k, "session_o").0, 0);
+}

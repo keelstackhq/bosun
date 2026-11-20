@@ -701,7 +701,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         let ctx = (&excluded[..], &capabilities[..], bosun_code);
-        orchestrator_window(gh, base, &today[..10], pr, ctx)?
+        orchestrator_window(gh, (base, head), &today[..10], pr, ctx)?
     } else {
         (Err("signed approvals do not count on this PR".into()), None)
     };
@@ -2128,6 +2128,40 @@ fn signed_approver(
     Ok(None)
 }
 
+/// The trust-root entries a changed `.bosun/version` adds under quorum (D-022): one reason from
+/// [`risk::pin_change_trust_root`], or none when the pin is untouched or an upgrade to a released
+/// version. A pin names releases of keelstackhq/bosun, whose `v{version}` ref only bosun's own
+/// repo (`bosun_code`) can look up with this client, so elsewhere a changed pin fails closed; any
+/// API error does too.
+pub(crate) fn pin_trust_root(
+    gh: &dyn Github,
+    paths: &[(&str, Option<&str>)],
+    (base, head): (&str, &str),
+    bosun_code: bool,
+) -> Vec<String> {
+    if !risk::pin_changed(paths) {
+        return Vec::new();
+    }
+    let (old, new) = match (
+        gh.file_at(risk::PIN_FILE, base),
+        gh.file_at(risk::PIN_FILE, head),
+    ) {
+        (Ok(o), Ok(n)) => (o, n),
+        (Err(e), _) | (_, Err(e)) => {
+            return vec![format!(".bosun/version unreadable: {}", e.message)];
+        }
+    };
+    let same = old.as_deref().map(str::trim) == new.as_deref().map(str::trim);
+    let released = same
+        || match new.as_deref().map(str::trim) {
+            Some(v) if bosun_code => gh.tag_exists(&format!("v{v}")).unwrap_or(false),
+            _ => false,
+        };
+    (risk::pin_change_trust_root(old.as_deref(), new.as_deref(), released))
+        .into_iter()
+        .collect()
+}
+
 /// The signing policy (autonomous or quorum) in force at base and who set it; `None` for the rest.
 type SignedPolicy = Option<(Policy, &'static str)>;
 
@@ -2136,7 +2170,7 @@ type SignedPolicy = Option<(Policy, &'static str)>;
 /// `policy` (D-014) and the PR's rules, exclusions and workflow files.
 fn orchestrator_window(
     gh: &dyn Github,
-    base: &str,
+    (base, head): (&str, &str),
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
     (excluded, capabilities, bosun_code): (&[String], &[String], bool),
@@ -2160,7 +2194,10 @@ fn orchestrator_window(
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();
     autonomous_excluded.extend(risk::path_attributes(&patches));
-    let trust_root = risk::trust_root_changed(&paths, bosun_code);
+    let mut trust_root = risk::trust_root_changed(&paths, bosun_code);
+    if approvals.policy() == Policy::Quorum {
+        trust_root.extend(pin_trust_root(gh, &paths, (base, head), bosun_code));
+    }
     let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
         bootstrap_until: approvals.bootstrap_until.as_deref(),

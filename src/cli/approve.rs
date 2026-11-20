@@ -1023,7 +1023,13 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>, policy: Policy
         let bosun_code = gh
             .file_at(crate::cli::risk_check::BOSUN_CODE_MARKER, &pull.base_sha)?
             .is_some();
-        let root = risk::trust_root_changed(&paths, bosun_code);
+        let mut root = risk::trust_root_changed(&paths, bosun_code);
+        root.extend(crate::cli::risk_check::pin_trust_root(
+            gh,
+            &paths,
+            (&pull.base_sha, &pull.head_sha),
+            bosun_code,
+        ));
         if !root.is_empty() {
             return Err(BosunError::error(
                 format!(

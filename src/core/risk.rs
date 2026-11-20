@@ -1087,10 +1087,11 @@ pub fn autonomous_excluded(
 /// template copy, `**/workflows/risk.yml*`) everywhere, and in bosun itself the glob matcher,
 /// mode presets, config parse, signer gate, verdict record parsing and status posting.
 ///
-/// Accepted residual risk: `.bosun/version` is NOT listed (it would make every pin bump
-/// owner-only). A quorum-merged release plus a pin bump could change the judging binary; this is
-/// mitigated by every judging file above being trust root, two independent reviewers, and
-/// `bosun halt`.
+/// `.bosun/version` (the release that judges every PR) is not listed: an upgrade to a released
+/// version stays under quorum. A change of it is trust root only when
+/// [`pin_change_trust_root`] says so (downgrade, unreleased or unreadable version, deletion,
+/// rename), so a quorum-merged pin bump cannot move the judging binary to an old, unreleased or
+/// unknown build. `bosun halt` and two independent reviewers still apply to every bump.
 pub const TRUST_ROOT: [&str; 13] = [
     ".bosun/approvers.toml",
     ".bosun/bosun.toml",
@@ -1112,6 +1113,67 @@ const TRUST_ROOT_EVERYWHERE: usize = 4;
 /// Counting verdicts from different sessions a quorum approval needs (D-022). One verdict's bar is
 /// [`VERDICT_MIN_CONFIDENCE`] (0.9), stricter than D-022's 0.85; it stays 0.9.
 pub const QUORUM_VERDICTS: usize = 2;
+
+/// The pin file whose change [`pin_change_trust_root`] judges.
+pub const PIN_FILE: &str = ".bosun/version";
+
+/// Whether any of `files` is (or was renamed from) [`PIN_FILE`].
+pub fn pin_changed(files: &[(&str, Option<&str>)]) -> bool {
+    files
+        .iter()
+        .any(|(f, prev)| *f == PIN_FILE || *prev == Some(PIN_FILE))
+}
+
+/// `x.y.z` of a plain pin (surrounding whitespace allowed; no `v`, suffix, or leading zeros).
+fn parse_pin(text: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = text.trim().split('.');
+    let mut next = || {
+        let p = parts.next()?;
+        let plain = !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        (plain && (p == "0" || !p.starts_with('0')))
+            .then(|| p.parse::<u64>().ok())
+            .flatten()
+    };
+    let v = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(v)
+}
+
+/// Why a change of `.bosun/version` is trust root (owner only) under quorum (D-022), else `None`:
+/// the head pin is deleted or renamed away (`None`), not plain `x.y.z`, lower than the base pin,
+/// or not a published release (`released`: the tag `v{head}` exists; unused when both pins are
+/// the same version). An upgrade to a released version, or a new pin where none stood, is fine.
+pub fn pin_change_trust_root(
+    base: Option<&str>,
+    head: Option<&str>,
+    released: bool,
+) -> Option<String> {
+    let Some(head) = head else {
+        return Some(".bosun/version deleted or renamed".into());
+    };
+    let Some(new) = parse_pin(head) else {
+        return Some(format!(
+            ".bosun/version is not a plain x.y.z version: {:?}",
+            head.trim()
+        ));
+    };
+    let old = base.and_then(parse_pin);
+    if old == Some(new) {
+        return None;
+    }
+    if old.is_some_and(|old| new < old) {
+        return Some(format!(
+            ".bosun/version downgrade {} -> {}",
+            base.unwrap_or("").trim(),
+            head.trim()
+        ));
+    }
+    (!released).then(|| {
+        format!(
+            ".bosun/version {} is not a published release (no tag v{0})",
+            head.trim()
+        )
+    })
+}
 
 /// The changed trust-root paths among `(path, previous path)` pairs ([`TRUST_ROOT`]); a rename
 /// counts on both sides, any case; a `..` segment counts as a hit. Empty: a quorum can count.
@@ -2740,6 +2802,42 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             };
             assert!(!critical(&[], &[f], false).is_empty(), "{t}");
         }
+    }
+
+    #[test]
+    fn pin_change_is_trust_root_for_downgrade_unreleased_garbage_and_deletion() {
+        let c = pin_change_trust_root;
+        let has = |r: Option<String>, w: &str| r.is_some_and(|r| r.contains(w));
+        assert!(has(
+            c(Some("0.21.0\n"), Some("0.20.9\n"), true),
+            "downgrade"
+        ));
+        assert!(has(c(Some("0.21.0"), Some("0.9.0"), true), "downgrade"));
+        assert_eq!(c(Some("0.21.0\n"), Some("0.22.0\n"), true), None);
+        assert_eq!(c(Some("0.9.0"), Some("0.10.0"), true), None);
+        assert!(has(
+            c(Some("0.21.0"), Some("0.22.0"), false),
+            "not a published"
+        ));
+        for bad in [
+            "",
+            "v0.22.0",
+            "0.22",
+            "0.22.0-rc1",
+            "0.22.0 # x",
+            "0.022.0",
+            "1.2.3.4",
+            "latest",
+        ] {
+            assert!(has(c(Some("0.21.0"), Some(bad), true), "plain"), "{bad:?}");
+        }
+        assert!(has(c(Some("0.21.0"), None, true), "deleted"));
+        assert_eq!(c(Some("0.21.0\n"), Some("0.21.0"), false), None);
+        assert_eq!(c(None, Some("0.22.0"), true), None);
+        assert!(has(c(None, Some("0.22.0"), false), "not a published"));
+        assert!(pin_changed(&[(".bosun/version", None)]));
+        assert!(pin_changed(&[("x", Some(".bosun/version"))]));
+        assert!(!pin_changed(&[("src/a.rs", None)]));
     }
 
     #[test]
