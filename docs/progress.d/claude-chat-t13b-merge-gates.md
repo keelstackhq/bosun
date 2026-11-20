@@ -1,0 +1,1 @@
+- Chat approval T13b: merge reruns the base's gates in a worktree of the head, tool-config files are owner-class, spec 04 names the control.

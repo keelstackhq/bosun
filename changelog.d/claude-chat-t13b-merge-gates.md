@@ -1,0 +1,1 @@
+- `bosun merge` without CI: tool-config files are R-ci; the gates rerun on a private fetch of the exact head, each with a new HOME, CARGO_HOME and TMPDIR, a `.cargo` above them refused before every gate, a private repo named (exit 5), `BOSUN_GIT_URL` in debug builds only.

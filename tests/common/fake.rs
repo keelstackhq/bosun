@@ -614,6 +614,13 @@ impl FakeGithub {
     pub fn content(&self, path: &str, git_ref: &str, text: &str) {
         let mut s = self.state.lock().unwrap();
         s.contents.insert(format!("{git_ref}:{path}"), text.into());
+        // The default branch is what each pull's base sha stands for (a missing file stays missing).
+        let bases: Vec<String> = (s.pulls.iter())
+            .filter_map(|p| p["base"]["sha"].as_str().map(String::from))
+            .collect();
+        for b in bases.iter().filter(|_| git_ref == "refs/heads/main") {
+            s.contents.insert(format!("{b}:{path}"), text.into());
+        }
     }
 
     /// A workflow run of `sha` with one job and its log.

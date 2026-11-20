@@ -12,6 +12,7 @@ pub mod ts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -29,11 +30,46 @@ pub struct Request<'a> {
     pub all: bool,
 }
 
+/// Set by `bosun merge` (again before each gate): children and git calls then get exactly this environment.
+static ISOLATED: Mutex<Option<Vec<(&'static str, String)>>> = Mutex::new(None);
+
+/// A command that, once [`isolate`] ran, sees only the allow-listed environment.
+pub(crate) fn cmd(program: &str) -> Command {
+    let mut c = Command::new(program);
+    if let Some(env) = ISOLATED.lock().ok().and_then(|g| g.clone()) {
+        c.env_clear().envs(env);
+    }
+    c
+}
+
+/// From now on children get `PATH`, `LANG`, `TERM`, the proxy and CA variables, the rustup home, a
+/// new `HOME`, `CARGO_HOME` and `TMPDIR` under `private` (call again for new ones), no global git config.
+pub fn isolate(private: &Path) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let rustup = std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup"));
+    let mut env = vec![("RUSTUP_HOME", rustup), ("GIT_CONFIG_NOSYSTEM", "1".into())];
+    env.push(("GIT_CONFIG_GLOBAL", "/dev/null".into()));
+    let keep = "PATH LANG LC_ALL TERM HTTPS_PROXY https_proxy NO_PROXY SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE GIT_SSL_CAINFO REQUESTS_CA_BUNDLE";
+    for n in keep.split(' ') {
+        env.extend(std::env::var(n).ok().map(|v| (n, v)));
+    }
+    for (k, v) in [("HOME", "home"), ("CARGO_HOME", "cargo"), ("TMPDIR", "tmp")] {
+        let _ = std::fs::create_dir_all(private.join(v));
+        env.push((k, private.join(v).to_string_lossy().into_owned()));
+    }
+    if let Ok(mut g) = ISOLATED.lock() {
+        *g = Some(env);
+    }
+}
+
 /// Run `git <args>` in `root`; stdout on success.
 pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
-    let out = Command::new("git")
+    let out = cmd("git")
         .arg("-C")
         .arg(root)
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(["-c", "core.fsmonitor=false"])
+        .arg("--no-replace-objects")
         .args(args)
         .output()
         .map_err(|e| {
@@ -392,7 +428,7 @@ fn spawn(argv: &[String], dir: &Path) -> Result<(i64, f64), BosunError> {
         )
     })?;
     let start = Instant::now();
-    let status = Command::new(program)
+    let status = cmd(program)
         .args(&argv[1..])
         .current_dir(dir)
         // A repo's test command is repo code: it never sees the GitHub token.

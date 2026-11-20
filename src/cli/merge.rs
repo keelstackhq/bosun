@@ -10,7 +10,6 @@ use serde_json::json;
 
 use crate::app::{App, default_branch, kill_switch, main_red, sync_merged};
 use crate::cli::MergeArgs;
-use crate::cli::stamps;
 use crate::config::CiProvider;
 use crate::core::approve::{is_orchestrator, parse_ready_summary};
 use crate::core::meta::linked_issues_in;
@@ -135,33 +134,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             )
         });
     }
-    // The summary only shows the head did not move; the gates are re-checked from the stamps
-    // in this checkout, on the head's own tree (a summary is a comment any session can post).
-    let dir = app.ctx.dir.as_path();
-    let tree = stamps::tree_of(dir, head).ok_or_else(|| {
-        BosunError::needs_human(
-            format!(
-                "PR #{pr} head {head} is not in this checkout, so its gate stamps cannot be read"
-            ),
-            format!("`git fetch origin pull/{pr}/head`, then rerun `bosun merge {pr}`"),
-        )
-    })?;
-    let all = stamps::ready_gates_at(gh)?;
-    let missing: Vec<String> = all
-        .iter()
-        .filter(|g| !stamps::has(dir, &tree, g))
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        return Err(BosunError::needs_human(
-            format!("PR #{pr} head {head} has no local stamp for: {}", missing.join(", ")),
-            format!(
-                "`git worktree add --detach ../pr-{pr} {head} && cd ../pr-{pr} && {}`; rerun `bosun merge {pr}`",
-                crate::core::stamps::gate_loop(&missing)
-            ),
-        )
-        .with_data(json!({"pr": pr, "head_sha": head, "missing_gates": missing})));
-    }
+    // The summary only shows the head did not move (any writer can post one).
     super::risk_check::evaluate_local(app, pull)?;
     if super::pr_no_ci::clean_by_other(app, pull)?.is_empty() {
         return Err(BosunError::needs_human(
@@ -180,6 +153,10 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             ),
         ));
     }
+    // Last: running the gates executes the head's code, so only a head the owner's rules, a signed
+    // verdict and main-open already let through gets there. Stamp files are never trusted: the
+    // base's required gates run on a worktree of the exact head.
+    super::merge_gates::verify(app, pull)?;
     Ok(())
 }
 

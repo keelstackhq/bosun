@@ -27,19 +27,45 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(st.success());
 }
 
-fn repo() -> tempfile::TempDir {
+/// A base commit (the config) and a head commit (`files` on top): `merge` fetches both.
+fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "claude/t7"]);
     std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
     std::fs::write(dir.path().join(".bosun/bosun.toml"), NO_CI).unwrap();
     git(dir.path(), &["add", "-A"]);
-    git(dir.path(), &["commit", "-q", "-m", "x"]);
+    git(dir.path(), &["commit", "-q", "-m", "base"]);
+    for (path, text) in files {
+        let p = dir.path().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-q", "--allow-empty", "-m", "head"]);
     dir
+}
+
+fn base_sha(dir: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD~1"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// Task 7 in review with PR 20 by `session_w`; `ci` is the base config; `high` adds a
 /// workflow change and an owner. `session_orch` is a root session in the registry.
 fn setup(high: bool, ci: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
+    setup_files(high, ci, &[])
+}
+
+fn setup_files(
+    high: bool,
+    ci: Option<&str>,
+    files: &[(&str, &str)],
+) -> (FakeGithub, tempfile::TempDir) {
     let fake = FakeGithub::start();
     fake.issue(
         7,
@@ -76,8 +102,23 @@ fn setup(high: bool, ci: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
             "{{\"bosun\":\"join\",\"session\":\"session_kid\",\"origin\":\"spawned\",\"depth\":2,\"parent\":\"{ORCH}\",\"expires\":\"{LIVE}\"}}"
         ),
     );
-    let dir = repo();
+    let dir = repo(files);
     stamps::ready_all(&fake, dir.path());
+    // The PR's base is a real commit of the checkout, as in production.
+    let base = base_sha(dir.path());
+    fake.pull_set(20, "base", json!({"sha": base, "ref": "main"}));
+    // The default branch's gates must really run (a skipped gate fails a merge): a tiny profile.
+    tiny_base(&fake);
+    if let Some(c) = ci {
+        fake.content(".bosun/bosun.toml", &base, c);
+    }
+    if high {
+        fake.content(
+            "governance/owners.toml",
+            &base,
+            "[[owner]]\ngithub = \"ada\"\n",
+        );
+    }
     (fake, dir)
 }
 
@@ -107,6 +148,7 @@ fn run_as(fake: &FakeGithub, dir: &Path, session: &str, args: &[&str]) -> (i32, 
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_SESSION", session)
+        .env("BOSUN_GIT_URL", dir)
         .env("BOSUN_NOW", NOW)
         .arg("-C")
         .arg(dir)
@@ -364,17 +406,92 @@ fn merge_spawned_origin_refused_even_as_orchestrator() {
     assert!(merge_puts(&fake).is_empty());
 }
 
-/// The orchestrator's checkout has no stamp for the head: a summary alone does not merge.
+/// Stamp files are never trusted: with none at all the gates still run, on the head, and pass.
 #[test]
-fn merge_summary_without_local_stamps_is_exit5() {
+fn merge_ignores_stamps_and_runs_the_gates() {
     let (fake, dir) = setup(false, Some(NO_CI));
     verdict(&fake);
     assert_eq!(ready(&fake, dir.path()).0, 0);
-    std::fs::remove_file(stamps::stamp_dir(dir.path()).join("lint")).unwrap();
+    std::fs::remove_dir_all(stamps::stamp_dir(dir.path())).unwrap();
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert!(fake.merged(20));
+}
+
+/// A tiny base profile: `fmt` fails when `bad.txt` exists, `lint` always passes.
+const TINY: &str = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"sh\", \"-c\", \"test ! -e bad.txt\"]\n[gates.lint]\ncmd = [\"true\"]\n";
+/// The head's own profile: every gate passes. It must never be the one that judges.
+const LAX: &str = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"true\"]\n";
+
+fn tiny_base(fake: &FakeGithub) {
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", TINY);
+}
+
+/// A failing required gate on the exact head: exit 5 naming it, nothing merged.
+/// The head's profile says `true` and every stamp is present; the base's definition judges.
+#[test]
+fn merge_refuses_a_failing_gate_run_on_the_head() {
+    let files = [("bad.txt", "x"), (".bosun/profiles/rust.toml", LAX)];
+    let (fake, dir) = setup_files(false, Some(NO_CI), &files);
+    tiny_base(&fake);
+    verdict(&fake);
+    // The summary and verdict are fine; only the gates decide.
+    assert_eq!(ready(&fake, dir.path()).0, 0);
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 5, "{v}");
-    assert_eq!(v["data"]["missing_gates"], json!(["lint"]), "{v}");
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
     assert!(merge_puts(&fake).is_empty());
+}
+
+/// The same head passes when the gate it fails is not there: the worktree run is real.
+#[test]
+fn merge_passes_when_the_gates_pass_on_the_head() {
+    let (fake, dir) = setup_files(false, Some(NO_CI), &[("ok.txt", "x")]);
+    tiny_base(&fake);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    let puts = merge_puts(&fake);
+    assert_eq!(puts[0]["sha"], fake.pull_head(20).as_str());
+}
+
+/// What must pass is the default branch's: the head drops `lint` from its own profile, the
+/// base keeps it, so the missing lint stamp is exit 5 at `--ready`.
+#[test]
+fn ready_reads_the_required_gates_from_the_default_branch() {
+    let (fake, dir) = setup_files(false, Some(NO_CI), &[(".bosun/profiles/rust.toml", LAX)]);
+    tiny_base(&fake);
+    verdict(&fake);
+    std::fs::remove_file(stamps::stamp_dir(dir.path()).join("lint")).unwrap();
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["missing_gates"], json!(["lint"]), "{v}");
+}
+
+/// Merge refuses an unsigned verdict with a forged session tag, and an App record too.
+#[test]
+fn merge_counts_only_app_or_signed_verdicts() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    // Replace the signed verdict by an unsigned one: only the ready summary remains.
+    fake.state
+        .lock()
+        .unwrap()
+        .comments
+        .retain(|c| !c.body.contains("bosun-sig"));
+    let head = fake.pull_head(20);
+    fake.comment_by(
+        20,
+        "rev",
+        &noci::verdict_text(20, &head, "session_rev", "approve"),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(merge_puts(&fake).is_empty());
+    noci::app_verdict(&fake, "session_rev");
+    assert_eq!(merge(&fake, dir.path()).0, 5);
 }
 
 #[test]
@@ -448,49 +565,384 @@ fn merge_default_branch_github_head_none_takes_the_ci_path() {
     assert!(merge_puts(&fake).is_empty(), "{v}");
 }
 
-/// Merge counts only an enrolled key's signature as a verdict, never an App record.
+/// The head's `rust-toolchain.toml` (and other tool files) never reach the gates: the base has
+/// none, so the overlay deletes it before `lint` checks that it is gone.
 #[test]
-fn merge_counts_only_app_or_signed_verdicts() {
-    let (fake, dir) = setup(false, Some(NO_CI));
+fn merge_deletes_head_tool_files_the_base_lacks() {
+    let files = [
+        ("rust-toolchain.toml", "[toolchain]\npath = \"/fake\"\n"),
+        (".cargo/config.toml", "x = 1\n"),
+    ];
+    let (fake, dir) = setup_files(false, Some(NO_CI), &files);
+    let check = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.lint]\ncmd = [\"sh\", \"-c\", \"test ! -e rust-toolchain.toml && test ! -e .cargo/config.toml\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", check);
     verdict(&fake);
     assert_eq!(ready(&fake, dir.path()).0, 0);
-    fake.state
-        .lock()
-        .unwrap()
-        .comments
-        .retain(|c| !c.body.contains("bosun-sig"));
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    // A base that has the file gets exactly the base's text.
+    let (fake, dir) = setup_files(false, Some(NO_CI), &files);
+    let want = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.lint]\ncmd = [\"sh\", \"-c\", \"grep -q real rust-toolchain.toml\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", want);
+    fake.content("rust-toolchain.toml", "refs/heads/main", "# real\n");
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A symlinked `.bosun` in the head would redirect the overlay: exit 5, the target untouched.
+#[cfg(unix)]
+#[test]
+fn merge_refuses_a_symlinked_overlay_target() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep.txt"), "keep").unwrap();
+    // The head replaces `.bosun` with a symlink to the outside directory.
+    let (fake, dir) = setup(false, Some(NO_CI));
+    let d = dir.path();
+    git(d, &["rm", "-rq", ".bosun"]);
+    std::os::unix::fs::symlink(outside.path(), d.join(".bosun")).unwrap();
+    git(d, &["add", "-A"]);
+    git(d, &["commit", "-q", "-m", "link"]);
+    stamps::ready_all(&fake, d);
+    verdict(&fake);
     let head = fake.pull_head(20);
-    fake.comment_by(
-        20,
-        "rev",
-        &noci::verdict_text(20, &head, "session_rev", "approve"),
+    let summary = bosun::core::approve::ready_summary(&head, &[], "normal", "session_rev", None);
+    fake.comment_by(20, "w", &summary);
+    let (code, v) = merge(&fake, d);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("symlink"),
+        "{v}"
+    );
+    let names: Vec<_> = std::fs::read_dir(outside.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["keep.txt"], "{names:?}");
+    assert!(merge_puts(&fake).is_empty());
+}
+
+/// A head or base that is not a 40-hex commit id is exit 5 before any git call.
+#[test]
+fn merge_refuses_a_head_that_is_not_40_hex() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.pull_head_sha(20, "not-a-sha");
+    verdict(&fake);
+    let summary =
+        bosun::core::approve::ready_summary("not-a-sha", &[], "normal", "session_rev", None);
+    fake.comment_by(20, "w", &summary);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("40-hex"),
+        "{v}"
+    );
+    assert!(merge_puts(&fake).is_empty());
+}
+
+/// A base whose profiles require nothing but test-integrity cannot vouch for a head: exit 5.
+#[test]
+fn merge_refuses_a_base_that_requires_no_gates() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    let none = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.mutants]\ncmd = [\"true\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", none);
+    verdict(&fake);
+    // `--ready` itself refuses first; post the summary as a writer would.
+    let head = fake.pull_head(20);
+    let summary = bosun::core::approve::ready_summary(&head, &[], "normal", "session_rev", None);
+    fake.comment_by(20, "w", &summary);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("test-integrity"),
+        "{v}"
+    );
+    assert!(merge_puts(&fake).is_empty());
+}
+
+fn profile(fmt: &str, lint: &str) -> String {
+    format!(
+        "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"sh\", \"-c\", \'\'\'{fmt}\'\'\']\n[gates.lint]\ncmd = [\"sh\", \"-c\", \'\'\'{lint}\'\'\']\n"
+    )
+}
+
+/// Gates execute the head's code, so they run last: an unapproved high-risk PR never reaches them.
+#[test]
+fn merge_runs_no_gate_before_the_owner_approves() {
+    let marker = tempfile::tempdir().unwrap().keep().join("ran");
+    let (fake, dir) = setup(true, Some(NO_CI));
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(&format!("touch {}", marker.display()), "true"),
+    );
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(!marker.exists(), "a gate ran before the owner approved");
+    chat(&fake);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert!(marker.exists());
+}
+
+/// A gate that rewrites the base's tool config is caught after it ran: exit 5.
+#[test]
+fn merge_refuses_a_gate_that_rewrites_the_overlay() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile("echo x > clippy.toml", "true"),
+    );
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("changed"),
+        "{v}"
+    );
+    assert!(merge_puts(&fake).is_empty());
+}
+
+/// Tool files under a stack directory are the base's too.
+#[test]
+fn merge_overlays_tool_files_under_each_stack_dir() {
+    let cfg = format!("{NO_CI}[[stack]]\npath = \"web\"\nprofile = \"rust\"\n");
+    let files = [("web/rust-toolchain.toml", "[toolchain]\npath = \"/fake\"\n")];
+    let (fake, dir) = setup_files(false, Some(&cfg), &files);
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile("true", "test ! -e rust-toolchain.toml"),
+    );
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+fn merge_with(fake: &FakeGithub, dir: &Path, env: &[(&str, &str)]) -> (i32, Value) {
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", ORCH)
+        .env("BOSUN_GIT_URL", dir)
+        .env("BOSUN_NOW", NOW)
+        .envs(env.iter().copied())
+        .arg("-C")
+        .arg(dir)
+        .args(["merge", "20"])
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+/// Ready for a merge whose base profile has `fmt` run `fmt` (a shell line) and `lint` pass.
+fn merge_ready(fmt: &str) -> (FakeGithub, tempfile::TempDir) {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, "true"),
+    );
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    (fake, dir)
+}
+
+/// The gates get a clean environment (no inherited variables) and a private HOME, CARGO_HOME
+/// and TMPDIR; the repo they run in has its own git dir and none of the checkout's config.
+#[test]
+fn merge_gates_run_in_a_clean_environment_and_their_own_repo() {
+    let fmt = "test -z \"$BOSUN_LEAK\" && test -d .git && test -z \"$(git config --get bosun.marker)\" && for v in $HOME $CARGO_HOME $TMPDIR; do case $v in *bosun-merge*) ;; *) exit 1;; esac; done";
+    let (fake, dir) = merge_ready(fmt);
+    git(dir.path(), &["config", "bosun.marker", "yes"]);
+    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_LEAK", "1")]);
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A gate that skipped vouches for nothing: inside a merge it fails.
+#[test]
+fn merge_counts_a_skipped_gate_as_failed() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    let skip = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"true\"]\nrequires = \"nope.txt\"\n[gates.lint]\ncmd = [\"true\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", skip);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
+}
+
+/// The overlay is the PR's base commit: the branch name moving on changes nothing.
+#[test]
+fn merge_overlays_the_pr_base_sha_not_the_branch() {
+    let (fake, dir) = merge_ready("true");
+    let base = base_sha(dir.path());
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        &base,
+        &profile("false", "true"),
     );
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 5, "{v}");
-    assert!(merge_puts(&fake).is_empty());
-    noci::app_verdict(&fake, "session_rev");
-    assert_eq!(merge(&fake, dir.path()).0, 5);
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
 }
 
-/// What must pass is the default branch's: the checkout's profile drops `lint`, the base keeps it.
+/// The commits come from the fetch URL only, never from the shared checkout's objects: with an
+/// empty source the merge stops (exit 5) although the checkout has both commits.
 #[test]
-fn merge_reads_the_required_gates_from_the_default_branch() {
-    let (fake, dir) = setup(false, Some(NO_CI));
-    let lax = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"true\"]\n[gates.lint]\ncmd = [\"true\"]\n";
-    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", lax);
-    verdict(&fake);
-    assert_eq!(ready(&fake, dir.path()).0, 0);
-    std::fs::remove_file(stamps::stamp_dir(dir.path()).join("test")).unwrap();
-    // The base profile has no `test` gate: its absence is no gap, `deps` is not required either.
+fn merge_fetches_into_its_own_repo_and_fails_closed() {
+    let (fake, dir) = merge_ready("true");
+    let empty = tempfile::tempdir().unwrap();
+    git(empty.path(), &["init", "-q"]);
+    let src = empty.path().to_str().unwrap();
+    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_GIT_URL", src)]);
+    assert_eq!(code, 5, "{v}");
+    assert!(!fake.merged(20));
+}
+
+/// A fetch config planted in the shared checkout (an `uploadpack` command) never runs.
+#[test]
+fn merge_never_runs_the_checkouts_git_config() {
+    let (fake, dir) = merge_ready("true");
+    let marker = dir.path().join("ran");
+    let cmd = format!("touch {}; git-upload-pack", marker.display());
+    git(dir.path(), &["config", "remote.origin.uploadpack", &cmd]);
+    git(
+        dir.path(),
+        &["config", "remote.origin.url", dir.path().to_str().unwrap()],
+    );
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 0, "{v}");
+    assert!(!marker.exists());
+}
+
+/// A real cargo gate writes `target/`: that build output is not a change, and the merge passes.
+#[test]
+fn merge_passes_a_real_cargo_gate_that_writes_target() {
+    let manifest = "[package]\nname = \"tiny\"\nversion = \"0.0.0\"\nedition = \"2021\"\n";
+    let lock = "version = 4\n\n[[package]]\nname = \"tiny\"\nversion = \"0.0.0\"\n";
+    let files = [
+        ("Cargo.toml", manifest),
+        ("Cargo.lock", lock),
+        ("src/lib.rs", ""),
+    ];
+    let (fake, dir) = setup_files(false, Some(NO_CI), &files);
+    let build = profile("cargo build --locked --offline && test -d target", "true");
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", &build);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge_with(&fake, dir.path(), &[("CARGO_NET_OFFLINE", "true")]);
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A tracked file under a `target` directory still counts: a gate that edits it exits 5.
+#[test]
+fn merge_refuses_a_gate_that_edits_a_tracked_file_under_target() {
+    let (fake, dir) = setup_files(false, Some(NO_CI), &[("src/target/keep.txt", "a")]);
+    let edit = profile("echo b > src/target/keep.txt", "true");
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", &edit);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+}
+
+/// A `.cargo` above the gates' temp repo could hold a runner: refuse (exit 5).
+#[test]
+fn merge_refuses_a_cargo_dir_above_the_temp_repo() {
+    let (fake, dir) = merge_ready("true");
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join(".cargo")).unwrap();
+    let t = tmp.path().to_str().unwrap();
+    let (code, v) = merge_with(&fake, dir.path(), &[("TMPDIR", t)]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains(".cargo"),
+        "{v}"
+    );
+}
+
+/// Each gate gets its own HOME, CARGO_HOME and TMPDIR: nothing one gate leaves reaches the next.
+#[test]
+fn merge_gives_every_gate_fresh_homes() {
+    let fmt = "echo \"$HOME $CARGO_HOME $TMPDIR\" > ../.gl";
+    let lint = "for v in $HOME $CARGO_HOME $TMPDIR; do ! grep -qF \"$v\" ../.gl || exit 1; done";
+    let (fake, dir) = merge_ready(fmt);
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, lint),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+/// Gate directories have fresh random names: a planted `../gate1/cargo/config.toml` is never read.
+#[test]
+fn merge_gate_dirs_cannot_be_preplanted() {
+    let both = "for n in 1 2; do mkdir -p ../gate$n/cargo; echo x > ../gate$n/cargo/config.toml; done; test ! -f \"$CARGO_HOME/config.toml\"";
+    let (fmt, lint) = (both, both);
+    let (fake, dir) = merge_ready(fmt);
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, lint),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+}
+
+/// Any change to the working tree (a new file, not only the commit) is caught: exit 5.
+#[test]
+fn merge_refuses_a_gate_that_adds_a_file() {
+    let (fake, dir) = merge_ready("echo x > planted.rs");
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("changed"),
+        "{v}"
+    );
+}
+
+/// A gate that plants a `.cargo` above the repo (a cargo runner) stops the next gate: exit 5.
+#[test]
+fn merge_refuses_a_cargo_dir_planted_between_gates() {
+    let (fake, dir) = merge_ready("mkdir ../.cargo");
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains(".cargo"),
+        "{v}"
+    );
+}
+
+/// A private repo cannot be fetched anonymously: its own error, exit 5, the owner merges.
+#[test]
+fn merge_names_a_private_repo() {
+    let (fake, dir) = merge_ready("true");
+    fake.repo_set("visibility", json!("private"));
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    let (m, f) = (
+        v["error"]["message"].as_str().unwrap(),
+        v["error"]["fix"].as_str().unwrap(),
+    );
+    assert!(m.contains("private") && f.contains("owner"), "{v}");
 }
 
 /// The identity-trusting commands refuse a `BOSUN_SESSION` that is not the session's own id or
 /// `<own>/<task>` (exit 5, with a fix), before any GitHub call.
 #[test]
 fn identity_trusting_commands_refuse_a_foreign_session() {
-    let dir = repo();
+    let dir = repo(&[]);
     let run = |session: &str, args: &[&str]| {
         let out = bosun()
             .current_dir(dir.path())
