@@ -8,6 +8,20 @@ use serde::Deserialize;
 
 use crate::output::BosunError;
 
+/// A TOML string or an array of strings, as a list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
+}
+
 /// One gate takes at most 8 minutes (spec §7).
 pub const DEFAULT_BUDGET_SECS: u64 = 480;
 
@@ -142,11 +156,12 @@ pub struct Gate {
     /// the head and at the base.
     #[serde(default)]
     pub requires: Option<String>,
-    /// A config file in the stack directory the gate judges against; the gate is skipped (neutral)
-    /// when it is missing in the base commit, so the PR that adds the file is not judged by the
-    /// tool's defaults. Unlike `requires`, the head does not count.
-    #[serde(default)]
-    pub base_requires: Option<String>,
+    /// Config files (one name, or a list of alternatives) the gate judges against, looked up in
+    /// the stack directory and its parents up to the repo root; the gate is skipped (neutral)
+    /// when none of them exists in the base commit, so the PR that adds the config is not judged
+    /// by the tool's defaults. Unlike `requires`, the head does not count.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub base_requires: Vec<String>,
 }
 
 impl Gate {
@@ -336,7 +351,7 @@ mod tests {
             when_no_package: WhenNoPackage::Run,
             budget_secs: Some(5),
             requires: None,
-            base_requires: None,
+            base_requires: Vec::new(),
         };
         assert_eq!(
             g.expand_cmd(&["a".into(), "b".into()], None),

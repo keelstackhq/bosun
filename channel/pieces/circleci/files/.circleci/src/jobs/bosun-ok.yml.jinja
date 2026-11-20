@@ -143,27 +143,39 @@ environment:
           git show "$BOSUN_BASE:pins.toml" > "$t/hull-pins.toml"
           f="$t/hull-pins.toml"
           v="$(pin pins rust)"; [ -z "$v" ] || fb="$v"
-          v="$(pin pins nextest)"; [ -z "$v" ] || nv="$v"
-          v="$(pin pins cargo_deny)"; [ -z "$v" ] || dv="$v"
+          # A version that differs from .bosun/pins.toml's has no pinned checksum: clear it, and the
+          # tool is built with `cargo install --locked` below (as docs/setup-script.sh).
+          v="$(pin pins nextest)"; if [ -n "$v" ] && [ "$v" != "$nv" ]; then nv="$v"; ns=""; fi
+          v="$(pin pins cargo_deny)"; if [ -n "$v" ] && [ "$v" != "$dv" ]; then dv="$v"; ds=""; fi
         fi
         [[ "$fb" =~ ^[0-9A-Za-z._-]+$ ]] || { echo ".bosun/pins.toml: [rust] fallback is missing or not a toolchain name" >&2; exit 1; }
         for v in "$nv" "$dv"; do
           [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo ".bosun/pins.toml: a tool version is missing or not X.Y.Z" >&2; exit 1; }
         done
         for v in "$ns" "$ds"; do
-          [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo ".bosun/pins.toml: a sha256 is missing or not 64 hex digits" >&2; exit 1; }
+          [ -z "$v" ] || [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo ".bosun/pins.toml: a sha256 is missing or not 64 hex digits" >&2; exit 1; }
         done
         echo "export BOSUN_PIN_RUST_FALLBACK='$fb'" >> "$BASH_ENV"
+        # No pinned checksum (hull's [pins] override): build that version with the fallback toolchain.
+        if [ -z "$ns" ] || [ -z "$ds" ]; then rustup toolchain install "$fb" --profile minimal || exit 1; fi
         # cargo-nextest linux-gnu
-        curl -fsSL -o "$t/nextest.tgz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${nv}/cargo-nextest-${nv}-x86_64-unknown-linux-gnu.tar.gz"
-        echo "$ns  $t/nextest.tgz" | sha256sum -c - || exit 1
-        tar -xzf "$t/nextest.tgz" -C "$t" cargo-nextest
-        install -m 755 "$t/cargo-nextest" "$tools/bin/cargo-nextest"
+        if [ -z "$ns" ]; then
+          cargo "+$fb" install --locked cargo-nextest --version "$nv" --root "$tools" || exit 1
+        else
+          curl -fsSL -o "$t/nextest.tgz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${nv}/cargo-nextest-${nv}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$ns  $t/nextest.tgz" | sha256sum -c - || exit 1
+          tar -xzf "$t/nextest.tgz" -C "$t" cargo-nextest
+          install -m 755 "$t/cargo-nextest" "$tools/bin/cargo-nextest"
+        fi
         # cargo-deny musl
-        curl -fsSL -o "$t/deny.tgz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${dv}/cargo-deny-${dv}-x86_64-unknown-linux-musl.tar.gz"
-        echo "$ds  $t/deny.tgz" | sha256sum -c - || exit 1
-        tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 "cargo-deny-${dv}-x86_64-unknown-linux-musl/cargo-deny"
-        install -m 755 "$t/cargo-deny" "$tools/bin/cargo-deny"
+        if [ -z "$ds" ]; then
+          cargo "+$fb" install --locked cargo-deny --version "$dv" --root "$tools" || exit 1
+        else
+          curl -fsSL -o "$t/deny.tgz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${dv}/cargo-deny-${dv}-x86_64-unknown-linux-musl.tar.gz"
+          echo "$ds  $t/deny.tgz" | sha256sum -c - || exit 1
+          tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 "cargo-deny-${dv}-x86_64-unknown-linux-musl/cargo-deny"
+          install -m 755 "$t/cargo-deny" "$tools/bin/cargo-deny"
+        fi
   # The (base's) toolchain file in rust_path or a parent (rust-toolchain wins, as for rustup), else
   # the fallback of .bosun/pins.toml. Like bosun.yml's check, only a [toolchain] with plain-name channel, components,
   # targets and profile passes (a `path` would run another compiler); rustup then installs what

@@ -128,3 +128,21 @@ fn hull_pins_are_preferred_when_the_repo_has_them() {
     );
     assert!(wf.contains("pin pins cargo_deny"), "{wf}");
 }
+
+#[test]
+fn circleci_builds_a_tool_whose_hull_pin_overrides_the_checksummed_version() {
+    let t = read(READERS[1]);
+    // The override clears the sha256 of the tool whose version moved ...
+    assert!(
+        t.contains(r#"nv="$v"; ns="""#),
+        "nextest sha256 is not cleared"
+    );
+    assert!(
+        t.contains(r#"dv="$v"; ds="""#),
+        "cargo-deny sha256 is not cleared"
+    );
+    // ... and a tool without a checksum is built, not downloaded.
+    assert!(t.contains(r#"cargo "+$fb" install --locked cargo-nextest --version "$nv""#));
+    assert!(t.contains(r#"cargo "+$fb" install --locked cargo-deny --version "$dv""#));
+    assert!(t.contains(r#"[ -z "$v" ] || [[ "$v" =~ ^[0-9a-f]{64}$ ]]"#));
+}

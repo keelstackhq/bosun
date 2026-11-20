@@ -23,8 +23,9 @@ when_no_package = "skip"
 
 [gates.deps]
 # cargo-deny falls back to its defaults without deny.toml (rejects even MIT), so the PR that adds
-# deny.toml is judged by the base, which has none: neutral.
-base_requires = "deny.toml"
+# deny.toml is judged by the base, which has none: neutral. Any of cargo-deny's config names, in the
+# stack directory or a parent up to the repo root, counts.
+base_requires = ["deny.toml", ".deny.toml", ".cargo/deny.toml"]
 cmd = ["cargo", "deny", "check"]
 
 [gates.mutants]

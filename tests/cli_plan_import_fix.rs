@@ -1,6 +1,6 @@
 //! `bosun plan import`: lenient prerequisite bullets (`data.prereqs_fixed`), `--fix`, and a
-//! missing GitHub token (`--dry-run` and `--fix` work offline; a real import hands over the
-//! issues as MCP calls in `next`).
+//! missing GitHub token (`--dry-run` and `--fix` work offline; a real import refuses with the
+//! login fix and an empty `next`).
 mod common;
 
 use common::bosun;
@@ -154,39 +154,24 @@ fn without_a_token_fix_works_offline() {
 }
 
 #[test]
-fn without_a_token_a_real_import_hands_the_issues_over_in_next() {
+fn without_a_token_a_real_import_refuses_with_an_empty_next() {
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path());
     let (code, v) = offline(tmp.path(), &[]);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(v["ok"], true);
-    assert_eq!(v["data"]["imported"], false);
-    assert!(
-        v["data"]["note"]
-            .as_str()
-            .unwrap()
-            .contains("gh auth login")
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["ok"], false);
+    assert_eq!(
+        v["error"]["fix"],
+        "plan import writes task metadata, which only bosun may write: run `gh auth login` (bosun reads `gh auth token`) or export GITHUB_TOKEN, then rerun `bosun plan import <file>`; `--dry-run` and `--fix` work offline"
     );
-    // One epic, one plan task and the tasks of the item, in that order.
-    let next = v["next"].as_array().unwrap();
-    assert_eq!(next.len(), 4);
-    assert!(next.iter().all(|n| n["tool"] == "mcp__github__issue_write"));
-    let a = &next[0]["args"];
-    assert_eq!(a["method"], "create");
-    assert_eq!(a["owner"], "acme");
-    assert_eq!(a["repo"], "widget");
-    assert_eq!(a["title"], "M1: Lifecycle");
-    assert!(
-        a["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- bosun:plan M1 -->")
-    );
-    let labels = a["labels"].as_array().unwrap();
-    assert!(labels.contains(&json!("bosun:kind/feature")));
-    assert_eq!(next[1]["args"]["title"], "M1/P: plan");
-    assert_eq!(next[3]["args"]["title"], "M1/T2: Two");
+    // The guard refuses issue_write for task metadata: nothing is handed over.
+    assert!(v["next"].as_array().is_none_or(|n| n.is_empty()));
+    assert!(!v.to_string().contains("issue_write"));
+    // The would-create list stays in data: one epic, the plan task and the tasks.
     assert_eq!(v["data"]["offline"], true);
+    assert_eq!(v["data"]["imported"], false);
+    assert_eq!(v["data"]["epics"][0]["action"], "would-create");
+    assert!(v["data"]["tasks"].as_array().unwrap().len() >= 3);
 }
 
 #[test]

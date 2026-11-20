@@ -224,3 +224,72 @@ fn without_a_token_ready_refuses_with_the_login_fix() {
     assert!(v["next"].as_array().is_none_or(|n| n.is_empty()));
     assert!(!v.to_string().contains("enable_pr_auto_merge"));
 }
+
+fn with_bosun_base(fake: &FakeGithub) {
+    fake.git_tree(
+        "main",
+        &[
+            (".bosun", "040000", "tree", "t1"),
+            (".bosun/bosun.toml", "100644", "blob", "b1"),
+        ],
+        false,
+    );
+}
+
+fn single_ready(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+    let (_, first) = pr(fake, dir, &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(fake, dir, n);
+    fake.pull_file(n, "src/a.rs", "modified", 3, 1, None);
+    pr(fake, dir, &["--single", "--ready"])
+}
+
+#[test]
+fn ready_reports_bootstrap_when_the_base_has_no_bosun_dir() {
+    let (fake, dir) = setup();
+    let (code, v) = single_ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["single_reason"], "bootstrap");
+}
+
+#[test]
+fn ready_on_a_bosun_repo_allows_a_one_off_sized_change() {
+    let (fake, dir) = setup();
+    with_bosun_base(&fake);
+    let (code, v) = single_ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["single_reason"], "one-off");
+}
+
+#[test]
+fn ready_on_a_bosun_repo_refuses_a_path_outside_the_allow_set() {
+    let (fake, dir) = setup();
+    with_bosun_base(&fake);
+    let (_, first) = pr(&fake, dir.path(), &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(&fake, dir.path(), n);
+    fake.pull_file(n, ".github/workflows/ci.yml", "modified", 1, 0, None);
+    let (code, v) = pr(&fake, dir.path(), &["--single", "--ready"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bootstrap PR or a one-off-sized change")
+    );
+    assert!(fake.pull_is_draft(n));
+    assert!(fake.auto_merge_enabled(n).is_none());
+}
+
+#[test]
+fn ready_on_a_bosun_repo_refuses_over_the_one_off_cap() {
+    let (fake, dir) = setup();
+    with_bosun_base(&fake);
+    let (_, first) = pr(&fake, dir.path(), &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(&fake, dir.path(), n);
+    fake.pull_file(n, "src/big.rs", "added", 301, 0, None);
+    let (code, v) = pr(&fake, dir.path(), &["--single", "--ready"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(fake.auto_merge_enabled(n).is_none());
+}

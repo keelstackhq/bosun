@@ -79,11 +79,22 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
     !git_has(req.root, &format!("{}:{}", req.base, path.display()))
 }
 
-/// Is `file` missing in the stack at the base commit? Only the base counts: a bootstrap PR that
-/// adds the file has it at head, and the gate stays neutral until the base has it.
-fn missing_in_base(req: &Request, stack: &Stack, file: &str) -> bool {
-    let path = Path::new(stack_rel(&stack.path)).join(file);
-    !git_has(req.root, &format!("{}:{}", req.base, path.display()))
+/// Is none of `files` present at the base commit, in the stack directory or any parent up to the
+/// repo root? Only the base counts: a bootstrap PR that adds the config has it at head, and the
+/// gate stays neutral until the base has it.
+fn missing_in_base(req: &Request, stack: &Stack, files: &[String]) -> bool {
+    let mut dir = PathBuf::from(stack_rel(&stack.path));
+    loop {
+        if files
+            .iter()
+            .any(|f| git_has(req.root, &format!("{}:{}", req.base, dir.join(f).display())))
+        {
+            return false;
+        }
+        if !dir.pop() {
+            return true;
+        }
+    }
 }
 
 /// The profile's manifest when the stack has none, head or base: a stack that never had one has
@@ -186,10 +197,9 @@ pub fn run(req: &Request) -> CmdResult {
             .requires
             .as_deref()
             .filter(|f| missing_file(req, stack, f));
-        let bootstrap = gate
-            .base_requires
-            .as_deref()
-            .filter(|f| missing_in_base(req, stack, f));
+        let bootstrap = (!gate.base_requires.is_empty()
+            && missing_in_base(req, stack, &gate.base_requires))
+        .then(|| gate.base_requires.join(", "));
         let run = match missing_manifest(req, stack, profile) {
             Some(manifest) => json!({
                 "gate": req.gate, "stack": stack.path, "command": [], "packages": [],

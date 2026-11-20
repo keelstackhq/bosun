@@ -13,9 +13,11 @@ use super::PrArgs;
 use super::pr::{current_branch, head_subject};
 use super::pr_gov::{queue, refuse_task_pr, require_queueable};
 use crate::app::{App, default_branch, kill_switch};
+use crate::core::risk::{autonomous_allow_globs, matches_globs};
+use crate::core::shape::ONE_OFF_MAX;
 use crate::core::title::is_conventional;
-use crate::github::IssueState;
 use crate::github::http::Http;
+use crate::github::{IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const RERUN: &str = "bosun pr --single --ready";
@@ -91,10 +93,59 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             (gh.create_pull(&title, &branch, &base, "", true)?, true)
         }
     };
+    let reason = if args.ready {
+        Some(single_reason(&app, &pull, &base)?)
+    } else {
+        None
+    };
     let mut out = queue(&app, pull, &base, RERUN, args.ready)?;
+    if let Some(r) = reason {
+        out.data["single_reason"] = json!(r);
+    }
     out.data["mode"] = json!("single");
     out.data["created"] = json!(created);
     Ok(out)
+}
+
+/// Why `--single --ready` may go ahead: `bootstrap` when the base has no `.bosun/` directory (the
+/// PR that adds bosun; nothing there can judge it), or `one-off` when every changed path lies in
+/// the one-off allow set and the change is within the one-off cap. Anything else is refused: the
+/// one-off guards (allow set, R-oneoff-size) must not be bypassed by a task-less PR.
+fn single_reason(app: &App, pull: &Pull, base: &str) -> Result<&'static str, BosunError> {
+    let gh = app.gh.as_ref();
+    // An unreadable or truncated tree is not proof of a bootstrap: fail closed.
+    let tree = gh.tree(base).unwrap_or(None).filter(|t| !t.truncated);
+    if tree.is_some_and(|t| {
+        !t.entries
+            .iter()
+            .any(|e| e.path == ".bosun" || e.path.starts_with(".bosun/"))
+    }) {
+        return Ok("bootstrap");
+    }
+    let allow = crate::cli::risk_check::autonomous_allow(gh, base)?;
+    let allow = autonomous_allow_globs(allow.as_deref());
+    let extra = crate::cli::risk_check::oneoff_allow(gh, base)?;
+    let ok = |f: &str| matches_globs(&allow, f) || matches_globs(&extra, f);
+    let files = gh.pull_files(pull.number)?;
+    let lines: u64 = files.iter().map(|f| f.additions + f.deletions).sum();
+    let inside = files
+        .iter()
+        .all(|f| ok(&f.filename) && f.previous_filename.as_deref().is_none_or(ok));
+    if inside && lines <= ONE_OFF_MAX {
+        return Ok("one-off");
+    }
+    Err(BosunError::conflict(
+        format!(
+            "`--single --ready` is not allowed for PR #{}: the base has bosun, and the PR changes {lines} lines{}",
+            pull.number,
+            if inside {
+                ""
+            } else {
+                " outside the one-off allow set"
+            }
+        ),
+        "`--single --ready` is for the bootstrap PR or a one-off-sized change: use `bosun pr --one-off --title ... --touch ...`, or a plan task, or `bosun pr --pr <n> --ready` for a governance PR",
+    ))
 }
 
 /// The default branch as the checkout knows it (`origin/HEAD`), else `main`; no GitHub is read.

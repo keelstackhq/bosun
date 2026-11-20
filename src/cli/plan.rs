@@ -818,10 +818,10 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
 }
 
 /// `plan import` with no GitHub token: nothing can be read or written, so every issue of the plan
-/// is listed as `would-create`. With `--dry-run` that is the result (exit 0); a real import fails
-/// (exit 1) and hands the issues over as `mcp__github__issue_write` calls in `next`, epic first.
-/// Epic numbers are not known, so a task's metadata has no `epic` and `bosun plan import` run
-/// later (with a token) finds the issues by their marker.
+/// is listed as `would-create`. With `--dry-run` (and `--fix`) that is the result (exit 0). A real
+/// import refuses (exit 1, `next` empty, the would-create list kept in `data`): task metadata and
+/// state labels are bosun-only writes, so no MCP call can stand in for them (the PreToolUse guard
+/// refuses them); the fix is a token for bosun.
 fn offline_import(
     dir: Option<&Path>,
     a: &PlanImportArgs,
@@ -867,75 +867,35 @@ fn offline_import(
             let text = String::from_utf8_lossy(&o.stdout).into_owned();
             text.lines().map(String::from).collect::<Vec<_>>()
         });
-    let (resolved, errs) = shape::resolve_gated(&p.items, &globs, tracked.as_deref());
+    let (_, errs) = shape::resolve_gated(&p.items, &globs, tracked.as_deref());
     if !errs.is_empty() {
         return Err(plan_errors(&a.file, &errs));
     }
-    let gated = shape::Gated { globs, resolved };
-    let per_task = per_task_if_on(&ctx.config, &ctx.limits);
-    let base = std::fs::canonicalize(&ctx.dir).unwrap_or_else(|_| ctx.dir.clone());
-    let mut roots = vec![ctx.dir.clone()];
-    roots.extend(std::fs::canonicalize(&ctx.dir).ok());
-    let plan_path = plan_key(&a.file, &base, &roots);
-    let (mut epics, mut tasks, mut calls) = (vec![], vec![], vec![]);
-    let mut make =
-        |slots: &mut Vec<Slot>, id: &str, title: String, body: String, labels: Vec<String>| {
-            slots.push(Slot {
-                id: id.into(),
-                issue: None,
-                action: "would-create",
-                state: (labels.iter())
-                    .find_map(|l| l.strip_prefix("bosun:state/"))
-                    .map(str::to_string),
-                closed: false,
-                merged: false,
-            });
-            calls.push(json!({
-                "method": "create", "owner": ctx.repo.owner, "repo": ctx.repo.name,
-                "title": title, "body": body, "labels": labels,
-            }));
-        };
+    let (mut epics, mut tasks) = (vec![], vec![]);
+    let make = |slots: &mut Vec<Slot>, id: &str, labels: Vec<String>| {
+        slots.push(Slot {
+            id: id.into(),
+            issue: None,
+            action: "would-create",
+            state: (labels.iter())
+                .find_map(|l| l.strip_prefix("bosun:state/"))
+                .map(str::to_string),
+            closed: false,
+            merged: false,
+        });
+    };
     let wanted = |i: &&Item| a.item.is_empty() || a.item.contains(&i.id);
     for item in p.items.iter().filter(wanted) {
         make(
             &mut epics,
             &item.id,
-            format!("{}: {}", item.id, item.title),
-            epic_body(item, &plan_path, &gated, per_task),
             labels("feature", &item.area, "planned"),
         );
         let pid = format!("{}/P", item.id);
-        let intro = format!(
-            "Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
-             with the code of the tasks that implement them; there are no pending tests. \
-             The item's tasks become ready when this merges (run `bosun plan import` again); \
-             if the plan is already on the default branch, there is nothing to commit: \
-             close this issue as completed instead.\n\n{}\n",
-            item.ucs
-                .iter()
-                .map(|u| format!("- {}: {}", u.id, u.text))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            id = item.id,
-            file = plan_path
-        );
-        make(
-            &mut tasks,
-            &pid,
-            format!("{pid}: plan"),
-            task_body(&pid, &intro, &plan_task_meta(item, &plan_path, None)),
-            labels("plan", &item.area, "ready"),
-        );
+        make(&mut tasks, &pid, labels("plan", &item.area, "ready"));
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
-            let meta = task_meta_of(item, t, None, vec![], &gated);
-            make(
-                &mut tasks,
-                &tid,
-                format!("{tid}: {}", t.title),
-                task_body(&tid, "", &meta),
-                labels(&t.kind, &item.area, "planned"),
-            );
+            make(&mut tasks, &tid, labels(&t.kind, &item.area, "planned"));
         }
     }
     let mut data = json!({
@@ -955,14 +915,11 @@ fn offline_import(
     if a.dry_run {
         return Ok(Outcome::data(data));
     }
-    data["note"] = json!(
-        "no GitHub token: the issues were not created; make them with the calls in `next` (in order, epic first), then rerun `bosun plan import` from a session with a token (`gh auth login` or GITHUB_TOKEN)"
-    );
-    let mut out = Outcome::data(data);
-    for c in calls {
-        out = out.with_next("mcp__github__issue_write", c);
-    }
-    Ok(out)
+    Err(BosunError::error(
+        "no GitHub token: `plan import` cannot create the issues",
+        "plan import writes task metadata, which only bosun may write: run `gh auth login` (bosun reads `gh auth token`) or export GITHUB_TOKEN, then rerun `bosun plan import <file>`; `--dry-run` and `--fix` work offline",
+    )
+    .with_data(data))
 }
 
 /// The default view: epics and tasks the import left as they were are counted, not listed.

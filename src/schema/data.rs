@@ -202,7 +202,7 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
-    pending_checks?: [{context: str, state: str}], mode?: str, created?: bool,
+    pending_checks?: [{context: str, state: str}], mode?: str, created?: bool, single_reason?: "bootstrap" | "one-off",
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}}
     | {pr: null, task: null, mode: str, created: bool, branch: str, draft: bool,
     ready: bool | "pending", auto_merge: bool, note: str};

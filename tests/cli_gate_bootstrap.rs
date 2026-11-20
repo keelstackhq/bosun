@@ -117,7 +117,7 @@ fn deps_is_neutral_when_the_base_has_no_deny_toml() {
     assert_eq!(v["data"]["skipped"], true);
     assert_eq!(
         v["data"]["reason"],
-        "no deny.toml in base: bootstrap PR, gate neutral"
+        "no deny.toml, .deny.toml, .cargo/deny.toml in base: bootstrap PR, gate neutral"
     );
     assert!(r.calls().is_empty());
 }
@@ -198,4 +198,47 @@ fn a_workspace_members_lockfile_at_the_repo_root_counts() {
     let (code, v) = r.gate("lint", "101");
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["error"]["message"], "gate lint failed (exit 101)");
+}
+
+#[test]
+fn deps_runs_for_a_subdir_stack_with_the_root_deny_toml_in_base() {
+    let r = repo(&["deny.toml", "web/Cargo.toml"]);
+    write(
+        &r.root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \"web\"\nprofile = \"rust\"\n",
+    );
+    r.commit("web/src/lib.rs");
+    let (code, v) = r.gate("deps", "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], false, "{v}");
+    assert_eq!(r.calls(), vec!["deny check"]);
+}
+
+#[test]
+fn deps_is_neutral_for_a_subdir_stack_when_no_deny_config_is_in_base() {
+    let r = repo(&["web/Cargo.toml"]);
+    write(
+        &r.root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \"web\"\nprofile = \"rust\"\n",
+    );
+    write(&r.root, "deny.toml", "# new\n");
+    r.commit("web/src/lib.rs");
+    let (code, v) = r.gate("deps", "1");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true);
+    assert!(r.calls().is_empty());
+}
+
+#[test]
+fn deps_runs_when_the_base_has_a_dotted_deny_toml() {
+    for name in [".deny.toml", ".cargo/deny.toml"] {
+        let r = repo(&[name]);
+        r.commit("src/lib.rs");
+        let (code, v) = r.gate("deps", "0");
+        assert_eq!(code, 0, "{name}: {v}");
+        assert_eq!(v["data"]["skipped"], false, "{name}: {v}");
+        assert_eq!(r.calls(), vec!["deny check"], "{name}");
+    }
 }
