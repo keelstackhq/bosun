@@ -643,6 +643,7 @@ fn the_circleci_toolchain_is_validated_and_pinned_for_later_steps() {
             ("HOME", h),
             ("PATH", path.as_str()),
             ("BASH_ENV", e.as_str()),
+            ("BOSUN_PIN_RUST_FALLBACK", "1.97"),
         ];
         let ok = bash_in(&project.join(cwd), &script, &env);
         let log = fs::read_to_string(home.join("log")).unwrap_or_default();
