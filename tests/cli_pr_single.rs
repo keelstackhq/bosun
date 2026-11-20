@@ -326,3 +326,26 @@ fn an_unreadable_base_tree_is_not_a_bootstrap_either() {
     assert_eq!(code, 3, "{v}");
     assert!(fake.auto_merge_enabled(n).is_none());
 }
+
+#[test]
+fn ready_without_ci_refuses_for_the_owner_and_turns_nothing_on() {
+    let (fake, dir) = setup();
+    fake.content(
+        ".bosun/bosun.toml",
+        "refs/heads/main",
+        "[ci]\nprovider = \"none\"\n",
+    );
+    let (_, first) = pr(&fake, dir.path(), &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(&fake, dir.path(), n);
+    let (code, v) = pr(&fake, dir.path(), &["--single", "--ready"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["error"]["kind"], "needs-human", "{v}");
+    assert!(fake.pull_is_draft(n));
+    assert!(fake.auto_merge_enabled(n).is_none());
+    assert!(
+        fake.requests()
+            .iter()
+            .all(|r| !r.path.ends_with("/graphql") && !r.path.ends_with("/merge"))
+    );
+}

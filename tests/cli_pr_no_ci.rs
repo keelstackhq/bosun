@@ -327,8 +327,10 @@ fn pr_without_a_task_is_refused_without_ci() {
     let (fake, dir) = setup(false, Some(NO_CI));
     fake.pull(21, "gov", "claude/gov", "no task");
     fake.pull_as_issue(21, "gov");
+    stamps::ready(&fake, dir.path(), 21);
     let (code, v) = run(&fake, dir.path(), &["pr", "--pr", "21", "--ready"]);
-    assert_ne!(code, 0, "{v}");
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["error"]["kind"], "needs-human", "{v}");
     assert_eq!(fake.auto_merge_enabled(21), None);
 }
 
