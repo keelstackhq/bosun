@@ -561,6 +561,22 @@ fn answer_at(dir: &Path, id: &str, answer: &str, at: &str) {
 }
 
 #[test]
+fn a_future_dated_stored_answer_does_not_record() {
+    let (fake, tmp) = (setup(), repo());
+    // The head's newest real answer is an approve to another question; the answer stored for
+    // this question was hand-written a year ahead, so `get` ignores it and nothing records.
+    answer_at(
+        tmp.path(),
+        "1-0123456-1762768999",
+        "approve",
+        "2026-11-10T09:00:00Z",
+    );
+    answer_at(tmp.path(), Q, "approve", "2027-11-10T09:00:00Z");
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+}
+
+#[test]
 fn chat_needs_the_newest_answer_for_the_head_to_be_an_approve() {
     let (fake, tmp) = (setup(), repo());
     answer_at(tmp.path(), Q, "approve", "2026-11-10T09:00:00Z");

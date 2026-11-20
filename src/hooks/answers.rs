@@ -81,10 +81,11 @@ fn when(at: &str) -> i64 {
     parse_rfc3339(at).map_or(i64::MIN, |t| t.0)
 }
 
-/// The stored answer to `question_id` for `repo`, if any.
+/// The stored answer to `question_id` for `repo`, if any; one dated after now (plus the skew)
+/// is ignored.
 pub fn get(dir: &Path, repo: &str, question_id: &str) -> Option<Answer> {
     let a = answer_of(read(&path(dir)?)?.get(question_id)?)?;
-    (a.repo == repo).then_some(a)
+    (a.repo == repo && not_future(&a.at, Timestamp::now())).then_some(a)
 }
 
 /// The ask `approve --list` issued as a Claude Tag post for `question_id` (stored with answer
