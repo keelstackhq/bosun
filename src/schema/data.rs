@@ -106,7 +106,8 @@ migrate = {from: str, to: str, step: str, direct: bool, lighter: bool, dry_run: 
     epics_unmarked: [int], mode: str, notes: [str]};
 setup-snippet = {script: str, short: str, paste_into: str, repo_script: str, client_message: str,
     autocompact?: {cloud_env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW?: str}, local_exports: [str],
-    paste_into: str, note?: str}};
+    paste_into: str, note?: str}}
+    | {settings: str, added: [str], updated?: [str]};
 revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
     main_red: int | null, gate_missed: {created: bool, issue: int}, warning: str | null};
 trailers = {hook?: str, stamped?: bool, session?: str, revert?: str | null, commits?: [{sha: str,

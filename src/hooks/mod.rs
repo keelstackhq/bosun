@@ -39,6 +39,12 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
     let cwd = dir
         .map(Path::to_path_buf)
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
+    // User-wide hooks stay silent and make no GitHub API call in a repo bosun never set up.
+    let here = cwd.clone().or_else(|| std::env::current_dir().ok());
+    let own = matches!(cmd, HookCmd::SessionStart | HookCmd::PreToolUse);
+    if !own && here.as_deref().is_some_and(session_start::unadopted) {
+        return None;
+    }
     match cmd {
         HookCmd::PreToolUse => pre_tool_use::run(cwd.as_deref(), &input),
         HookCmd::PostToolUse => post_tool_use::run(cwd.as_deref(), &input),

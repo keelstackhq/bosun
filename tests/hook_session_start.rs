@@ -26,6 +26,9 @@ fn repo() -> tempfile::TempDir {
         "origin",
         "https://github.com/acme/widget.git",
     ]);
+    // A set-up repo: session-start skips an un-adopted one.
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), env!("CARGO_PKG_VERSION")).unwrap();
     tmp
 }
 

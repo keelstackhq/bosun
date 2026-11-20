@@ -243,7 +243,7 @@ pub enum Command {
     /// The repo owners: `set` opens an owner PR that rewrites governance/owners.toml.
     Owners(OwnersArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
-    SetupSnippet,
+    SetupSnippet(SetupSnippetArgs),
     /// The output contract as JSON Schema or TypeScript: the envelope and each command's `data`.
     Schema(SchemaArgs),
 }
@@ -373,7 +373,7 @@ impl Command {
             Command::Owners(a) => match a.cmd {
                 OwnersCmd::Set(_) => "owners set",
             },
-            Command::SetupSnippet => "setup-snippet",
+            Command::SetupSnippet(_) => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {
@@ -1361,6 +1361,16 @@ pub struct NotifyArgs {
 pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
 /// Default `bosun wait --timeout` in seconds.
 pub const WAIT_TIMEOUT_SECS: u64 = 1800;
+
+#[derive(Debug, Args)]
+pub struct SetupSnippetArgs {
+    /// Merge bosun's hooks into the user-scope Claude Code settings instead of printing the bootstrap.
+    #[arg(long)]
+    pub install_hooks: bool,
+    /// The settings file for --install-hooks (default: $HOME/.claude/settings.json).
+    #[arg(long, value_name = "PATH", requires = "install_hooks")]
+    pub settings: Option<std::path::PathBuf>,
+}
 
 #[derive(Debug, Args)]
 pub struct PinArgs {

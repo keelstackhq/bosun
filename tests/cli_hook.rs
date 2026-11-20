@@ -22,12 +22,62 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
+/// A set-up repo (has `.bosun/version`).
 fn repo() -> tempfile::TempDir {
+    let tmp = bare_repo();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
+    tmp
+}
+
+fn bare_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
-    let url = "https://github.com/acme/widget.git";
-    git(tmp.path(), &["remote", "add", "origin", url]);
+    // The remote is a bare repo inside `.git`: reachable offline, gone with the temp dir.
+    let remote = tmp.path().join(".git/remote.git");
+    git(
+        tmp.path(),
+        &[
+            "init",
+            "-q",
+            "-b",
+            "main",
+            "--bare",
+            remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        tmp.path(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
     tmp
+}
+
+/// Commit `.bosun/version` and push it to the remote's default branch, then delete the file.
+fn adopted_on_remote(r: &Path) {
+    std::fs::create_dir_all(r.join(".bosun")).unwrap();
+    std::fs::write(r.join(".bosun/version"), "0.21.0\n").unwrap();
+    git(r, &["add", "."]);
+    git(
+        r,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "adopt",
+        ],
+    );
+    git(r, &["push", "-q", "origin", "main"]);
+    std::fs::remove_file(r.join(".bosun/version")).unwrap();
+}
+
+fn adopted_start(r: &Path) -> String {
+    let input = json!({"hook_event_name":"SessionStart","cwd":r.to_str().unwrap()});
+    hook(Some(&FakeGithub::start()), r, T0, "session-start", &input).stdout
 }
 
 /// Issue 4 holds a live lease of `session_other` on `src/core/**`; issue 5 is `session_me`'s.
@@ -73,6 +123,7 @@ fn hook_with(
         .env("BOSUN_SESSION", session)
         .env("BOSUN_ORIGIN", origin)
         .env("BOSUN_NOW", now)
+        .env("BOSUN_ADOPTED_CACHE_SECS", "0")
         .args(["hook", sub])
         .write_stdin(input.to_string());
     if let Some(f) = fake {
@@ -331,6 +382,8 @@ fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
     let main = tmp.path().join("main");
     std::fs::create_dir(&main).unwrap();
     git(&main, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir(main.join(".bosun")).unwrap();
+    std::fs::write(main.join(".bosun/version"), "0.9.0\n").unwrap();
     let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
     git(
         &main,
@@ -873,4 +926,191 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
         allowed(&out);
         assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
     }
+}
+
+#[test]
+fn session_start_unadopted_makes_no_github_api_call() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        text.contains("bosun adopt --policy autonomous --owner"),
+        "{text}"
+    );
+    assert!(!text.contains("could not reach GitHub"), "{text}");
+    let s = fake.state.lock().unwrap();
+    assert!(
+        s.comments.is_empty() && s.issues.is_empty(),
+        "no registry join"
+    );
+    drop(s);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+}
+
+#[test]
+fn unadopted_repo_keeps_pure_guards_and_makes_no_github_api_call() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let bash = |c: &str| {
+        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "git push origin main",
+        "gh pr merge 3 -R o/r",
+        "cd / && git push origin main",
+    ] {
+        assert!(bash(c).stdout.contains("deny"), "{c}");
+    }
+    let edit = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Edit",
+        "tool_input":{"file_path": tmp.path().join("a.rs").to_str().unwrap()}});
+    let o = hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &edit);
+    assert_eq!((o.code, o.stdout.trim()), (0, ""), "{}", o.stderr);
+    for (sub, ev) in [("stop", "Stop"), ("pre-compact", "PreCompact")] {
+        let input = json!({"hook_event_name":ev,"cwd":cwd});
+        let o = hook(Some(&fake), tmp.path(), T0, sub, &input);
+        assert_eq!((o.code, o.stdout.trim()), (0, ""), "{sub}: {}", o.stderr);
+    }
+    let post = json!({"hook_event_name":"PostToolUse","cwd":cwd,"tool_name":"AskUserQuestion"});
+    hook(Some(&fake), tmp.path(), T0, "post-tool-use", &post);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+}
+
+#[test]
+fn session_start_adopted_unchanged() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    leased(&fake);
+    let input = json!({"cwd": tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("you are session session_me"), "{text}");
+    assert!(!text.contains("bosun adopt"), "{text}");
+}
+
+#[test]
+fn adopted_is_read_from_the_remote_not_from_local_refs_or_files() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    adopted_on_remote(r);
+    // A fetch has put the remote ref in place; every way of erasing the local traces still
+    // leaves the repo adopted, because the remote itself is asked.
+    git(r, &["fetch", "-q", "origin"]);
+    for tamper in [
+        vec!["branch", "-rd", "origin/main"],
+        vec!["remote", "set-head", "origin", "-d"],
+        vec!["config", "--remove-section", "remote.origin.fetch"],
+    ] {
+        let _ = std::process::Command::new("git")
+            .current_dir(r)
+            .args(&tamper)
+            .output();
+        assert!(
+            !adopted_start(r).contains("bosun adopt --policy"),
+            "{tamper:?}"
+        );
+    }
+    std::fs::remove_dir_all(r.join(".git/refs/remotes")).ok();
+    std::fs::remove_file(r.join(".git/packed-refs")).ok();
+    assert!(!adopted_start(r).contains("bosun adopt --policy"));
+}
+
+#[test]
+fn adopted_is_read_when_the_commit_is_not_local() {
+    // Another clone pushed the adoption: this repo has neither its objects nor a ref.
+    let tmp = bare_repo();
+    let other = bare_repo();
+    git(
+        other.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            tmp.path().join(".git/remote.git").to_str().unwrap(),
+        ],
+    );
+    adopted_on_remote(other.path());
+    assert!(!adopted_start(tmp.path()).contains("bosun adopt --policy"));
+}
+
+#[test]
+fn an_unreachable_remote_counts_as_adopted() {
+    let tmp = bare_repo();
+    git(
+        tmp.path(),
+        &["remote", "set-url", "origin", "/nonexistent/remote.git"],
+    );
+    assert!(!adopted_start(tmp.path()).contains("bosun adopt --policy"));
+}
+
+#[test]
+fn removing_or_moving_the_bosun_dir_is_denied() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let bash = |c: &str| {
+        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "rm .bosun/version",
+        "git rm -r .bosun",
+        "mv .bosun/version /tmp/v",
+        "git rm --cached .bosun/version",
+    ] {
+        assert!(bash(c).stdout.contains("deny"), "{c}");
+    }
+    assert!(!bash("mv notes.md .bosun/notes.md").stdout.contains("deny"));
+}
+
+#[test]
+fn no_origin_remote_with_a_bosun_dir_is_adopted() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    git(tmp.path(), &["remote", "remove", "origin"]);
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert!(!o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+    // Without a `.bosun/` directory it is still not set up.
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    git(tmp.path(), &["remote", "remove", "origin"]);
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert!(o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+}
+
+/// The adopted answer is cached per session for ten minutes in the git dir: a burst of hooks asks
+/// the remote once, and the next ask after the TTL sees a later adoption.
+#[test]
+fn the_adopted_answer_is_cached_per_session_for_ten_minutes() {
+    let tmp = bare_repo();
+    let r = tmp.path();
+    let start = |session: &str, now: &str| {
+        let input = json!({"hook_event_name":"SessionStart","cwd":r.to_str().unwrap()});
+        let out = bosun()
+            .current_dir(r)
+            .env("BOSUN_SESSION", session)
+            .env("BOSUN_NOW", now)
+            .env("BOSUN_ADOPTED_CACHE_SECS", "600")
+            .args(["hook", "session-start"])
+            .write_stdin(input.to_string())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains("bosun adopt --policy")
+    };
+    assert!(start("session_a", "2026-10-22T10:00:00Z"));
+    assert!(r.join(".git/bosun/adopted").exists());
+    adopted_on_remote(r);
+    assert!(start("session_a", "2026-10-22T10:09:00Z"), "cached");
+    assert!(
+        !start("session_b", "2026-10-22T10:09:00Z"),
+        "another session asks again"
+    );
+    assert!(!start("session_a", "2026-10-22T10:11:00Z"), "expired");
 }

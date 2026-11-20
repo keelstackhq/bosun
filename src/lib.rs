@@ -79,7 +79,7 @@ pub fn run(mut cli: Cli) -> CmdResult {
         Command::Pin(a) => cli::pin::run(dir, a),
         Command::Migrate(a) => cli::migrate::run(dir, a),
         Command::Owners(a) => cli::owners::run(dir, a),
-        Command::SetupSnippet => cli::setup_snippet::run(dir),
+        Command::SetupSnippet(a) => cli::setup_snippet::run(dir, a),
         Command::Schema(a) => cli::schema::run(a),
     }
 }

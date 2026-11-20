@@ -10,8 +10,9 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, answers_lock, bash_writes, child_task_create, config_fetch_risk, edit_lock,
-    edited_path, foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
+    ChildTask, Script, answers_lock, bash_writes, bosun_dir_lock, child_task_create,
+    config_fetch_risk, edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for,
+    pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -100,7 +101,8 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
-    if let Some(why) = answers_lock(tool, &tool_input) {
+    if let Some(why) = answers_lock(tool, &tool_input).or_else(|| bosun_dir_lock(tool, &tool_input))
+    {
         return Some(deny(&why));
     }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
@@ -672,6 +674,9 @@ fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> 
 /// writes (a claim has touch paths), in a comment of a repo writer (`trusted_notes`, not any
 /// comment). An MCP call must also target this repo. Any doubt (no repo, no GitHub) is no.
 fn registered_child(dir: &Path, write: &ChildTask) -> bool {
+    if super::session_start::unadopted(dir) {
+        return false; // no registry here: no GitHub API call
+    }
     let Ok(app) = App::load(Some(dir)) else {
         return false;
     };
@@ -712,6 +717,9 @@ fn plan_tick_edit(tool: &str, path: &str, input: &Value) -> bool {
 }
 
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
+    if super::session_start::unadopted(dir) {
+        return Ok(None); // no leases here: no GitHub API call
+    }
     let app = App::load(Some(dir)).map_err(|e| e.message)?;
     let Some(rel) = repo_relative(&app.ctx.dir, dir, path) else {
         return Ok(None); // outside the repo: not a claimable path

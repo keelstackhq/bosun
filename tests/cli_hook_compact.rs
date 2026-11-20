@@ -51,6 +51,9 @@ fn repo() -> tempfile::TempDir {
             "c",
         ],
     );
+    // A set-up repo: session-start skips an un-adopted one.
+    std::fs::create_dir_all(d.join(".bosun")).unwrap();
+    std::fs::write(d.join(".bosun/version"), "0.9.0\n").unwrap();
     tmp
 }
 

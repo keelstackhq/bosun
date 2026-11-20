@@ -1,0 +1,1 @@
+- `bosun setup-snippet --install-hooks` adds bosun's hooks to ~/.claude/settings.json (idempotent, atomic); the bootstrap runs it; session-start in a repo without `.bosun/version` skips GitHub and says to run `bosun adopt`.

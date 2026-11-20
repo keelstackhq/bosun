@@ -26,6 +26,8 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
     git(
         tmp.path(),
         &[

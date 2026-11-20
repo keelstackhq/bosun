@@ -2,6 +2,7 @@
 //! where it stands (spec §4).
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -17,10 +18,126 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
+/// `git` for the adopted check: never prompts, gives up on a stalled transfer (low speed) and
+/// on one that takes over 20 seconds.
+fn git_remote(dir: &Path, args: &[&str]) -> Option<String> {
+    let mut child = std::process::Command::new("git")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["-c", "http.lowSpeedLimit=1000"])
+        .args(["-c", "http.lowSpeedTime=15", "-C"])
+        .arg(dir)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let end = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(s) = child.try_wait().ok()? {
+            break s;
+        }
+        if Instant::now() > end {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
+    status.success().then(|| text.trim().to_string())
+}
+
+/// True when bosun was never set up in the repo at `cwd`: no `.bosun/version` in the worktree AND
+/// none at the head of the remote's default branch. The remote answers (`git ls-remote`, then the
+/// tree at that sha, fetched without blobs into a private repo if not local): local refs and files
+/// can be edited. Fail closed: an unreachable remote counts as adopted, and so does no `origin`
+/// with a `.bosun/` directory. The answer is cached per session for `BOSUN_ADOPTED_CACHE_SECS`
+/// (default 600) in `<git common dir>/bosun/adopted`, so a burst of hooks asks the remote once.
+pub fn unadopted(cwd: &Path) -> bool {
+    let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
+        .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
+    if root.join(".bosun/version").exists() {
+        return false;
+    }
+    let common = super::git_out(&root, &["rev-parse", "--git-common-dir"]);
+    let file = common.map(|c| root.join(c).join("bosun/adopted"));
+    let session = std::env::var("BOSUN_SESSION").unwrap_or_default();
+    let ttl = std::env::var("BOSUN_ADOPTED_CACHE_SECS").ok();
+    let ttl: i64 = ttl.and_then(|v| v.trim().parse().ok()).unwrap_or(600);
+    let now = crate::time::Timestamp::now().0;
+    let cached = file.as_ref().and_then(|f| std::fs::read_to_string(f).ok());
+    if let Some(c) = &cached
+        && let [at, answer, key] = c.splitn(3, ' ').collect::<Vec<_>>()[..]
+        && at
+            .parse::<i64>()
+            .is_ok_and(|at| (0..ttl).contains(&(now - at)))
+        && key == session
+    {
+        return answer == "1";
+    }
+    let answer = unadopted_remote(&root);
+    if let Some(f) = file {
+        let _ = std::fs::create_dir_all(f.parent().unwrap_or(&root));
+        let _ = std::fs::write(f, format!("{now} {} {session}", u8::from(answer)));
+    }
+    answer
+}
+
+/// A private bare repo under the temp dir, with an unpredictable name and mode 0700.
+fn private_repo() -> Option<PathBuf> {
+    let mut raw = [0u8; 12];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).ok()?;
+    let rnd = raw.iter().fold(String::new(), |a, b| format!("{a}{b:02x}"));
+    let tmp = std::env::temp_dir().join(format!("bosun-adopted-{rnd}"));
+    let mut dir = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+    dir.create(&tmp).ok()?;
+    git_remote(&tmp, &["init", "-q", "--bare"]).map(|_| tmp)
+}
+
+fn unadopted_remote(root: &Path) -> bool {
+    let Some(url) = git_remote(root, &["remote", "get-url", "origin"]) else {
+        return !root.join(".bosun").is_dir();
+    };
+    let Some(heads) = git_remote(root, &["ls-remote", &url, "HEAD"]) else {
+        return false;
+    };
+    let Some(sha) = heads.split_whitespace().next() else {
+        return true; // reachable, no default branch yet
+    };
+    let spec = [format!("{sha}:.bosun/version"), format!("{sha}^{{commit}}")];
+    if git_remote(root, &["cat-file", "-e", &spec[0]]).is_some() {
+        return false;
+    }
+    if git_remote(root, &["cat-file", "-e", &spec[1]]).is_some() {
+        return true;
+    }
+    let Some(tmp) = private_repo() else {
+        return false;
+    };
+    let mut args: Vec<&str> = "fetch -q --depth=1 --filter=blob:none --no-tags"
+        .split(' ')
+        .collect();
+    args.extend([&*url, sha]);
+    let fetched = git_remote(&tmp, &args).is_some();
+    let tree = git_remote(&tmp, &["ls-tree", "--name-only", sha, ".bosun/version"]);
+    let _ = std::fs::remove_dir_all(&tmp);
+    fetched && tree.is_some_and(|t| t.is_empty())
+}
+
+const NOT_SET_UP: &str = "bosun is not set up here: run `bosun adopt --policy autonomous \
+    --owner <login>` (the owner's GitHub login) and open the setup PR. Until then bosun has no \
+    registry, leases or approvals in this repo.";
+
 pub fn run(cwd: Option<&Path>, input: &Value) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
+    if dir.as_deref().is_some_and(unadopted) {
+        return output(NOT_SET_UP);
+    }
     if let Some(d) = dir.as_deref()
         && let Err(e) = crate::cli::trailers::install(d)
     {

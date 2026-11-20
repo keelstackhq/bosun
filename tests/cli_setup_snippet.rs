@@ -374,3 +374,157 @@ fn the_short_script_has_at_most_five_lines_and_runs_each_repo_script() {
     let l = fs::read_to_string(&log).unwrap_or_default();
     assert!(l.contains("ran-ok") && !l.contains("ran-plain"), "{l}");
 }
+
+fn install(settings: &Path) -> serde_json::Value {
+    let out = bosun()
+        .args(["setup-snippet", "--install-hooks", "--settings"])
+        .arg(settings)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    one_object(&out.stdout)
+}
+
+fn commands(v: &serde_json::Value, event: &str) -> Vec<String> {
+    v["hooks"][event]
+        .as_array()
+        .map(|g| g.iter())
+        .into_iter()
+        .flatten()
+        .flat_map(|g| g["hooks"].as_array().unwrap().iter())
+        .map(|h| h["command"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn install_hooks_into_empty_settings() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("sub/settings.json");
+    let env = install(&f);
+    assert_eq!(env["data"]["added"].as_array().unwrap().len(), 5);
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+    for e in [
+        "SessionStart",
+        "Stop",
+        "PreToolUse",
+        "PostToolUse",
+        "PreCompact",
+    ] {
+        assert_eq!(commands(&v, e).len(), 1, "{e}");
+    }
+    assert_eq!(v["hooks"]["PostToolUse"][0]["matcher"], "AskUserQuestion");
+}
+
+#[test]
+fn install_hooks_idempotent() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("settings.json");
+    install(&f);
+    let first = fs::read(&f).unwrap();
+    let env = install(&f);
+    assert_eq!(fs::read(&f).unwrap(), first);
+    assert_eq!(env["data"]["added"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn install_hooks_keeps_existing_entries() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("settings.json");
+    fs::write(
+        &f,
+        r#"{"model":"x","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"mine"}]}],
+        "Stop":[{"hooks":[{"type":"command","command":"out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0"}]}]}}"#,
+    )
+    .unwrap();
+    let env = install(&f);
+    assert_eq!(env["data"]["added"].as_array().unwrap().len(), 4);
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+    assert_eq!(v["model"], "x");
+    assert_eq!(
+        commands(&v, "SessionStart"),
+        ["mine", "bosun hook session-start"]
+    );
+    assert_eq!(commands(&v, "Stop").len(), 1, "exact command already there");
+}
+
+#[test]
+fn install_hooks_refuses_invalid_json_and_matches_the_repo_settings() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("settings.json");
+    fs::write(&f, "{nope").unwrap();
+    let out = bosun()
+        .args(["setup-snippet", "--install-hooks", "--settings"])
+        .arg(&f)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&f).unwrap(), "{nope");
+    // The user-scope set is the repo's own set, so a double run de-duplicates by command.
+    let repo: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/settings.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let g = t.path().join("g.json");
+    install(&g);
+    let user: serde_json::Value = serde_json::from_str(&fs::read_to_string(&g).unwrap()).unwrap();
+    for e in [
+        "SessionStart",
+        "Stop",
+        "PreToolUse",
+        "PostToolUse",
+        "PreCompact",
+    ] {
+        assert_eq!(commands(&user, e), commands(&repo, e), "{e}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn install_hooks_follows_a_symlink_and_keeps_the_mode() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let t = tempfile::tempdir().unwrap();
+    let real = t.path().join("real.json");
+    fs::write(&real, "  \n").unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+    let link = t.path().join("settings.json");
+    symlink(&real, &link).unwrap();
+    install(&link);
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&real).unwrap()).unwrap();
+    assert_eq!(commands(&v, "SessionStart").len(), 1);
+    assert_eq!(
+        fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn a_failed_hook_install_warns_on_stderr_and_still_exits_0() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (work, bin, log) = (
+        tmp.path().join("w"),
+        tmp.path().join("bin"),
+        tmp.path().join("log"),
+    );
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    tools(&bin);
+    stub(&bin, "bosun", "echo 'boom' >&2; exit 1");
+    let (code, err, _) = boot(&work, &bin, &log);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("could not install the user-scope hooks"),
+        "{err}"
+    );
+}

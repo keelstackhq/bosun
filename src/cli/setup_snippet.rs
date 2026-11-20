@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use super::SetupSnippetArgs;
 use crate::config::{CONFIG_FILE, Session};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -30,7 +31,172 @@ const ENV_PASTE: &str = "claude.ai/code > Environments > <environment> > Environ
 /// Cloud sessions set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE themselves (Claude Code cloud docs).
 const PCT_NOTE: &str = "autocompact_pct is for local sessions only: a cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself and ignores an environment value; use autocompact_window for cloud";
 
-pub fn run(dir: Option<&Path>) -> CmdResult {
+const STOP: &str = "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0";
+const COMPACT: &str = "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0";
+const ASK: &str = "AskUserQuestion";
+const TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*";
+
+/// The hooks bosun wants in every repo: (event, matcher, command, timeout), `""` and 0 for none;
+/// a test checks they equal the repo's own `.claude/settings.json`, so each command runs once.
+pub const HOOKS: [(&str, &str, &str, u32); 5] = [
+    ("SessionStart", "", "bosun hook session-start", 0),
+    ("Stop", "", STOP, 0),
+    ("PreCompact", "", COMPACT, 15),
+    ("PreToolUse", TOOLS, "bosun hook pre-tool-use", 0),
+    ("PostToolUse", ASK, "bosun hook post-tool-use", 0),
+];
+
+/// The events whose bosun hook command is not in `settings` (any matcher).
+pub fn missing_events(settings: &Value) -> Vec<&'static str> {
+    HOOKS
+        .iter()
+        .filter(|(event, _, command, _)| {
+            !settings["hooks"][event].as_array().is_some_and(|gs| {
+                gs.iter().any(|g| {
+                    g["hooks"]
+                        .as_array()
+                        .is_some_and(|hs| hs.iter().any(|h| h["command"].as_str() == Some(command)))
+                })
+            })
+        })
+        .map(|(event, ..)| *event)
+        .collect()
+}
+
+/// Add each missing hook, matched by exact command; an entry with another matcher or timeout is
+/// updated in place. Returns the events added to and the events updated.
+fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
+    let root = settings
+        .as_object_mut()
+        .ok_or("the settings are not a JSON object")?;
+    let hooks = root
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or("\"hooks\" is not an object")?;
+    let (mut added, mut updated) = (Vec::new(), Vec::new());
+    for (event, matcher, command, timeout) in HOOKS {
+        let groups = hooks
+            .entry(event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event} is not an array"))?;
+        let found = groups.iter_mut().find_map(|g| {
+            let at = g
+                .get("hooks")?
+                .as_array()?
+                .iter()
+                .position(|h| h.get("command").and_then(Value::as_str) == Some(command))?;
+            Some((g, at))
+        });
+        if let Some((g, at)) = found {
+            let same = g.get("matcher").and_then(Value::as_str).unwrap_or("") == matcher;
+            let mut changed = set_key(
+                g,
+                "matcher",
+                same,
+                (!matcher.is_empty()).then(|| json!(matcher)),
+            );
+            let h = &mut g["hooks"][at];
+            let same = h.get("timeout").and_then(Value::as_u64).unwrap_or(0) == u64::from(timeout);
+            changed |= set_key(h, "timeout", same, (timeout > 0).then(|| json!(timeout)));
+            if changed {
+                updated.push(event);
+            }
+            continue;
+        }
+        let mut g = Map::new();
+        if !matcher.is_empty() {
+            g.insert("matcher".into(), json!(matcher));
+        }
+        let mut h = json!({"type": "command", "command": command});
+        if timeout > 0 {
+            h["timeout"] = json!(timeout);
+        }
+        g.insert("hooks".into(), json!([h]));
+        groups.push(Value::Object(g));
+        added.push(event);
+    }
+    Ok((added, updated))
+}
+
+/// Unless `same`, set `o[key]` to `want` (remove it for `None`); whether it changed.
+fn set_key(o: &mut Value, key: &str, same: bool, want: Option<Value>) -> bool {
+    match want {
+        _ if same => {}
+        Some(v) => o[key] = v,
+        None => drop(o.as_object_mut().and_then(|m| m.remove(key))),
+    }
+    !same
+}
+
+fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
+    let path = settings
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
+        })
+        .ok_or_else(|| BosunError::error("HOME is not set", "pass --settings <path>"))?;
+    let bad = |why: String| {
+        let shown = path.display();
+        let fix = format!("fix or move {shown}, then rerun `bosun setup-snippet --install-hooks`");
+        BosunError::error(format!("{shown}: {why}"), fix)
+    };
+    // A symlinked file is written through; a dangling link is an error.
+    let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+    let real = std::fs::canonicalize(&path);
+    if is_link && real.is_err() {
+        return Err(bad("a symlink to a file that does not exist".into()));
+    }
+    let path = real.unwrap_or(path.clone());
+    let shown = path.display();
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(t) if t.trim().is_empty() => json!({}),
+        Ok(t) => serde_json::from_str(&t).map_err(|e| bad(format!("not valid JSON ({e})")))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return Err(bad(e.to_string())),
+    };
+    let (added, updated) = merge_hooks(&mut doc).map_err(bad)?;
+    if !added.is_empty() || !updated.is_empty() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| bad(e.to_string()))?;
+        }
+        let text = serde_json::to_string_pretty(&doc).map_err(|e| bad(e.to_string()))?;
+        // Write a private (0600) temp file beside, then rename: no half-written settings.
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".bosun-tmp-{}", std::process::id()));
+        let tmp = path.with_file_name(name);
+        let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            let mut f = private_file(&tmp)?;
+            f.write_all(format!("{text}\n").as_bytes())?;
+            if let Ok(m) = std::fs::metadata(&path) {
+                std::fs::set_permissions(&tmp, m.permissions())?;
+            }
+            std::fs::rename(&tmp, &path)
+        };
+        write().map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            bad(e.to_string())
+        })?;
+    }
+    Ok(Outcome::data(
+        json!({"settings": shown.to_string(), "added": added, "updated": updated}),
+    ))
+}
+
+/// A new file open for writing, mode 0600 from the start on unix.
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    o.open(path)
+}
+
+pub fn run(dir: Option<&Path>, a: &SetupSnippetArgs) -> CmdResult {
+    if a.install_hooks {
+        return install_hooks(a.settings.clone());
+    }
     let mut data = json!({
         "script": BOOTSTRAP,
         "short": SHORT,

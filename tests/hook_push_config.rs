@@ -30,6 +30,8 @@ fn repo(config: Option<&str>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     git(d, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(d.join(".bosun")).unwrap();
+    std::fs::write(d.join(".bosun/version"), "0.9.0\n").unwrap();
     git(
         d,
         &[

@@ -61,7 +61,7 @@ fn redirect<'a>(word: &'a str, next: Option<&'a String>) -> Option<&'a str> {
 /// The command word of a segment and its arguments, after assignments, wrappers (`if`, `then`,
 /// `{`, a leading `(`) and runners with their options (`sudo -u x`, `time`, `env`); and whether
 /// a runner changes directory (`env -C dir`, `sudo -D dir`).
-fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
+pub(super) fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
     let all: Vec<&str> = seg.iter().map(|w| w.trim_start_matches('(')).collect();
     let mut cmd: &[&str] = &all;
     let mut moved = false;
