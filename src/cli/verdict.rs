@@ -48,6 +48,7 @@ fn read_input(from: &str) -> Result<String, BosunError> {
 }
 
 pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
+    crate::ctx::trusted_identity()?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
