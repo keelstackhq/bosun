@@ -153,7 +153,9 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   `<!-- bosun:relayed_by <session> -->` before the marker (an audit hint, self-declared like the
   reviewer tag; its model line is kept and never replaced by the relaying session's model).
   Relaying a relayed comment keeps the reviewer and replaces `relayed_by` (only the last
-  relayer is named). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
+  relayer is named). `--sign-key` signs only the session's own verdict: with a relayed body it
+  is a usage error (exit 2) and nothing is posted, so a relay never carries a key's signature
+  for another session's review. `data` names the `reviewer`, `signed` and, relayed, `relayed_by`; `apply` reports
   `relayed_by` too and records the reviewer with `relayed_by` in the verdict record. In the
   two-verdict, delegate and autonomous checks and in verdict carry-over, a verdict whose relayer
   holds or held a lease on a linked task (so also the PR author's session) is not independent:

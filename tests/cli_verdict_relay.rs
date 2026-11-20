@@ -279,3 +279,30 @@ fn apply_records_the_relayer() {
         "{bodies:?}"
     );
 }
+
+/// A key signs only its holder's own verdict: `--sign-key` on a relayed body is refused, nothing
+/// is posted and no key is read (a relay must never launder another session's review).
+#[test]
+fn a_relayed_body_is_never_signed() {
+    let fake = setup();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("v.txt");
+    std::fs::write(&file, reviewed_body()).unwrap();
+    let key = dir.path().join("missing.key");
+    let (code, v) = run(
+        &fake,
+        "session_orch",
+        T0,
+        &[
+            "verdict",
+            "comment",
+            "--from",
+            file.to_str().unwrap(),
+            "--sign-key",
+            key.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty(), "{v}");
+    assert!(fake.comments_of(42).is_empty(), "{v}");
+}

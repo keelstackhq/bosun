@@ -99,6 +99,15 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
             let relayed_by = (reviewer != me).then_some(me);
+            // A key signs only its holder's own review: a relay never launders another's.
+            if relayed_by.is_some() && sign_key.is_some() {
+                return Err(BosunError::usage(
+                    format!(
+                        "--sign-key signs only this session's own verdict; this body is {reviewer}'s"
+                    ),
+                    "relay without --sign-key, or have the reviewer sign its own verdict with `bosun verdict comment --sign-key`",
+                ));
+            }
             // A relay keeps the body's model only: the relaying session's env is not the reviewer's.
             let model = match relayed_by {
                 Some(_) => model.map(str::to_string),
