@@ -99,6 +99,9 @@ pub trait Github {
     fn label_exists(&self, name: &str) -> Result<bool>;
     /// Whether the branch exists on GitHub (is pushed).
     fn branch_exists(&self, name: &str) -> Result<bool>;
+    /// Whether the git tag `name` exists in the repository `owner/repo`, which need not be this
+    /// one (404 is `false`). Same token and API base as every other call.
+    fn tag_exists_in(&self, owner: &str, repo: &str, name: &str) -> Result<bool>;
     /// Delete the label from the repository; one that does not exist is fine.
     fn delete_label(&self, name: &str) -> Result<()>;
     /// Create the label; one that already exists is fine.
@@ -190,6 +193,8 @@ pub trait Github {
     fn repo_owner(&self) -> &str;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
+    /// The newest releases (first page, up to 30), newest first; a repo with none gives none.
+    fn list_releases(&self) -> Result<Vec<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
     fn required_status_checks(&self, branch: &str) -> Result<Live>;
     /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
@@ -319,6 +324,9 @@ pub struct Login {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Release {
     pub tag_name: String,
+    /// RFC 3339 time GitHub published it; `None` when absent (`bosun digest`).
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
@@ -473,6 +481,13 @@ impl Github for LiveGithub {
         }
     }
 
+    fn list_releases(&self) -> Result<Vec<Release>> {
+        match self.http.get_json(&self.path("/releases?per_page=30"))? {
+            Some(Value::Array(a)) => a.into_iter().map(|v| self.parse("release", v)).collect(),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>> {
         let mut path = self.path(&format!("/issues?state={}&per_page=100", state.as_str()));
         if !labels.is_empty() {
@@ -569,6 +584,16 @@ impl Github for LiveGithub {
 
     fn branch_exists(&self, name: &str) -> Result<bool> {
         let path = self.path(&format!("/branches/{}", enc(name)));
+        Ok(self.http.get_json(&path)?.is_some())
+    }
+
+    fn tag_exists_in(&self, owner: &str, repo: &str, name: &str) -> Result<bool> {
+        let path = format!(
+            "/repos/{}/{}/git/ref/tags/{}",
+            enc(owner),
+            enc(repo),
+            enc(name)
+        );
         Ok(self.http.get_json(&path)?.is_some())
     }
 

@@ -323,7 +323,7 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
         "0.15.0",
         &["bootstrap_until", "policy", "review_models", "signer"],
     ),
-    // `chat` (a chat approval record counts as the owner's approval) is read from 0.22.0 (0.21.0 does not read it).
+    // `chat` (a chat approval record counts as the owner's approval) and `bosun_repo` (the upstream repo of release tags) are read from 0.22.0 (0.21.0 reads neither).
     (
         "0.22.0",
         &[
@@ -332,6 +332,7 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
             "review_models",
             "signer",
             "chat",
+            "bosun_repo",
         ],
     ),
 ];
@@ -352,6 +353,16 @@ const KNOWN_POLICIES: &[(&str, &[&str])] = &[
     (
         "0.10.0",
         &["owner", "owner-gated", "orchestrator", "autonomous"],
+    ),
+    (
+        "0.22.0",
+        &[
+            "owner",
+            "owner-gated",
+            "orchestrator",
+            "autonomous",
+            "quorum",
+        ],
     ),
 ];
 
@@ -551,8 +562,22 @@ fn signer_is_known_from_0_15_0() {
 }
 
 #[test]
+fn quorum_is_known_from_0_22_0() {
+    assert_eq!(policy_known("0.21.0", "quorum"), Some(false));
+    assert_eq!(policy_known("0.22.0", "quorum"), Some(true));
+    assert_eq!(policy_known("0.22.0", "autonomous"), Some(true));
+}
+
+#[test]
 fn chat_is_known_from_0_22_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat"));
+    assert!(!has("0.21.0"));
+    assert!(has("0.22.0"));
+}
+
+#[test]
+fn bosun_repo_is_known_from_0_22_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"bosun_repo"));
     assert!(!has("0.21.0"));
     assert!(has("0.22.0"));
 }

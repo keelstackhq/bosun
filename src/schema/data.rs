@@ -175,7 +175,7 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, verdict_reapplied: int | null,
     requirement?: str,
-    policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
+    policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str], quorum_verdicts?: [str],
     delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
     verdict_cleared_by?: str};
 review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, findings: [{..}], reasons: [str],
@@ -214,7 +214,9 @@ mode = {mode: str, mode_source: str, knobs: {[str]: {value: str | int, source: s
 rules = {file: str, changed: bool, written: bool, block: str};
 heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, head_sha: str,
     task: int, action: str, why: str}], main?: any};
-digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
+digest = {summary: {since: str, merged: [{pr: int, title: str, merged_at: str | null}],
+    released: [{tag: str, published_at: str | null}], blocked: [{pr?: int, issue?: int, title: str, rules?: [str]}]},
+    message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
     rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
     budget_asks: [{epic: int, spent_usd: num, budget_usd: num, needs?: str}],
     budget_warnings?: [{epic: int, spent_usd: num, budget_usd: num}], budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],

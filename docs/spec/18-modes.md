@@ -18,8 +18,12 @@ push_gates = "push"
   source of each knob (`explicit`, `preset`, `default`).
 - Unknown mode names, unknown knobs and unknown values are parse errors. `policy` is never a
   `[mode]` key (parse error): only `[approvals] policy` or the mode name sets it.
-- The preset fills `[approvals] policy` when the table leaves it unset (booster and
-  autonomous: `autonomous`, D-017); risk-check and `approve` print `data.policy_source`.
+- The preset fills `[approvals] policy` when the table leaves it unset (booster: `autonomous`,
+  D-017; autonomous: `quorum`, D-022, needs a 0.22.0 pin); risk-check and `approve` print
+  `data.policy_source`. Safe: the base config and the base-pinned binary judge each PR, so the
+  switch to `quorum` takes effect only after an owner-approved pin bump (judged under the old
+  policy, where `.bosun/**` is owner-only). The quorum covers every path but the trust root
+  (§8).
 - Direction: the ladder runs gatekeeper < steady < booster < autonomous. **Lighter** = toward
   `autonomous` (fewer gates, more helpers); **tighter** = toward `gatekeeper`.
 - Weaken (§8, R-weaken): a lighter mode (every step toward `autonomous` in the ladder above, gatekeeper → steady included), and an effective `push_gates` push → ready,

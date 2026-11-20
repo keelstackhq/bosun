@@ -279,7 +279,16 @@ pub struct Approvals {
     /// Whether a chat approval record counts as the owner's approval. Unset: true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat: Option<bool>,
+    /// The upstream bosun repository (`owner/name`, default `keelstackhq/bosun`) whose `v{version}`
+    /// tags say which `.bosun/version` pins are released (D-022 quorum). Read from the PR's base
+    /// only; an invalid value makes every pin change the owner's (fail closed). Release ordering:
+    /// a pinned release older than 0.22.0 rejects the key. `.bosun/bosun.toml` is trust root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bosun_repo: Option<String>,
 }
+
+/// The upstream repository of bosun releases when `[approvals] bosun_repo` is unset.
+pub const DEFAULT_BOSUN_REPO: &str = "keelstackhq/bosun";
 
 impl Approvals {
     pub fn policy(&self) -> Policy {
@@ -292,6 +301,23 @@ impl Approvals {
             (true, _) => "preset",
             (_, true) => "explicit",
             _ => "default",
+        }
+    }
+
+    /// `(owner, name)` of the upstream bosun repository: `bosun_repo` or the default. `Err` holds
+    /// the bad value: exactly `owner/name` of `[A-Za-z0-9._-]` parts, neither empty, `.` or `..`.
+    pub fn bosun_repo_pair(&self) -> std::result::Result<(String, String), String> {
+        let v = self.bosun_repo.as_deref().unwrap_or(DEFAULT_BOSUN_REPO);
+        let ok = |p: &str| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        };
+        match v.split_once('/') {
+            Some((o, r)) if ok(o) && ok(r) => Ok((o.into(), r.into())),
+            _ => Err(v.into()),
         }
     }
 

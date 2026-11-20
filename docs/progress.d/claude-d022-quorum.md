@@ -1,0 +1,1 @@
+- 2026-11-20 · D-022 quorum approvals · `policy = "quorum"`: signature plus two clean verdicts passes all but the trust root (TRUST_ROOT), halt-aware; mode autonomous maps to it; digest summary of merged, released, blocked · this PR

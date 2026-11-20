@@ -1075,6 +1075,127 @@ pub fn autonomous_excluded(
     why
 }
 
+/// The trust root of the quorum policy (D-022): paths a quorum signature never covers, always
+/// the owner's own approval. Whole-file match on purpose: a table-level diff of `bosun.toml`
+/// (only `[approvals]`) is not done, so any edit of the file needs the owner.
+///
+/// The list is compiled into the binary that judges the PR. The risk workflow runs the base
+/// pin, so a single PR cannot widen or shrink it for itself; a change to it lands with a pin
+/// bump the old binary judges (under the old policy, `.bosun/**` is owner-only).
+///
+/// It names every file that chooses or runs the judging code: the risk workflow (also a channel
+/// template copy, `**/workflows/risk.yml*`) everywhere, and in bosun itself the glob matcher,
+/// mode presets, config parse, signer gate, verdict record parsing and status posting.
+///
+/// `.bosun/version` (the release that judges every PR) is not listed: an upgrade to a released
+/// version stays under quorum. A change of it is trust root only when
+/// [`pin_change_trust_root`] says so (downgrade, unreleased or unreadable version, deletion,
+/// rename), so a quorum-merged pin bump cannot move the judging binary to an old, unreleased or
+/// unknown build. `bosun halt` and two independent reviewers still apply to every bump.
+pub const TRUST_ROOT: [&str; 13] = [
+    ".bosun/approvers.toml",
+    ".bosun/bosun.toml",
+    ".github/workflows/risk.yml",
+    "**/workflows/risk.yml*",
+    // Only in bosun's own repo (`bosun_code`): the code that holds this list and verifies signatures.
+    "src/core/risk.rs",
+    "src/core/approve.rs",
+    "src/cli/risk_check.rs",
+    "src/core/glob.rs",
+    "src/core/mode.rs",
+    "src/config.rs",
+    "src/cli/approve.rs",
+    "src/core/records.rs",
+    "src/github/gate.rs",
+];
+/// How many of [`TRUST_ROOT`] apply in every repo (the rest only where `bosun_code` is true).
+const TRUST_ROOT_EVERYWHERE: usize = 4;
+/// Counting verdicts from different sessions a quorum approval needs (D-022). One verdict's bar is
+/// [`VERDICT_MIN_CONFIDENCE`] (0.9), stricter than D-022's 0.85; it stays 0.9.
+pub const QUORUM_VERDICTS: usize = 2;
+
+/// The pin file whose change [`pin_change_trust_root`] judges.
+pub const PIN_FILE: &str = ".bosun/version";
+
+/// Whether any of `files` is (or was renamed from) [`PIN_FILE`].
+pub fn pin_changed(files: &[(&str, Option<&str>)]) -> bool {
+    files
+        .iter()
+        .any(|(f, prev)| *f == PIN_FILE || *prev == Some(PIN_FILE))
+}
+
+/// `x.y.z` of a plain pin (surrounding whitespace allowed; no `v`, suffix, or leading zeros).
+fn parse_pin(text: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = text.trim().split('.');
+    let mut next = || {
+        let p = parts.next()?;
+        let plain = !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        (plain && (p == "0" || !p.starts_with('0')))
+            .then(|| p.parse::<u64>().ok())
+            .flatten()
+    };
+    let v = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(v)
+}
+
+/// Why a change of `.bosun/version` is trust root (owner only) under quorum (D-022), else `None`:
+/// the head pin is deleted or renamed away (`None`), not plain `x.y.z`, lower than the base pin,
+/// or not a published release (`released`: the tag `v{head}` exists; unused when both pins are
+/// the same version). An upgrade to a released version, or a new pin where none stood, is fine.
+pub fn pin_change_trust_root(
+    base: Option<&str>,
+    head: Option<&str>,
+    released: bool,
+) -> Option<String> {
+    let Some(head) = head else {
+        return Some(".bosun/version deleted or renamed".into());
+    };
+    let Some(new) = parse_pin(head) else {
+        return Some(format!(
+            ".bosun/version is not a plain x.y.z version: {:?}",
+            head.trim()
+        ));
+    };
+    let old = base.and_then(parse_pin);
+    if old == Some(new) {
+        return None;
+    }
+    if old.is_some_and(|old| new < old) {
+        return Some(format!(
+            ".bosun/version downgrade {} -> {}",
+            base.unwrap_or("").trim(),
+            head.trim()
+        ));
+    }
+    (!released).then(|| {
+        format!(
+            ".bosun/version {} is not a published release (no tag v{0})",
+            head.trim()
+        )
+    })
+}
+
+/// The changed trust-root paths among `(path, previous path)` pairs ([`TRUST_ROOT`]); a rename
+/// counts on both sides, any case; a `..` segment counts as a hit. Empty: a quorum can count.
+pub fn trust_root_changed(files: &[(&str, Option<&str>)], bosun_code: bool) -> Vec<String> {
+    let n = if bosun_code {
+        TRUST_ROOT.len()
+    } else {
+        TRUST_ROOT_EVERYWHERE
+    };
+    let globs: Vec<Glob> = (TRUST_ROOT[..n].iter())
+        .map(|g| Glob::parse(g).expect("built-in trust-root glob"))
+        .collect();
+    (files.iter())
+        .filter(|(path, prev)| {
+            (std::iter::once(path).chain(prev)).any(|p| {
+                p.split('/').any(|s| s == "..") || globs.iter().any(|g| matches_any_case(g, p))
+            })
+        })
+        .map(|(path, _)| path.to_string())
+        .collect()
+}
+
 /// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
 /// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
 /// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that would not count (edited too),
@@ -1272,7 +1393,7 @@ fn verdict_sessions<'a>(
             && !session.is_empty()
             && session != "unknown"
             && !is_bot_session(&session)
-            && !excluded.contains(&session)
+            && !excluded.iter().any(|e| same_session(e, &session))
         {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
             // A newest record relayed by an excluded session withdraws, never counts.
@@ -1294,8 +1415,24 @@ fn verdict_sessions<'a>(
 /// author). Wave agents share their orchestrator's session id (spec §4), so `S` and `S/task`
 /// are the same session here: fail closed.
 pub(crate) fn relayer_excluded(relayer: Option<&str>, excluded: &[String]) -> bool {
-    let root = |s: &str| s.split('/').next().unwrap_or_default().to_string();
-    relayer.is_some_and(|r| excluded.iter().any(|e| root(e) == root(r)))
+    relayer.is_some_and(|r| excluded.iter().any(|e| same_session(e, r)))
+}
+
+/// Whether two session ids share a root (`S` and `S/task` are one session, spec §4).
+fn same_session(a: &str, b: &str) -> bool {
+    a.split('/').next() == b.split('/').next()
+}
+
+/// One session id per root, the first seen: the quorum (D-022) counts sessions, and wave agents
+/// `S/r1`, `S/r2` are one session.
+pub fn distinct_roots(sessions: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in sessions {
+        if !out.iter().any(|o| same_session(o, &s)) {
+            out.push(s);
+        }
+    }
+    out
 }
 
 const CARGO_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
@@ -2665,5 +2802,120 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             };
             assert!(!critical(&[], &[f], false).is_empty(), "{t}");
         }
+    }
+
+    #[test]
+    fn pin_change_is_trust_root_for_downgrade_unreleased_garbage_and_deletion() {
+        let c = pin_change_trust_root;
+        let has = |r: Option<String>, w: &str| r.is_some_and(|r| r.contains(w));
+        assert!(has(
+            c(Some("0.21.0\n"), Some("0.20.9\n"), true),
+            "downgrade"
+        ));
+        assert!(has(c(Some("0.21.0"), Some("0.9.0"), true), "downgrade"));
+        assert_eq!(c(Some("0.21.0\n"), Some("0.22.0\n"), true), None);
+        assert_eq!(c(Some("0.9.0"), Some("0.10.0"), true), None);
+        assert!(has(
+            c(Some("0.21.0"), Some("0.22.0"), false),
+            "not a published"
+        ));
+        for bad in [
+            "",
+            "v0.22.0",
+            "0.22",
+            "0.22.0-rc1",
+            "0.22.0 # x",
+            "0.022.0",
+            "1.2.3.4",
+            "latest",
+        ] {
+            assert!(has(c(Some("0.21.0"), Some(bad), true), "plain"), "{bad:?}");
+        }
+        assert!(has(c(Some("0.21.0"), None, true), "deleted"));
+        assert_eq!(c(Some("0.21.0\n"), Some("0.21.0"), false), None);
+        assert_eq!(c(None, Some("0.22.0"), true), None);
+        assert!(has(c(None, Some("0.22.0"), false), "not a published"));
+        assert!(pin_changed(&[(".bosun/version", None)]));
+        assert!(pin_changed(&[("x", Some(".bosun/version"))]));
+        assert!(!pin_changed(&[("src/a.rs", None)]));
+    }
+
+    #[test]
+    fn trust_root_names_the_files_and_counts_renames_case_and_dotdot() {
+        let t = |files: &[(&str, Option<&str>)], code| trust_root_changed(files, code);
+        assert!(t(&[("src/a.rs", None), ("docs/x.md", None)], true).is_empty());
+        assert_eq!(t(&[(".bosun/approvers.toml", None)], false).len(), 1);
+        assert_eq!(t(&[(".bosun/bosun.toml", None)], false).len(), 1);
+        // Whole file: any edit of bosun.toml counts, not only `[approvals]`.
+        assert_eq!(t(&[(".bosun/bosun.toml", None)], true).len(), 1);
+        // A rename away from the file counts, and so does any case.
+        assert_eq!(
+            t(&[("docs/old.txt", Some(".bosun/approvers.toml"))], false),
+            ["docs/old.txt"]
+        );
+        assert_eq!(t(&[(".BOSUN/Approvers.TOML", None)], false).len(), 1);
+        assert_eq!(t(&[("a/../.bosun/bosun.toml", None)], false).len(), 1);
+        assert_eq!(t(&[("src/../x", None)], false).len(), 1);
+        // The code that judges counts only in bosun's own repo.
+        for f in [
+            "src/core/risk.rs",
+            "src/core/approve.rs",
+            "src/cli/risk_check.rs",
+        ] {
+            assert!(t(&[(f, None)], false).is_empty(), "{f}");
+            assert_eq!(t(&[(f, None)], true), [f], "{f}");
+            assert_eq!(t(&[("src/z.rs", Some(f))], true).len(), 1, "{f}");
+        }
+        assert!(t(&[("src/core/risk_other.rs", None)], true).is_empty());
+        // The risk workflow and its channel template copies count in every repo, any case.
+        for f in [
+            ".github/workflows/risk.yml",
+            ".GITHUB/Workflows/RISK.yml",
+            "channel/pieces/core/files/.github/workflows/risk.yml.jinja",
+        ] {
+            assert_eq!(t(&[(f, None)], false), [f], "{f}");
+            assert_eq!(t(&[("docs/z.md", Some(f))], false).len(), 1, "{f}");
+        }
+        assert!(t(&[(".github/workflows/ci.yml", None)], true).is_empty());
+        // The rest of the judging code counts only in bosun's own repo.
+        for f in [
+            "src/core/glob.rs",
+            "src/core/mode.rs",
+            "src/config.rs",
+            "src/cli/approve.rs",
+            "src/core/records.rs",
+            "src/github/gate.rs",
+        ] {
+            assert!(t(&[(f, None)], false).is_empty(), "{f}");
+            assert_eq!(t(&[(f, None)], true), [f], "{f}");
+        }
+    }
+
+    #[test]
+    fn session_roots_count_once_and_exclude_by_root() {
+        assert_eq!(
+            distinct_roots(vec!["a/r1".into(), "a/r2".into(), "b".into(), "a".into()]),
+            ["a/r1", "b"]
+        );
+        let line = Record::Verdict {
+            session: "s/x".into(),
+            head_sha: "h".into(),
+            approved: true,
+            confidence: Some(0.95),
+            major: Some(0),
+            model: None,
+            relayed_by: None,
+        }
+        .to_line();
+        let body = format!("Review verdict: approve 0.95.\n\n{line}");
+        let c = [(VERDICT_AUTHOR, body.as_str(), true)];
+        let ex = |e: &str| vec![e.to_string()];
+        assert!(autonomous_verdicts(c, "h", &ex("s"), None).is_empty());
+        assert_eq!(autonomous_verdicts(c, "h", &ex("t"), None), ["s/x"]);
+    }
+
+    #[test]
+    fn quorum_needs_two_verdicts() {
+        assert_eq!(QUORUM_VERDICTS, 2);
     }
 }

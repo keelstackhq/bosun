@@ -2145,6 +2145,41 @@ fn an_explicit_pin_writes_the_policy_only_when_checked() {
     }
 }
 
+#[test]
+fn the_quorum_policy_renders_only_for_a_checked_pin_and_the_comment_names_its_release() {
+    for (pin, checked, written) in [("0.21.0", "", false), ("0.22.0", "1", true)] {
+        let vars: BTreeMap<&str, String> = [
+            ("project", "app"),
+            ("owner", ""),
+            ("bosun_version", pin),
+            ("template.version", "0.22.0"),
+            ("rust_path", "."),
+            ("ts_path", "."),
+            ("own_ci", ""),
+            ("intake", ""),
+            ("policy", "quorum"),
+            ("policy_pin_checked", checked),
+            ("ci_provider", ""),
+            ("ci_pin_checked", ""),
+            ("bosun_app", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+        let files = render_channel(&["core", "rust"], &vars);
+        let text = file(&files, ".bosun/bosun.toml");
+        let config: toml::Table = text.parse().unwrap();
+        let policy = config
+            .get("approvals")
+            .and_then(|a| a.get("policy"))
+            .and_then(|v| v.as_str());
+        assert_eq!(policy == Some("quorum"), written, "pin {pin}: {text}");
+        if !written {
+            assert!(text.contains("quorum: 0.22.0"), "{text}");
+        }
+    }
+}
+
 /// A sandbox for a full run of a setup script: stubs for every tool it calls log to `calls`.
 /// `node22` is first in PATH with a fake Node 22; `node24` holds a fake Node 24.
 struct SetupSandbox {

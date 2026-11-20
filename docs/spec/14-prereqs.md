@@ -84,7 +84,7 @@ is one D-012 chat form for the repo: its first line `Daily digest <owner>/<repo>
 owner-waiting PR (`#<pr>@<short head>`, its `R-` rule ids, the inert title), the open asks
 (answered with `bosun answer <issue> --chat`), budget asks (under `budget_feature = ask`, each indexed epic at 100 % of its feature budget, with the reply line `<id> raise <epic> +<usd>`; they are not in the id; epics at 80 % or more that are not asks are listed as `Budget warnings`, also with no hint) and the reply
 `<id> approve 12 15`. While main is red, mainfix PRs are in `data.bypass`,
-not in the digest; release-environment taps never wait for it. What a tokenless listing could
+not in the digest; release-environment taps never wait for it. `data.summary` (D-022) is the once-a-day owner summary: `merged` (PRs with `merged_at` in the last 24 hours before `BOSUN_NOW`), `released` (the latest release when published in that window) and `blocked` (the owner-waiting PRs and open `needs-human` asks). What a tokenless listing could
 not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <day> <id>
 <pr>@<head>...` (`day`: the digest's UTC date; `id`: as `message_id` above over the pairs and a
 `day <day>` line, so each day's digest has its own id; an unkeyed checksum that catches copy errors, not
