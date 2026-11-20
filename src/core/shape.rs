@@ -1,6 +1,6 @@
 //! PR shape of a plan item (docs/plan-format.md, "Choosing the PR shape"): one PR for the whole
-//! item (`single`) or one PR per task (`split`). D-016: the shape follows the goal, never a line
-//! cap; gated tasks always get their own single-task PR.
+//! item (`single`) or one PR per task (`split`). D-021: the shape follows the goal, never a line
+//! cap, gated tasks included: they bundle like any task and only need the owner's approval.
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -13,8 +13,6 @@ use crate::core::touch::companions;
 
 /// Planned size of a task without `size:`.
 pub const DEFAULT_TASK_SIZE: u32 = 200;
-/// D-016: a gated task is at most this many changed lines.
-pub const MAX_GATED: u32 = 400;
 /// A one-off task (`bosun pr --one-off`, item `oneoff`) is at most this many changed lines.
 pub const ONE_OFF_MAX: u64 = 300;
 /// The item id of a one-off task.
@@ -55,9 +53,9 @@ pub struct Decision {
     pub shape: Shape,
     /// Planned changed lines of the item (drift signal only).
     pub total: u32,
-    /// Tasks per task of the longest depends chain, over the non-gated tasks.
+    /// Tasks per task of the longest depends chain.
     pub width: f64,
-    /// Plan ids of the gated tasks: each gets its own single-task PR.
+    /// Plan ids of the gated tasks: their PR needs the owner's approval (D-021: no cap, bundled).
     pub gated: Vec<String>,
     pub reasons: Vec<String>,
 }
@@ -171,34 +169,6 @@ pub fn is_gated(t: &Task, gated: &[Glob]) -> bool {
     t.risk == "high" || touch_gated(&t.touch, gated)
 }
 
-/// The plan error for a gated task planned over [`MAX_GATED`] lines (at its `size:` line).
-pub fn gated_size_error(t: &Task, gated: &[Glob]) -> Option<PlanError> {
-    gated_size_error_by(t, is_gated(t, gated))
-}
-
-fn gated_size_error_by(t: &Task, gated: bool) -> Option<PlanError> {
-    let size = t.size.filter(|&s| s > MAX_GATED && gated)?;
-    Some(PlanError {
-        line: t.size_line,
-        message: format!("size {size} is over {MAX_GATED} changed lines for a gated task"),
-        fix: format!("split the gated work so each PR is at most {MAX_GATED} lines (D-016)"),
-    })
-}
-
-/// [`gated_size_error`] for every task of `items`.
-pub fn gated_size_errors(items: &[Item], gated: &[Glob]) -> Vec<PlanError> {
-    gated_size_errors_by(items, &|_, t| is_gated(t, gated))
-}
-
-/// [`gated_size_errors`] with the caller's notion of gated.
-pub fn gated_size_errors_by(items: &[Item], gated: GatedBy) -> Vec<PlanError> {
-    (items
-        .iter()
-        .flat_map(|i| i.tasks.iter().map(move |t| (i, t))))
-    .filter_map(|(i, t)| gated_size_error_by(t, gated(&i.id, t)))
-    .collect()
-}
-
 pub fn total(item: &Item) -> u32 {
     item.tasks
         .iter()
@@ -242,9 +212,11 @@ pub fn decide(item: &Item, gated: &[Glob]) -> Decision {
 /// [`decide`] with the caller's notion of gated.
 pub fn decide_by(item: &Item, gated: GatedBy) -> Decision {
     let total = total(item);
-    let (held, open): (Vec<&Task>, Vec<&Task>) =
-        item.tasks.iter().partition(|t| gated(&item.id, t));
-    let gated_ids: Vec<String> = held.iter().map(|t| t.plan_id(&item.id)).collect();
+    let open: Vec<&Task> = item.tasks.iter().collect();
+    let gated_ids: Vec<String> = (open.iter())
+        .filter(|t| gated(&item.id, t))
+        .map(|t| t.plan_id(&item.id))
+        .collect();
     let longest = chain(item, &open);
     let width = open.len() as f64 / longest.max(1) as f64;
     let mk = |shape, reasons: Vec<String>| Decision {
@@ -255,12 +227,7 @@ pub fn decide_by(item: &Item, gated: GatedBy) -> Decision {
         reasons,
     };
     if open.len() <= 1 {
-        let why = if held.is_empty() {
-            "one task".to_string()
-        } else {
-            format!("{} gated tasks run alone", held.len())
-        };
-        return mk(Shape::Single, vec![why]);
+        return mk(Shape::Single, vec!["one task".into()]);
     }
     let shared = coupled(&open);
     if width >= SPLIT_WIDTH && shared.is_none() && item.ucs.len() > 1 {
@@ -299,17 +266,6 @@ pub fn effective_by(item: &Item, gated: GatedBy) -> Decision {
             ..auto
         },
     }
-}
-
-/// Whether a task is gated now (D-016), as `wave plan` judges it: the stored flag, `risk: high`,
-/// or its touch reaching a gated path of the default branch's rules and tree. A touch that
-/// cannot be resolved counts as gated (fail closed: the task runs alone).
-pub fn meta_gated(
-    m: &crate::core::meta::TaskMeta,
-    gated: &[Glob],
-    files: Option<&[String]>,
-) -> bool {
-    m.gated || m.risk == "high" || touch_gated_in(&m.touch, gated, files).unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -364,7 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn risk_high_tasks_are_gated_and_never_bundled() {
+    fn risk_high_tasks_are_gated_and_shape_like_any_task() {
+        // D-021: a gated task is listed (owner approval) but no longer runs alone.
         let i = item(
             vec![
                 task("T1", "a", &[], 50, "high"),
@@ -374,8 +331,18 @@ mod tests {
         );
         let d = decide(&i, &[]);
         assert_eq!(d.gated, ["M1/T1"]);
-        assert_eq!(d.shape, Shape::Single);
-        assert_eq!(d.reasons, ["1 gated tasks run alone"]);
+        assert_eq!(d.shape, Shape::Split);
+        assert_eq!(d.reasons, ["2 tasks run 2.0 wide with no shared files"]);
+        let i = item(
+            vec![
+                task("T1", "a", &[], 50, "high"),
+                task("T2", "b", &["T1"], 50, "normal"),
+            ],
+            1,
+        );
+        let d = decide(&i, &[]);
+        assert_eq!((d.shape, d.gated.len()), (Shape::Single, 1));
+        assert!(!d.reasons.iter().any(|r| r.contains("alone")), "{d:?}");
         let one = decide(&item(vec![task("T1", "a", &[], 900, "high")], 1), &[]);
         assert_eq!(
             (one.shape, one.gated),
@@ -413,9 +380,9 @@ mod tests {
         );
         let d = decide(&i, &g);
         assert_eq!(d.gated, ["M1/T1"]);
-        // The other two are independent and the item has two UCs: they split.
+        // All three are independent and the item has two UCs: they split.
         assert_eq!(d.shape, Shape::Split);
-        assert_eq!(d.reasons, ["2 tasks run 2.0 wide with no shared files"]);
+        assert_eq!(d.reasons, ["3 tasks run 3.0 wide with no shared files"]);
     }
 
     #[test]
@@ -496,8 +463,9 @@ mod tests {
             (d.shape, d.gated),
             (Shape::Single, vec!["M1/T1".to_string()])
         );
+        // D-021: a gated task no longer forces auto to single.
         i.shape = None;
-        assert_eq!(effective(&i, &[]).shape, Shape::Single);
+        assert_eq!(effective(&i, &[]).shape, Shape::Split);
     }
 
     fn real_globs() -> Vec<Glob> {

@@ -1,0 +1,1 @@
+- 2026-11-19 · Pin bosun 0.21.0 · .bosun/version and docs/setup-script.sh npm integrity hashes · chore PR

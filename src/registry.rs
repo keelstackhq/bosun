@@ -179,15 +179,18 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             .find(|m| m.session == p && m.expires > app.ctx.now)
             .map_or(prior.map_or(1, |m| m.depth), |m| m.depth + 1),
     };
-    // A child or routine session cannot relabel itself as Slack.
-    if spec.origin == Some(Origin::Slack)
+    // A child or routine session cannot relabel itself as Slack or local.
+    if let Some(claimed @ (Origin::Slack | Origin::Local)) = spec.origin
         && let Some(o) = prior
             .map(|m| m.origin.as_str())
             .filter(|o| matches!(*o, "spawned" | "routine"))
     {
+        let c = claimed.as_str();
         return Err(BosunError::needs_human(
-            format!("this session's join record says origin {o}; it cannot join as slack"),
-            "join without --origin slack; only a Claude Tag session joins as slack",
+            format!("this session's join record says origin {o}; it cannot join as {c}"),
+            format!(
+                "join without --origin {c}; only a Claude Tag session joins as slack and only a root session as local"
+            ),
         ));
     }
     // A plain re-join of a slack session keeps origin slack; the seat survives only there.

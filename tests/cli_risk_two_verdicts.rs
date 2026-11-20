@@ -334,6 +334,38 @@ fn a_session_with_a_lease_on_the_linked_task_does_not_count() {
     assert_eq!(v["data"]["verdicts"], serde_json::json!(["s2", "s3"]));
 }
 
+/// A verdict record `bosun verdict apply` writes for a comment `relayer` relayed.
+fn relayed(fake: &FakeGithub, session: &str, relayer: &str) {
+    let line = verdict_line(session, HEAD, true, Some(0.95));
+    let line = format!(
+        "{},\"relayed_by\":\"{relayer}\"}}",
+        line.trim_end_matches('}')
+    );
+    fake.comment_by(1, BOT, &line);
+}
+
+#[test]
+fn a_verdict_relayed_by_the_lease_holder_is_not_independent() {
+    let fake = review_pr();
+    fake.comment_by(7, "ada", LEASE);
+    verdict(&fake, "s1", HEAD, true, 0.99);
+    // The lease holder, also as a wave agent sharing its id, relays reviewer s2's verdict.
+    for relayer in ["worker", "worker/task-7"] {
+        relayed(&fake, "s2", relayer);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{relayer}: {v}");
+        assert_eq!(
+            last_description(&fake),
+            "high risk, two verdicts needed (1/2): R-ci-review"
+        );
+    }
+    // Relayed by a session without a lease, it counts as the reviewer's own.
+    relayed(&fake, "s2", "session_x");
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["verdicts"], serde_json::json!(["s1", "s2"]));
+}
+
 #[test]
 fn only_the_comment_shape_apply_writes_counts() {
     let fake = review_pr();

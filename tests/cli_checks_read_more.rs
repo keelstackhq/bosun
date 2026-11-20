@@ -253,6 +253,7 @@ fn verdict_by(fake: &FakeGithub, user: &str, session: &str) {
         confidence: Some(0.95),
         major: Some(0),
         model: None,
+        relayed_by: None,
     };
     fake.comment_by(1, user, &format!("Review verdict: x.\n\n{}", r.to_line()));
 }
