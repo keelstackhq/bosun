@@ -113,6 +113,9 @@ pub(crate) fn not_green(
     Ok(all)
 }
 
+/// The contexts bosun's gate writer posts (spec §15).
+const GATE_CONTEXTS: [&str; 3] = ["risk-check", "review-verdict", "main-open"];
+
 /// `(context, state)` of every required check on `sha`, `missing` when it has none.
 pub(crate) fn check_states(
     gh: &dyn Github,
@@ -121,13 +124,24 @@ pub(crate) fn check_states(
 ) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
-    Ok(required(gh, base)?
-        .into_iter()
-        .map(|ctx| {
-            let state = check_state(&statuses, &runs, &ctx);
-            (ctx, state)
-        })
-        .collect())
+    let mut gates = None;
+    let mut out = Vec::new();
+    for ctx in required(gh, base)? {
+        // The gates are read as their readers read them (spec §15): in `dual` the worse of the
+        // status and the gate App's run, in `checks` the App's run only; never "any green".
+        let state = if GATE_CONTEXTS.contains(&ctx.as_str()) {
+            if gates.is_none() {
+                gates = Some(crate::github::gate::gate_statuses(gh, sha)?);
+            }
+            (gates.iter().flatten())
+                .find(|s| s.context == ctx)
+                .map_or_else(|| "missing".into(), |s| s.state.clone())
+        } else {
+            check_state(&statuses, &runs, &ctx)
+        };
+        out.push((ctx, state));
+    }
+    Ok(out)
 }
 
 /// The gates a merge relies on: `(context, state)` of `risk-check` and `review-verdict` on `sha`.
@@ -520,7 +534,6 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             .with_data(json!({"pr": p.number})));
         }
         Some(p) => {
-            super::pr_bundle::refuse_gated_bundle(gh, &p, &repo)?;
             super::pr_bundle::require_bundle_closes(&p, &repo, &args.bundle)?;
             touch = touch_check(&app, n, || {
                 let total = gh
@@ -552,7 +565,6 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 .or_else(|| head_subject(&app.ctx.dir).filter(|s| is_conventional(s)))
                 .unwrap_or_else(|| issue.title.clone());
             super::refuse_secret("the PR title", &title)?;
-            super::pr_bundle::refuse_gated_new(gh, &base, &branch, 1 + args.bundle.len())?;
             let body = format!("Closes #{n}\n{bundle}\n<!-- bosun:task-pr {n} -->");
             (gh.create_pull(&title, &branch, &base, &body, true)?, true)
         }

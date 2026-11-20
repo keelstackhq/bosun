@@ -138,32 +138,19 @@ fn an_epic_without_a_shape_plans_as_before() {
 }
 
 #[test]
-fn a_gated_task_runs_alone_beside_the_bundle() {
-    // risk: high (old metadata) and gated: true both keep the task out of the bundle.
+fn a_gated_task_joins_the_bundle() {
+    // D-021: risk: high, gated: true and a gated touch all bundle like any task.
     let fake = single();
     three(&fake);
     gated_task(&fake, 14, "M1/T4", r#""zz/**""#, r#","risk":"high""#);
-    gated_task(&fake, 15, "M1/T5", r#""yy/**""#, r#","gated":true"#);
+    gated_task(&fake, 15, "M1/T5", r#""src/b/x.rs""#, r#","gated":true"#);
+    gated_task(&fake, 16, "M1/T6", r#"".github/workflows/x.yml""#, "");
     let d = plan(&fake)["data"].clone();
     assert_eq!(d["shape"], "single");
     let run = d["run"].as_array().unwrap();
-    assert_eq!(run.len(), 3, "{d}");
-    assert_eq!(run[0]["issue"], 11);
-    assert_eq!(nums(&run[0]["closes"]), [11, 12, 13]);
-    for (k, n) in [(1, 14), (2, 15)] {
-        assert_eq!(run[k]["issue"], n);
-        assert!(run[k].get("bundle").is_none(), "{d}");
-    }
-}
-
-#[test]
-fn a_gated_task_overlapping_the_bundle_waits() {
-    let fake = single();
-    three(&fake);
-    gated_task(&fake, 14, "M1/T4", r#""src/b/x.rs""#, r#","gated":true"#);
-    let d = plan(&fake)["data"].clone();
-    assert_eq!(d["run"].as_array().unwrap().len(), 1, "{d}");
-    assert_eq!(d["waiting"][0]["reason"], "overlaps the bundle of #11");
+    assert_eq!(run.len(), 1, "{d}");
+    assert_eq!(nums(&run[0]["closes"]), [11, 12, 13, 14, 15, 16], "{d}");
+    assert!(d["waiting"].as_array().unwrap().is_empty(), "{d}");
 }
 
 fn gated_task(fake: &FakeGithub, n: u64, id: &str, touch: &str, extra: &str) {
@@ -172,26 +159,4 @@ fn gated_task(fake: &FakeGithub, n: u64, id: &str, touch: &str, extra: &str) {
         r#"<!-- bosun:task {{"item":"{item}","task":"{t}","epic":10,"depends":[],"touch":[{touch}]{extra}}} -->"#
     );
     fake.issue(n, &format!("Task {id}"), &["bosun:state/ready"], &body);
-}
-
-#[test]
-fn wave_recomputes_gated_from_the_default_branch_rules() {
-    // The task meta says nothing about gated, but the touch is a built-in risk path.
-    let fake = epic(r#"{"item":"M1","shape":"single"}"#);
-    task(&fake, 11, "M1/T1", "ready", "", r#""src/a.rs""#);
-    task(
-        &fake,
-        12,
-        "M1/T2",
-        "ready",
-        "",
-        r#"".github/workflows/x.yml""#,
-    );
-    let d = plan(&fake)["data"].clone();
-    for r in d["run"].as_array().unwrap() {
-        if r["issue"] == 11 {
-            assert!(!nums(&r["bundle"]).contains(&12), "{d}");
-            assert!(!nums(&r["closes"]).contains(&12), "{d}");
-        }
-    }
 }

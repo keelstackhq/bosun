@@ -16,8 +16,8 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    `--bundle` per other issue in `closes`): its body gets a `Closes #N` line for each and the
    marker; run it again later and it reuses the PR (by branch, or by the marker with `Closes
    #<lead>`; a PR made by hand needs a `Closes` per bundled issue). Gated tasks (`risk: high`
-   or touching a risk path) run alone in their own entry and are never bundled; a bundled
-   issue is not claimable while the lead holds the bundle, and `--touch` never adds a risk path to it.
+   or touching a risk path) bundle like any task (D-021: no line cap); their PR needs the
+   owner's approval. A bundled issue is not claimable while the lead holds the bundle.
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.

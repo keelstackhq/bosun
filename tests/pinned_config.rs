@@ -128,7 +128,7 @@ const KNOWN: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "0.21.0",
+        "0.22.0",
         &[
             "project",
             "stack",
@@ -323,9 +323,9 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
         "0.15.0",
         &["bootstrap_until", "policy", "review_models", "signer"],
     ),
-    // `chat` (a chat approval record counts as the owner's approval) is read from 0.21.0.
+    // `chat` (a chat approval record counts as the owner's approval) is read from 0.22.0 (0.21.0 does not read it).
     (
-        "0.21.0",
+        "0.22.0",
         &[
             "bootstrap_until",
             "policy",
@@ -496,7 +496,8 @@ fn policy_known_follows_the_release_table() {
 #[test]
 fn an_unlisted_release_falls_back_to_the_newest_older_entry() {
     // Key sets only grow, so the newest older release is a safe subset: no hand-added entry.
-    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.21.0"));
+    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.22.0"));
+    assert_eq!(known_for(KNOWN, "0.21.0"), known_for(KNOWN, "0.14.0"));
     assert_eq!(known_for(KNOWN, "0.20.0"), known_for(KNOWN, "0.14.0"));
     assert_eq!(known_for(KNOWN, "0.12.0"), known_for(KNOWN, "0.10.0"));
     assert_eq!(
@@ -550,8 +551,8 @@ fn signer_is_known_from_0_15_0() {
 }
 
 #[test]
-fn chat_is_known_from_0_21_0() {
+fn chat_is_known_from_0_22_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat"));
-    assert!(!has("0.20.0"));
-    assert!(has("0.21.0"));
+    assert!(!has("0.21.0"));
+    assert!(has("0.22.0"));
 }

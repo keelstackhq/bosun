@@ -11,8 +11,8 @@ use super::plan::{epic_plan, epic_shape};
 use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
 use crate::app::{
-    App, active_issues, active_issues_blocking, default_branch, gated_from_default, kill_switch,
-    limits_from_default, main_red, task_meta, trusted_notes,
+    App, active_issues, active_issues_blocking, default_branch, kill_switch, limits_from_default,
+    main_red, task_meta, trusted_notes,
 };
 use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
@@ -21,7 +21,6 @@ use crate::core::lease::live_leases;
 use crate::core::lease::orchestrator_of;
 use crate::core::mode::{self, Brake, SpawnAuto};
 use crate::core::records::{Note, Record, parse_record};
-use crate::core::shape::touch_gated_in;
 use crate::core::state::{State, state_of};
 use crate::core::wave::tick_hold;
 use crate::core::wave::{TaskInfo, plan, plan_single};
@@ -174,10 +173,6 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
     // Ready process-fix tasks; active tasks stay in the plan so they count against the cap.
     let mut fix_tasks: Vec<u64> = Vec::new();
     let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
-    // Gated is recomputed here from the default branch's rules, never trusted from the task meta.
-    let gated_globs = gated_from_default(gh)?;
-    let base = crate::app::base_files(gh)?;
-    let mut gate_warnings: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -198,14 +193,6 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
-            // A wildcard touch is resolved against the default branch's tree; when that cannot
-            // be done the task is treated as gated (fail closed) and runs alone.
-            let gated = meta.gated
-                || meta.risk == "high"
-                || touch_gated_in(&meta.touch, &gated_globs, base.as_deref()).unwrap_or_else(|e| {
-                    gate_warnings.push(format!("{plan_id}: {e}"));
-                    true
-                });
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -214,7 +201,6 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
                     state,
                     depends: meta.depends,
                     touch: meta.touch,
-                    gated,
                 },
                 issue.title.clone(),
                 workspace,
@@ -232,7 +218,7 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
     // Owner prerequisites (design F5): the epic's plan checklist is read once; ready tasks that
     // an open item blocks are left out. A gate error leaves out every ready task of the plan.
     let (mut held, mut left_out) = (Vec::new(), Vec::new());
-    let mut warnings = gate_warnings;
+    let mut warnings: Vec<String> = Vec::new();
     let ready: Vec<&TaskInfo> = (tasks.iter().map(|t| &t.0))
         .filter(|i| i.state == Some(State::Ready))
         .collect();
@@ -264,16 +250,14 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
             }
         }
     }
-    // The epic records its shape at import. Gated tasks never join the bundle (D-016).
+    // The epic records its shape at import. Gated tasks bundle like any task (D-021).
     let single = epic_shape(epic_issue.body_text()).as_deref() == Some("single");
     // One PR closes the whole bundle: while a prerequisite holds one ready bundled task, the
     // others wait.
     let mut bundle_held = Vec::new();
-    let bundled_out = ready
-        .iter()
-        .any(|i| !i.gated && left_out.contains(&i.issue));
+    let bundled_out = ready.iter().any(|i| left_out.contains(&i.issue));
     if single && bundled_out {
-        bundle_held = (ready.iter().filter(|i| !i.gated).map(|i| i.issue))
+        bundle_held = (ready.iter().map(|i| i.issue))
             .filter(|n| !left_out.contains(n))
             .collect();
         left_out.extend(bundle_held.iter().copied());
@@ -291,7 +275,7 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
     let leases = live_leases(&leased, now);
     let max = limits_from_default(gh, &app.ctx)?.waves.max_parallel as usize;
     let wave = if single {
-        plan_single(&infos, &merged, &leases, &app.ctx.session, max)
+        plan_single(&infos, &merged, &leases, &app.ctx.session)
     } else {
         plan(&infos, &merged, &leases, &app.ctx.session, max)
     };
@@ -303,7 +287,7 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
             let (info, title, workspace) = find(n);
             let mut entry = json!({"issue": n, "title": title, "plan_id": info.plan_id,
                 "touch": info.touch, "workspace": workspace});
-            if single && !info.gated {
+            if single {
                 // One PR for the whole bundle: the lead carries the union of the touch paths.
                 let mut touch = info.touch.clone();
                 for b in &wave.bundle {

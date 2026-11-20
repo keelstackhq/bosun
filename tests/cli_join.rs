@@ -172,6 +172,27 @@ fn join_never_lowers_the_depth_or_changes_the_parent() {
     assert_eq!(v["data"]["depth"], 3, "a join may raise the depth");
 }
 
+#[test]
+fn a_registered_child_cannot_rejoin_as_local_or_slack() {
+    let fake = FakeGithub::start();
+    run(
+        &fake,
+        "session_c",
+        T0,
+        &["join", "--origin", "spawned", "--parent", "session_a"],
+    );
+    for origin in ["local", "slack"] {
+        let (code, v) = run(&fake, "session_c", T1, &["join", "--origin", origin]);
+        assert_eq!(code, 5, "{origin}: {v}");
+    }
+    let reg = registry(&fake);
+    assert!(
+        fake.comments_of(reg)[0]
+            .body
+            .contains(r#""origin":"spawned""#)
+    );
+}
+
 // ---- Claude Tag seats (spec 10-slack) ----
 
 fn seat_run(

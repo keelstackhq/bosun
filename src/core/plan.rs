@@ -527,13 +527,6 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                 bad!(warns, l; format!("add the tests to `touch:` (a new `{root}tests/<command>_<topic>.rs`), or ignore this if the task adds no behaviour")
                     => "{me} touches {root}src/ but none of {root}tests/");
             }
-            if let (true, Some(s @ 101..)) = (t.risk == "high", t.size) {
-                bad!(warns, l; "split the task or expect an owner review" => "{me} is risk high with size {s}, over 100");
-            }
-            // Only `risk: high` is known here; the CLI re-checks with the risk-rule globs.
-            if let Some(e) = crate::core::shape::gated_size_error(t, &[]) {
-                errs.push(e);
-            }
             for d in std::mem::take(&mut t.depends) {
                 let full = if d.contains('/') {
                     d.clone()
@@ -828,7 +821,7 @@ mod tests {
         chk("- T2:", "- T1:", 17, "used twice");
         chk("- T2:", "- X2:", 17, "task bullet");
         chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
-        // D-016: no line cap, no size warning.
+        // D-021: no line cap, no size warning.
         for size in ["size: 401", "size: 1501", "size: 90000"] {
             let tested = w("size: 100", size).replace("touch: src/b.rs", "touch: src/b.rs, tests/b.rs");
             let p = parse(&tested).expect("no cap");
@@ -845,19 +838,16 @@ mod tests {
         chk("- T1: First\n", "  touch: a\n- T1: First\n", 14, "before any task");
         chk("- T2: Second\n", "```\n- T2: Second\n```\n", 17, "code fence inside");
         let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
-        assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
     }
 
     #[test]
-    fn gated_task_over_400_is_an_error() {
-        // D-016: a risk: high task is gated; over 400 lines it is a plan error at its size line.
-        let t = w("size: 100", "size: 401\n  risk: high");
-        at(&t, 16, "size 401 is over 400 changed lines for a gated task");
-        let e = parse(&t).unwrap_err();
-        assert!(e.iter().any(|e| e.fix.contains("D-016")));
-        assert!(parse(&w("size: 100", "size: 400\n  risk: high")).is_ok());
-        assert!(parse(&w("size: 100", "size: 900")).is_ok());
+    fn a_gated_task_has_no_line_cap() {
+        // D-021: a risk: high task of any size parses, with no size warning.
+        for size in ["size: 101", "size: 401", "size: 5000"] {
+            let p = parse(&w("size: 100", &format!("{size}\n  risk: high"))).expect("no cap");
+            assert!(p.warnings.iter().all(|w| !w.message.contains("size")), "{:?}", p.warnings);
+        }
     }
 
     #[test]
