@@ -48,7 +48,7 @@ fn two_hops() -> FakeGithub {
 }
 
 fn verdict(fake: &FakeGithub, sha: &str, session: &str, approved: bool) {
-    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0), model: None };
+    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0), model: None, relayed_by: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
 }
 
@@ -104,6 +104,20 @@ fn only_an_approving_newest_record_of_an_independent_session_counts() {
     assert!(blocked(|f| f.last_comment(|c| c.user = "mallory".into()))); // not the verdict workflow
     assert!(blocked(|f| f.last_comment(|c| c.updated_at = "2026-10-23T00:00:00Z".into()))); // edited
     assert!(blocked(|f| f.pull_set(1, "body", json!("no link")))); // no lease to check against
+}
+
+#[test]
+fn a_verdict_relayed_by_the_lease_holder_is_not_carried() {
+    for relayer in ["session_a", "session_a/task-7"] {
+        let fake = world();
+        let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: None, relayed_by: Some(relayer.into()) };
+        fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
+        assert!(!carried(&fake), "{relayer}");
+    }
+    let fake = world();
+    let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: None, relayed_by: Some("session_x".into()) };
+    fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
+    assert!(carried(&fake)); // a relayer without a lease: still the reviewer's verdict
 }
 
 #[test]
@@ -216,7 +230,7 @@ fn a_later_record_for_a_head_off_the_path_refuses() {
 fn review_models_at_base_limit_which_verdict_carries() {
     let with = |model: Option<&str>, cfg: &str| {
         let fake = world();
-        let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: model.map(Into::into) };
+        let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: model.map(Into::into), relayed_by: None };
         fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
         fake.content(".bosun/bosun.toml", B, cfg); fake.content(".bosun/bosun.toml", D, cfg);
         carried(&fake)

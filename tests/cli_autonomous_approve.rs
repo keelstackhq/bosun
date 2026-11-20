@@ -542,3 +542,25 @@ fn approve_needs_the_clean_verdict_model_in_base_review_models() {
     let (code, v) = sign(&fake, &k, "session_o");
     assert_eq!(code, 0, "{v}");
 }
+
+/// Without CI (`[ci] provider = "none"` on the default branch) a `github-actions[bot]` verdict
+/// record is any writer's push workflow: it never makes a signature count, so the PR waits for
+/// the owner although the same setup counts with CI.
+#[test]
+fn a_bot_verdict_record_never_counts_without_ci() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    let none = format!(
+        "{}\n[ci]\nprovider = \"none\"\n",
+        config(Some("autonomous"))
+    );
+    fake.content(".bosun/bosun.toml", MAIN, &none);
+    fake.content(".bosun/bosun.toml", BASE, &none);
+    post_verdict(&fake, "session_r", HEAD, 0);
+    post_sig(&fake, &k);
+    let (code, v) = check(&fake);
+    assert_ne!(code, 0, "{v}");
+    let d = description(&fake);
+    assert!(d.starts_with(WAITING) && !d.starts_with(AUTO), "{d}");
+    assert!(v["data"]["approved_by"].is_null(), "{v}");
+}

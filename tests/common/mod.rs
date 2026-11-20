@@ -35,6 +35,9 @@ pub fn bosun() -> Command {
         .env_remove("CLAUDECODE")
         .env_remove("CIRCLE_BRANCH")
         .env_remove("BOSUN_HALT")
+        // CI's task-allow step exports these to the gates step; a test sets its own.
+        .env_remove("BOSUN_INTEGRITY_ALLOW")
+        .env_remove("BOSUN_PR_BODY")
         .env_remove("BOSUN_MERGE_IDENTITY_OK")
         .env_remove("BOSUN_METRICS_TIMEOUT_SECS")
         .env_remove("BOSUN_ROUTINES_OK")

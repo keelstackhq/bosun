@@ -133,12 +133,14 @@ fn verdict_by(fake: &FakeGithub, session: &str) {
 fn chat(fake: &FakeGithub) {
     let head = fake.pull_head(20);
     let short = &head[..7];
-    fake.comment_by(
+    // Written at NOW (inside the join's live window), question id minted at NOW (unix 1794304800).
+    fake.comment_at(
         20,
         "ada",
         &format!(
-            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-{short}-1 -->"
+            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-{short}-1794304800 -->"
         ),
+        NOW,
     );
 }
 
@@ -934,4 +936,47 @@ fn merge_names_a_private_repo() {
         v["error"]["fix"].as_str().unwrap(),
     );
     assert!(m.contains("private") && f.contains("owner"), "{v}");
+}
+
+/// The identity-trusting commands refuse a `BOSUN_SESSION` that is not the session's own id or
+/// `<own>/<task>` (exit 5, with a fix), before any GitHub call.
+#[test]
+fn identity_trusting_commands_refuse_a_foreign_session() {
+    let dir = repo(&[]);
+    let run = |session: &str, args: &[&str]| {
+        let out = bosun()
+            .current_dir(dir.path())
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_own")
+            .env("BOSUN_SESSION", session)
+            .args(args)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap(), one_object(&out.stdout))
+    };
+    for args in [
+        &["merge", "20"][..],
+        &["approve", "20@abc", "--chat"],
+        &["verdict", "post"],
+        &["join", "--origin", "local"],
+    ] {
+        for bad in [
+            "session_other",
+            "session_other/12",
+            "session_own/a/b",
+            "session_own/",
+        ] {
+            let (code, v) = run(bad, args);
+            assert_eq!(code, 5, "{args:?} {bad}: {v}");
+            assert!(!v["error"]["fix"].as_str().unwrap().is_empty(), "{v}");
+        }
+        for ok in ["session_own", "session_own/12"] {
+            let (code, v) = run(ok, args);
+            assert_ne!(v["error"]["fix"].as_str().unwrap_or("").len(), 0, "{v}");
+            let msg = v["error"]["message"].as_str().unwrap_or("");
+            assert!(
+                !msg.contains("is not this session"),
+                "{args:?} {ok}: {v} {code}"
+            );
+        }
+    }
 }

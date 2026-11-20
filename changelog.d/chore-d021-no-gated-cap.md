@@ -1,0 +1,1 @@
+- Gated PRs have no line cap and may bundle (D-021): plan lint, wave, claim, `bosun pr --bundle` and risk-check (`R-bundle`) drop the 400-line, one-task, alone rule; chunked review stays.

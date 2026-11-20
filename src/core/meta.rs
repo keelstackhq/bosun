@@ -39,8 +39,8 @@ pub struct TaskMeta {
     /// Capabilities the task may use, for example `prod-write` (spec section 8).
     #[serde(default)]
     pub capabilities: Vec<String>,
-    /// Gated by the plan (D-016): `risk: high` or a touch path under a risk rule. The task gets
-    /// its own single-task PR and never joins a bundle.
+    /// Gated by the plan: `risk: high` or a touch path under a risk rule. Informational: its PR
+    /// needs the owner's approval, but it has no line cap and may bundle (D-021).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gated: bool,
     /// Planned changed lines (`size:`), compared with the PR at review (drift).

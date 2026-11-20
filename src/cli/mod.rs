@@ -593,9 +593,11 @@ pub struct MsgArgs {
 
 #[derive(Debug, Args)]
 pub struct GateArgs {
-    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, ci-minutes, main-open, ...
+    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, ci-minutes, main-open,
+    /// sources, ...
     /// `ci-minutes` is built in: it checks `.github/workflows` for the CI-minute rules (drafts skip,
-    /// `ready_for_review`, cancelling concurrency, `paths` on heavy PR jobs).
+    /// `ready_for_review`, cancelling concurrency, `paths` on heavy PR jobs). `sources` is
+    /// read-only: it checks that the gate App posted each gate on the PR head (spec §15).
     pub name: String,
     /// Base ref for the diff (default: the PR base or origin/main).
     #[arg(long)]
@@ -603,7 +605,7 @@ pub struct GateArgs {
     /// Run on all packages (merge queue).
     #[arg(long)]
     pub all: bool,
-    /// The PR number, for `main-open` (default: env `BOSUN_PR`).
+    /// The PR number, for `main-open` and `sources` (default: env `BOSUN_PR`).
     #[arg(long)]
     pub pr: Option<u64>,
 }
@@ -1296,7 +1298,7 @@ pub struct AdoptArgs {
     #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
     pub policy: Option<String>,
     /// Write `[ci] provider` (spec §9). Default: `circleci` when the repo has `.circleci/` and no
-    /// Actions workflows, else `github`. `none` installs no GitHub workflows. Needs pin 0.21.0+.
+    /// Actions workflows, else `github`. `none` installs no GitHub workflows. Needs pin 0.22.0+.
     #[arg(long, value_parser = ["github", "circleci", "none"])]
     pub ci: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.

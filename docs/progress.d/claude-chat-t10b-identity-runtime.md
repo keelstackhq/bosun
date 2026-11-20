@@ -1,0 +1,1 @@
+- Chat approval T10b: run-time identity check for the identity-trusting commands (D-019).

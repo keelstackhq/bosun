@@ -43,13 +43,15 @@ fn world(entries: &[(&str, &str, &str, &str)], truncated: bool) -> (tempfile::Te
 }
 
 #[test]
-fn a_subtree_holding_a_gated_file_makes_a_big_task_a_size_error() {
-    let (tmp, fake) = world(&[("packages/a/hoist.toml", "100644", "blob", "s1")], false);
+fn a_subtree_holding_a_gated_file_makes_a_big_task_gated_but_no_error() {
+    // D-021: gated tasks have no line cap; the task is still recorded as gated (owner).
     for cmd in ["import", "amend"] {
+        let (tmp, fake) = world(&[("packages/a/hoist.toml", "100644", "blob", "s1")], false);
         let (code, v) = plan(&fake, tmp.path(), cmd);
-        assert_eq!(code, 1, "{cmd}: {v}");
-        let m = v["data"]["errors"][0]["message"].as_str().unwrap();
-        assert!(m.contains("over 400 changed lines for a gated task"), "{v}");
+        assert_eq!(code, 0, "{cmd}: {v}");
+        let gated = (fake.state.lock().unwrap().issues.iter())
+            .any(|i| i.body.contains(r#""task":"T1""#) && i.body.contains(r#""gated":true"#));
+        assert!(gated, "{cmd}: the subtree task is gated");
     }
 }
 
@@ -58,6 +60,9 @@ fn a_clean_subtree_is_not_gated() {
     let (tmp, fake) = world(&[("packages/a/lib.rs", "100644", "blob", "s1")], false);
     let (code, v) = plan(&fake, tmp.path(), "import");
     assert_eq!(code, 0, "{v}");
+    let gated =
+        (fake.state.lock().unwrap().issues.iter()).any(|i| i.body.contains(r#""gated":true"#));
+    assert!(!gated, "a clean subtree is not gated");
 }
 
 #[test]

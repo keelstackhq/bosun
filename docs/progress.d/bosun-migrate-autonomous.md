@@ -1,1 +1,0 @@
-- 2026-11-18 · bosun moves to autonomous mode (D-017, spec §18) · .bosun/bosun.toml, tests/pinned_config.rs · this PR
