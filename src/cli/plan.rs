@@ -57,10 +57,6 @@ fn gated_rules(root: &Path) -> Result<Vec<Glob>> {
     Ok(shape::gated_globs(&rules))
 }
 
-fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
-    read_plan_text(dir, file).map(|(_, p)| p)
-}
-
 /// The plan file's text and what `plan::parse` made of it.
 fn read_plan_text(dir: Option<&Path>, file: &str) -> Result<(String, Plan)> {
     let path = dir.map_or_else(|| file.into(), |d| d.join(file));
@@ -127,8 +123,44 @@ fn per_task_if_on(config: &crate::config::Config, limits: &crate::config::Limits
     on.then_some(limits.budget.per_task_usd)
 }
 
+/// The prerequisite section of a plan, read leniently (`pq::parse_lenient`); with `fix` the plan
+/// file is rewritten when a bullet changed. Returns what was read and the file name when written.
+fn lenient_prereqs(
+    dir: Option<&Path>,
+    file: &str,
+    text: &str,
+    p: &Plan,
+    fix: bool,
+) -> Result<(pq::Lenient, Option<String>)> {
+    let len = pq::parse_lenient(text, p).map_err(|e| plan_errors(file, &e))?;
+    if !fix || len.fixed.is_empty() {
+        return Ok((len, None));
+    }
+    let path = dir.map_or_else(|| file.into(), |d| d.join(file));
+    std::fs::write(&path, &len.text).map_err(|e| {
+        BosunError::error(
+            format!("cannot write {file}: {e}"),
+            "make the plan file writable, or fix its prerequisite bullets by hand",
+        )
+    })?;
+    Ok((len, Some(file.to_string())))
+}
+
+/// `data.prereqs_fixed` and, when the file was rewritten, `data.fixed_file`.
+fn add_fixed(data: &mut Value, len: &pq::Lenient, fixed_file: &Option<String>) {
+    data["prereqs_fixed"] = json!(len.fixed);
+    if let Some(f) = fixed_file {
+        data["fixed_file"] = json!(f);
+    }
+}
+
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
-    let p = read_plan(dir, &a.file)?;
+    let (text, p) = read_plan_text(dir, &a.file)?;
+    let lenient = if a.fix {
+        Some(lenient_prereqs(dir, &a.file, &text, &p, true)?)
+    } else {
+        None
+    };
     let root = dir.unwrap_or_else(|| Path::new("."));
     // No GitHub here: the working tree's files; a missing or bad one means the knob is off.
     let per_task = Config::load(root)
@@ -149,8 +181,12 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
             row
         })
         .collect();
-    Ok(Outcome::data(json!({"file": a.file, "title": p.title,
-        "project": p.project, "items": items, "warnings": p.warnings})))
+    let mut data = json!({"file": a.file, "title": p.title,
+        "project": p.project, "items": items, "warnings": p.warnings});
+    if let Some((len, fixed_file)) = &lenient {
+        add_fixed(&mut data, len, fixed_file);
+    }
+    Ok(Outcome::data(data))
 }
 
 /// What the import knows about one issue of the plan.
@@ -591,14 +627,26 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
         item: vec![],
         keep_plan_tasks_open: false,
         full: a.full,
+        fix: false,
     };
     run_import(dir, &args, true)
 }
 
 fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult {
-    let (text, p) = read_plan_text(dir, &a.file)?;
-    // Always parsed: a misspelt heading is an error here, never "no section". Nothing is written.
-    let prereqs = pq::parse(&text, &p).map_err(|e| plan_errors(&a.file, &e))?;
+    let (file_text, p) = read_plan_text(dir, &a.file)?;
+    // Always parsed: a misspelt heading is an error here, never "no section". The bullets are
+    // read leniently; the file is rewritten only with `--fix`.
+    let (len, fixed_file) = lenient_prereqs(dir, &a.file, &file_text, &p, a.fix)?;
+    let text = if fixed_file.is_some() {
+        len.text.clone()
+    } else {
+        file_text
+    };
+    // The checklist is built from the normalized text; the file itself stays as it is.
+    let prereqs = len.prereqs.clone();
+    if !amend && !crate::github::http::Http::has_token() {
+        return offline_import(dir, a, &p, &len, &fixed_file);
+    }
     let app = App::load(dir)?;
     if let Some(project) = &p.project
         && *project != app.ctx.config.project
@@ -674,7 +722,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         now: app.ctx.now,
     };
     if !prereqs.is_empty()
-        && let Err(e) = refresh_checklist(&mut imp, &app, dir, a, &text)
+        && let Err(e) = refresh_checklist(&mut imp, &app, dir, a, &len.text)
     {
         return Err(e.with_data(imp.data(&a.file)));
     }
@@ -708,6 +756,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         .reopen_done_epics(&again)
         .map_err(|e| e.with_data(data.clone()))?;
     data["held"] = json!(imp.held);
+    add_fixed(&mut data, &len, &fixed_file);
     if !epics.is_empty() {
         let key = if a.dry_run {
             "would_reopen"
@@ -735,6 +784,154 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         summarize_import(&mut data);
     }
     Ok(Outcome::data(data))
+}
+
+/// `plan import` with no GitHub token: nothing can be read or written, so every issue of the plan
+/// is listed as `would-create`. With `--dry-run` that is the result (exit 0); a real import fails
+/// (exit 1) and hands the issues over as `mcp__github__issue_write` calls in `next`, epic first.
+/// Epic numbers are not known, so a task's metadata has no `epic` and `bosun plan import` run
+/// later (with a token) finds the issues by their marker.
+fn offline_import(
+    dir: Option<&Path>,
+    a: &PlanImportArgs,
+    p: &Plan,
+    len: &pq::Lenient,
+    fixed_file: &Option<String>,
+) -> CmdResult {
+    let ctx = crate::ctx::Ctx::load(dir)?;
+    if let Some(project) = &p.project
+        && *project != ctx.config.project
+    {
+        return Err(BosunError::error(
+            format!(
+                "{} is for project `{project}` but this repo's project is `{}`",
+                a.file, ctx.config.project
+            ),
+            "import the plan of this project, or fix `project:` in the plan or in .bosun/bosun.toml",
+        ));
+    }
+    if let Some(bad) = a.item.iter().find(|i| !p.items.iter().any(|x| &x.id == *i)) {
+        return Err(BosunError::usage(
+            format!("--item {bad} is not an item of {}", a.file),
+            format!(
+                "use one of: {}",
+                p.items
+                    .iter()
+                    .map(|i| i.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    let globs = gated_rules(&ctx.dir)?;
+    // Wildcard touches are resolved against the files git tracks here (no default branch to read).
+    let tracked = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ctx.dir)
+        .args(["ls-files"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let text = String::from_utf8_lossy(&o.stdout).into_owned();
+            text.lines().map(String::from).collect::<Vec<_>>()
+        });
+    let (resolved, errs) = shape::resolve_gated(&p.items, &globs, tracked.as_deref());
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
+    let gated = shape::Gated { globs, resolved };
+    let per_task = per_task_if_on(&ctx.config, &ctx.limits);
+    let base = std::fs::canonicalize(&ctx.dir).unwrap_or_else(|_| ctx.dir.clone());
+    let mut roots = vec![ctx.dir.clone()];
+    roots.extend(std::fs::canonicalize(&ctx.dir).ok());
+    let plan_path = plan_key(&a.file, &base, &roots);
+    let (mut epics, mut tasks, mut calls) = (vec![], vec![], vec![]);
+    let mut make =
+        |slots: &mut Vec<Slot>, id: &str, title: String, body: String, labels: Vec<String>| {
+            slots.push(Slot {
+                id: id.into(),
+                issue: None,
+                action: "would-create",
+                state: (labels.iter())
+                    .find_map(|l| l.strip_prefix("bosun:state/"))
+                    .map(str::to_string),
+                closed: false,
+                merged: false,
+            });
+            calls.push(json!({
+                "method": "create", "owner": ctx.repo.owner, "repo": ctx.repo.name,
+                "title": title, "body": body, "labels": labels,
+            }));
+        };
+    let wanted = |i: &&Item| a.item.is_empty() || a.item.contains(&i.id);
+    for item in p.items.iter().filter(wanted) {
+        make(
+            &mut epics,
+            &item.id,
+            format!("{}: {}", item.id, item.title),
+            epic_body(item, &plan_path, &gated, per_task),
+            labels("feature", &item.area, "planned"),
+        );
+        let pid = format!("{}/P", item.id);
+        let intro = format!(
+            "Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
+             with the code of the tasks that implement them; there are no pending tests. \
+             The item's tasks become ready when this merges (run `bosun plan import` again); \
+             if the plan is already on the default branch, there is nothing to commit: \
+             close this issue as completed instead.\n\n{}\n",
+            item.ucs
+                .iter()
+                .map(|u| format!("- {}: {}", u.id, u.text))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            id = item.id,
+            file = plan_path
+        );
+        make(
+            &mut tasks,
+            &pid,
+            format!("{pid}: plan"),
+            task_body(&pid, &intro, &plan_task_meta(item, &plan_path, None)),
+            labels("plan", &item.area, "ready"),
+        );
+        for t in &item.tasks {
+            let tid = t.plan_id(&item.id);
+            let meta = task_meta_of(item, t, None, vec![], &gated);
+            make(
+                &mut tasks,
+                &tid,
+                format!("{tid}: {}", t.title),
+                task_body(&tid, "", &meta),
+                labels(&t.kind, &item.area, "planned"),
+            );
+        }
+    }
+    let mut data = json!({
+        "file": a.file,
+        "dry_run": a.dry_run,
+        "offline": true,
+        "epics": epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
+        "tasks": tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
+        "held": [],
+        "on_default": [],
+        "on_default_open": [],
+        "warnings": ["no GitHub token: nothing was read, so every issue is listed as would-create; \
+            an existing issue, the default branch and `allow:` grants were not checked"],
+    });
+    add_fixed(&mut data, len, fixed_file);
+    if a.dry_run {
+        return Ok(Outcome::data(data));
+    }
+    let mut err = BosunError::error(
+        "no GitHub token: the issues were not created",
+        "set GITHUB_TOKEN or run gh auth login, then rerun `bosun plan import`; or make the issues with the calls in `next` (in order, epic first), then rerun it from a session with a token",
+    )
+    .with_data(data);
+    for c in calls {
+        err = err.with_next("mcp__github__issue_write", c);
+    }
+    Err(err)
 }
 
 /// The default view: epics and tasks the import left as they were are counted, not listed.

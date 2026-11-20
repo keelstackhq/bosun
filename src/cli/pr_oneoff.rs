@@ -88,6 +88,7 @@ pub fn run(dir: Option<&Path>, a: &PrArgs) -> CmdResult {
             ready: a.ready,
             bundle: vec![],
             one_off: false,
+            single: false,
             touch: vec![],
         },
     )?;
