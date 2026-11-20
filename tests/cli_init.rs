@@ -271,6 +271,12 @@ fn no_token_returns_the_create_pull_request_call() {
         v["next"][0]["tool"], "mcp__github__create_pull_request",
         "{v}"
     );
+    assert!(!e.argv().is_empty());
+    assert_ne!(
+        git_out(e.repo.path(), &["branch", "--show-current"]),
+        "main"
+    );
+    assert!(e.origin_has_branch());
 }
 
 #[test]
