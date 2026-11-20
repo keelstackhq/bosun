@@ -13,7 +13,8 @@ wave plan = {epic: int, shape: str, warnings: [str], run: [{issue: int, plan_id:
 msg = {session: str, chars: int};
 keygen = {id: str, role: str, path: str, public_key: str, enrolled: bool, toml: str, steps: [str]};
 test-integrity = {base: str, files_checked: int, integrity: str, integrity_reason?: str,
-    findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool}], allow?: [str],
+    findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool, reason?: str}],
+    allow?: [str],
     task?: int};
 review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, since_sha: str | null,
     changed_files: int, chunks: [[str]], delta_fallback: str | null, delta_not_in_pr: [str],
@@ -38,7 +39,9 @@ doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{
     fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
-    skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
+    skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str},
+    tools?: {splice: {installed: bool, ok: bool | null, exit_code: int | null, output: any, reason?: str},
+    hoist: {installed: bool, ok: bool | null, exit_code: int | null, output: any, reason?: str}}};
 budget record = {usd: num, provider?: str, session?: str, model?: str | null, issue?: int | null,
     blocked?: bool, over_task_cap?: bool, task_total_usd?: num, prs?: [int], recorded?: [int],
     already_recorded?: [int], usd_per_pr?: num, lesson?: {created?: bool, hits?: int, issue?: int,
@@ -54,13 +57,15 @@ budget report = {month: str, written: [str], skipped_no_pr: [int], rows: [{pr: i
     top_prs: [{pr: int, title: str, usd: num}]}};
 plan check = {file: str, title: str, project: str | null, items: [{id: str, title: str, area: str,
     shape: str, shape_reasons: [str], size: int, tasks: int, ucs: int, gated: [str],
-    budget_usd?: num}], warnings: [{line: int, message: str, fix: str}]};
+    budget_usd?: num}], warnings: [{line: int, message: str, fix: str}],
+    prereqs_fixed?: [{line: int, from: str, to: str}], fixed_file?: str};
 plan import = {file: str, dry_run: bool, warnings: [str], skipped?: [str], epics: [{id: str,
     action: str, issue: int | null, state?: str, closed?: bool}], tasks: [{id: str, action: str,
     issue: int | null, state: str | null, closed?: bool}], held: [{task: str, needs: [str]}],
     on_default: [any], on_default_open: [any], promoted?: [str], would_promote?: [str],
     closed?: [str], would_close?: [str], reopened?: [str], would_reopen?: [str], updated?: [str],
-    would_update?: [str], unchanged?: {epics?: int, tasks?: int}, summary?: bool};
+    would_update?: [str], unchanged?: {epics?: int, tasks?: int}, summary?: bool, offline?: bool, imported?: bool, note?: str,
+    prereqs_fixed?: [{line: int, from: str, to: str}], fixed_file?: str};
 plan amend = plan import;
 plan pr = {claim: {..} | null, intake: {..}, pr: {..}};
 fail = {issue: int, signature: str, streak: int, stopped: bool, rule?: str, state?: str,
@@ -88,7 +93,8 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], labels_todo?: [str], branch_reused?: bool,
+    owner?: str | null, owner_source?: str | null, owner_skipped?: str | null, routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};
@@ -196,8 +202,10 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
-    pending_checks?: [{context: str, state: str}],
-    trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}};
+    pending_checks?: [{context: str, state: str}], mode?: str, created?: bool,
+    trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}}
+    | {pr: null, task: null, mode: str, created: bool, branch: str, draft: bool,
+    ready: bool | "pending", auto_merge: bool, note: str};
 status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     integrity_reason?: str, main_red: int | null, process_red: int | null,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,

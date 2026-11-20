@@ -1,6 +1,8 @@
 # Built-in rust profile (spec §7). Override per repo in .bosun/profiles/rust.toml.
 # A stack with no Cargo.toml yet (a repo right after `bosun init`) has nothing to check, so gates skip it.
 manifest = "Cargo.toml"
+# `--locked` gates need it; without it their failure says to run `cargo generate-lockfile`.
+lockfile = "Cargo.lock"
 
 [adapters]
 packages = "cargo-metadata"
@@ -20,6 +22,9 @@ all = ["--workspace"]
 when_no_package = "skip"
 
 [gates.deps]
+# cargo-deny falls back to its defaults without deny.toml (rejects even MIT), so the PR that adds
+# deny.toml is judged by the base, which has none: neutral.
+base_requires = "deny.toml"
 cmd = ["cargo", "deny", "check"]
 
 [gates.mutants]

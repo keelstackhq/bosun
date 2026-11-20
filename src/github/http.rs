@@ -90,19 +90,32 @@ fn api_base_from(v: Option<String>) -> String {
         .unwrap_or_else(|| "https://api.github.com".to_string())
 }
 
+/// The GitHub token: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token` (asked once per
+/// process). Never printed.
+pub fn token() -> Option<String> {
+    static GH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ["GITHUB_TOKEN", "GH_TOKEN"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.trim().is_empty())
+        .or_else(|| GH.get_or_init(super::ghcli::auth_token).clone())
+}
+
 impl Http {
+    /// Whether a GitHub token can be found (`token()`: `GITHUB_TOKEN`, `GH_TOKEN`, then `gh auth
+    /// token`), so `from_env` would work.
+    pub fn has_token() -> bool {
+        token().is_some()
+    }
+
     /// Base URL, token and sleep cap from the environment (spec D30, D31).
     pub fn from_env() -> Result<Http> {
-        let token = ["GITHUB_TOKEN", "GH_TOKEN"]
-            .iter()
-            .filter_map(|k| std::env::var(k).ok())
-            .find(|v| !v.trim().is_empty())
-            .ok_or_else(|| {
-                BosunError::error(
-                    "no GitHub token",
-                    "export GITHUB_TOKEN (a token with repo and workflow scopes)",
-                )
-            })?;
+        let token = token().ok_or_else(|| {
+            BosunError::error(
+                "no GitHub token",
+                "run `gh auth login`, or export GITHUB_TOKEN (a token with repo and workflow scopes)",
+            )
+        })?;
         Ok(Http::with_env_url(&token))
     }
 

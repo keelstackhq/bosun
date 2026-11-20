@@ -71,7 +71,7 @@ pub(crate) fn open_items(
     // Always parsed: a misspelt heading is a parse error (closed), not "no section" (open).
     let bad = |e: Vec<PlanError>| closed(plan_path, format!("{plan_path}: {}", e[0].message));
     let parsed = plan::parse(&text).map_err(bad)?;
-    let prereqs = pq::parse(&text, &parsed).map_err(bad)?;
+    let prereqs = pq::parse_read(&text, &parsed).map_err(bad)?;
     if prereqs.is_empty() && holds.is_none() {
         return Ok(None);
     }

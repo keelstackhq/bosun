@@ -11,7 +11,8 @@ line), `verify:` (`owner`, `secret [ENV/]NAME`, `variable [ENV/]NAME`, `environm
 parser ignores the section; `core::prereqs::parse` reads it and every error has a line and a fix.
 Plan text that reaches the owner cannot hold `<!--`, `-->` or Unicode Cc, Cf, Zl or Zp characters.
 
-**The checklist.** `bosun prereqs <plan>... [--post] [--no-setup]` lists the items (computer
+**The checklist.** `bosun prereqs [<plan>...] [--post] [--no-setup]` (no plan named: `plans/*.md`, else
+`docs/superpowers/plans/*.md`, sorted; none found is a usage error) lists the items (computer
 steps first), the missing `bosun doctor` steps (`D<n>`), a delegate key (`K1`) when a task needs a
 delegate and none is enrolled, and the approvals at merge: per task an estimate from its touch
 paths, as risk-check would judge them (an owner rule, a delegate rule on the critical floor, a
@@ -39,6 +40,18 @@ the GitHub MCP issue tools) that carries one of bosun's markers (`bosun:prereq`,
 `bosun:epic`); best effort, with its bypasses listed in `core::guard`.
 
 **Gating.** A task an open item blocks does not start:
+- Without `--post` and without a GitHub token, `bosun prereqs` reads only the plan files: no API check
+  and no checklist issue is read, so every item is open (`data.warnings` says so). `--post` needs the token.
+- Every reader of the section takes the bullets leniently (`parse_lenient`, through `parse_read`):
+  `bosun prereqs`, `prereqs --post`, the checklist, the gate and `hold` never refuse a file that
+  `plan import` accepted. `plan import` and `plan check --fix` also normalize them: `* ` and `+ ` bullets, `- Hn - title`, and
+  `- H:` / `- H<n>:` with a missing, duplicate or out-of-order number become `- H<k>: title`. When any
+  number is wrong all bullets are numbered H1..Hn in order, else each keeps its id. Import lists each
+  changed bullet in `data.prereqs_fixed: [{line, from, to}]` and builds the checklist from the
+  normalized text; with `--fix` it also rewrites the plan file (only the `## Prerequisites` section
+  changes) and reports `data.fixed_file`. Other prerequisite errors stay errors, on the same lines.
+  `plan check` without `--fix` never writes: fixable bullets are a warning in `data.warnings` with the
+  same `data.prereqs_fixed` rows (exit stays 0), and an unfixable prerequisite error is a warning too.
 - `bosun plan import`/`amend` of a plan with prerequisites refreshes the checklist first (a dry run
   only reads), keeps such tasks `planned` (an epic too when its whole item is blocked) and lists
   them under `data.held`; the next import after the item is done promotes them.

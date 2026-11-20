@@ -14,6 +14,16 @@ A plan lists them in a `## Prerequisites` section. The plan parser ignores this 
   blocks: M4/T2, M5
 ```
 
+`bosun prereqs` and the checklist read the bullets strictly (`- H1: title`, ids H1 to H999, each
+once). `bosun plan import` reads them leniently: `* ` bullets, `- H3 - title`, and `- H:` or
+`- H<n>:` with a missing, duplicate or out-of-order number are accepted and numbered H1..Hn in
+order (each keeps its id when the numbers are already unique and increasing). It reports each
+change in `data.prereqs_fixed` (`line`, `from`, `to`). `bosun plan import --fix` (or
+`bosun plan check --fix`) also rewrites the plan file; only the `## Prerequisites` section changes
+and `data.fixed_file` names the file. Both work without a GitHub token. `bosun prereqs` with no
+file named reads `plans/*.md` (else `docs/superpowers/plans/*.md`); without `--post` and without
+a token it reads only the plan files and shows every item as open.
+
 Titles, steps and `who` cannot contain `<!--`, `-->` or control or bidi characters. A field
 line (`on:`, `steps:` ...) that is not indented under a bullet is an error, and so is a heading
 like `### Prerequisites` or `## Pre-requisites`: only `## Prerequisites` counts.

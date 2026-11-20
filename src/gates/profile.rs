@@ -20,6 +20,10 @@ pub struct Profile {
     /// The stack manifest; a stack without it (at head and base) has nothing to check yet.
     #[serde(default)]
     pub manifest: Option<String>,
+    /// The lockfile (in the stack directory) that gates with `--locked` in `cmd` need at head;
+    /// when such a gate fails and the file is missing, the error says how to create it.
+    #[serde(default)]
+    pub lockfile: Option<String>,
     pub adapters: Adapters,
     pub gates: BTreeMap<String, Gate>,
 }
@@ -138,6 +142,11 @@ pub struct Gate {
     /// the head and at the base.
     #[serde(default)]
     pub requires: Option<String>,
+    /// A config file in the stack directory the gate judges against; the gate is skipped (neutral)
+    /// when it is missing in the base commit, so the PR that adds the file is not judged by the
+    /// tool's defaults. Unlike `requires`, the head does not count.
+    #[serde(default)]
+    pub base_requires: Option<String>,
 }
 
 impl Gate {
@@ -188,6 +197,11 @@ impl Gate {
             }
             None => argv.into_iter().chain(extra).collect(),
         }
+    }
+
+    /// Does `cmd` pass `--locked` (the gate then needs the profile's lockfile)?
+    pub fn is_locked(&self) -> bool {
+        self.cmd.iter().any(|a| a == "--locked")
     }
 
     pub fn needs_diff(&self) -> bool {
@@ -322,6 +336,7 @@ mod tests {
             when_no_package: WhenNoPackage::Run,
             budget_secs: Some(5),
             requires: None,
+            base_requires: None,
         };
         assert_eq!(
             g.expand_cmd(&["a".into(), "b".into()], None),

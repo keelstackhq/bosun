@@ -124,18 +124,48 @@ environment:
         # Never from a cache (CircleCI caches are not branch-scoped); each checked on every run.
         tools="$HOME/.bosun-tools"; t="$(mktemp -d)"
         mkdir -p "$tools/bin"
-        # cargo-nextest 0.9.148 linux-gnu; sha256 computed 2026-10-28 (no checksum file is published), as hull's
-        curl -fsSL -o "$t/nextest.tgz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.148/cargo-nextest-0.9.148-x86_64-unknown-linux-gnu.tar.gz"
-        echo "223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc  $t/nextest.tgz" | sha256sum -c - || exit 1
+        # Versions and sha256 from .bosun/pins.toml: the base's copy (step `the base's config for the
+        # gates`, never the PR's; only while the base has none yet, the change that adds it, its copy
+        # is used), as bosun.yml and docs/setup-script.sh. No checksum file is published for nextest.
+        f=.bosun/pins.toml
+        if [ ! -f "$f" ]; then
+          echo "the default branch has no .bosun/pins.toml yet (first adoption): this change's copy is used" >&2
+          mkdir -p .bosun
+          git show "HEAD:$f" > "$f" || { echo ".bosun/pins.toml is missing: run splice update --channel bosun" >&2; exit 1; }
+        fi
+        pin() { awk -v s="[$1]" -v k="$2" '$0 == s { on = 1; next } /^\[/ { on = 0 } on && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$f"; }
+        nv="$(pin nextest version)"; ns="$(pin nextest linux_x64_sha256)"
+        dv="$(pin cargo-deny version)"; ds="$(pin cargo-deny linux_x64_sha256)"
+        fb="$(pin rust fallback)"
+        # A repo whose base has hull's pins.toml and scripts/pins.mjs takes the versions from the
+        # base's pins.toml [pins] table (as bosun.yml; never the PR's copy), checked after the override.
+        if git cat-file -e "$BOSUN_BASE:pins.toml" 2>/dev/null && git cat-file -e "$BOSUN_BASE:scripts/pins.mjs" 2>/dev/null; then
+          git show "$BOSUN_BASE:pins.toml" > "$t/hull-pins.toml"
+          f="$t/hull-pins.toml"
+          v="$(pin pins rust)"; [ -z "$v" ] || fb="$v"
+          v="$(pin pins nextest)"; [ -z "$v" ] || nv="$v"
+          v="$(pin pins cargo_deny)"; [ -z "$v" ] || dv="$v"
+        fi
+        [[ "$fb" =~ ^[0-9A-Za-z._-]+$ ]] || { echo ".bosun/pins.toml: [rust] fallback is missing or not a toolchain name" >&2; exit 1; }
+        for v in "$nv" "$dv"; do
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo ".bosun/pins.toml: a tool version is missing or not X.Y.Z" >&2; exit 1; }
+        done
+        for v in "$ns" "$ds"; do
+          [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo ".bosun/pins.toml: a sha256 is missing or not 64 hex digits" >&2; exit 1; }
+        done
+        echo "export BOSUN_PIN_RUST_FALLBACK='$fb'" >> "$BASH_ENV"
+        # cargo-nextest linux-gnu
+        curl -fsSL -o "$t/nextest.tgz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${nv}/cargo-nextest-${nv}-x86_64-unknown-linux-gnu.tar.gz"
+        echo "$ns  $t/nextest.tgz" | sha256sum -c - || exit 1
         tar -xzf "$t/nextest.tgz" -C "$t" cargo-nextest
         install -m 755 "$t/cargo-nextest" "$tools/bin/cargo-nextest"
-        # cargo-deny 0.20.2 musl, sha256 from the release's .sha256 asset, 2026-10-28
-        curl -fsSL -o "$t/deny.tgz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
-        echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $t/deny.tgz" | sha256sum -c - || exit 1
-        tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
+        # cargo-deny musl
+        curl -fsSL -o "$t/deny.tgz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${dv}/cargo-deny-${dv}-x86_64-unknown-linux-musl.tar.gz"
+        echo "$ds  $t/deny.tgz" | sha256sum -c - || exit 1
+        tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 "cargo-deny-${dv}-x86_64-unknown-linux-musl/cargo-deny"
         install -m 755 "$t/cargo-deny" "$tools/bin/cargo-deny"
   # The (base's) toolchain file in rust_path or a parent (rust-toolchain wins, as for rustup), else
-  # the old pin. Like bosun.yml's check, only a [toolchain] with plain-name channel, components,
+  # the fallback of .bosun/pins.toml. Like bosun.yml's check, only a [toolchain] with plain-name channel, components,
   # targets and profile passes (a `path` would run another compiler); rustup then installs what
   # it names, and RUSTUP_TOOLCHAIN makes rustup ignore any toolchain file a later step writes.
   - run:
@@ -149,8 +179,8 @@ environment:
           d="$(dirname "$d")"
         done
         if [ -z "$f" ]; then
-          ch=1.97
-          rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+          ch="$BOSUN_PIN_RUST_FALLBACK"
+          rustup toolchain install "$ch" --profile minimal -c rustfmt,clippy
         else
           n='[A-Za-z0-9][A-Za-z0-9._-]*'; q="[\"']"; s='[[:space:]]*'
           ch=""; head=""

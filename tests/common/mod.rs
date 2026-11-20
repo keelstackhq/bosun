@@ -35,6 +35,9 @@ pub fn bosun() -> Command {
         .env_remove("CLAUDECODE")
         .env_remove("CIRCLE_BRANCH")
         .env_remove("BOSUN_HALT")
+        // Never reach a real `gh`: a test that wants a fake one removes this and sets PATH.
+        .env("BOSUN_NO_GH", "1")
+        .env_remove("BOSUN_GH")
         // CI's task-allow step exports these to the gates step; a test sets its own.
         .env_remove("BOSUN_INTEGRITY_ALLOW")
         .env_remove("BOSUN_PR_BODY")

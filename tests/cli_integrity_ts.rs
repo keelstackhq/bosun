@@ -34,6 +34,8 @@ fn repo() -> Repo {
     let r = Repo { _tmp: tmp, root };
     r.put("src/a.test.ts", TEST_TS);
     r.put("src/a.ts", "export const a = 1;\n");
+    // A base with `.bosun/` is not a bootstrap base (that one may drop template tests).
+    r.put(".bosun/bosun.toml", "");
     git(&r.root, &["add", "."]);
     git(&r.root, &["commit", "-q", "-m", "base"]);
     git(&r.root, &["checkout", "-q", "-b", "work"]);

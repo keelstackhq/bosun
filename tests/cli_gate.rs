@@ -236,6 +236,8 @@ fn the_diff_file_describes_the_files_on_disk() {
 #[test]
 fn failing_command_is_exit_1_with_status() {
     let r = repo();
+    // With a Cargo.lock; without one a `--locked` gate's failure names the lockfile instead.
+    write(&r.root, "Cargo.lock", "# lock\n");
     r.change("a/src/lib.rs");
     let (code, v, _) = r.gate(&["test", "--base", "main"], "3");
     assert_eq!(code, 1);

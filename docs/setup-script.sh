@@ -4,6 +4,8 @@
 # before a session, from inside each checkout, possibly on a warm container. Pins move only by
 # reviewed PRs that edit this file (R-ci reviews it).
 set -euo pipefail
+# hull's proxy CA helper, when the repo has it (before any download below).
+if [ -f scripts/proxy-ca.sh ]; then bash scripts/proxy-ca.sh install || echo "setup-script: scripts/proxy-ca.sh install failed; continuing" >&2; fi
 
 # Pinned tool versions.
 NODE_MAJOR=24
@@ -32,13 +34,19 @@ CARGO_DENY_LINUX_ARM64_SHA512=""
 # Prebuilt cargo tools (cargo install builds them from source: minutes). Release tarballs from
 # github.com (served by release-assets.githubusercontent.com), each pinned by the sha256 of the
 # tarball for this machine; a mismatch or a failed download falls back to `cargo install --locked`.
-# Move a pin with its checksums: curl -fsSL <asset url> | sha256sum.
-NEXTEST_VERSION=0.9.152
-NEXTEST_LINUX_X64_SHA256=d039b43c3e0958441b6ad0a39c8884d018b3d2e8fb9928f209074b1100b5e17a
-NEXTEST_LINUX_ARM64_SHA256=ca1f81a5b86533eb45ab97e0064aa88e925e53aab9a698ca6331a7cad1f85f07
-CARGO_DENY_BIN_VERSION=0.20.2
-CARGO_DENY_BIN_LINUX_X64_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
-CARGO_DENY_BIN_LINUX_ARM64_SHA256=995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d
+# The pins live in .bosun/pins.toml (one source, also read by CI); move a pin there with its checksums.
+PINS=.bosun/pins.toml
+pin() { awk -v s="[$1]" -v k="$2" '$0 == s { on = 1; next } /^\[/ { on = 0 } on && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$PINS" 2>/dev/null || true; }
+NEXTEST_VERSION="$(pin nextest version)"
+NEXTEST_LINUX_X64_SHA256="$(pin nextest linux_x64_sha256)"
+NEXTEST_LINUX_ARM64_SHA256="$(pin nextest linux_arm64_sha256)"
+CARGO_DENY_BIN_VERSION="$(pin cargo-deny version)"
+CARGO_DENY_BIN_LINUX_X64_SHA256="$(pin cargo-deny linux_x64_sha256)"
+CARGO_DENY_BIN_LINUX_ARM64_SHA256="$(pin cargo-deny linux_arm64_sha256)"
+if [ ! -f "$PINS" ] || [ -z "$NEXTEST_VERSION" ] || [ -z "$CARGO_DENY_BIN_VERSION" ]; then
+  echo "setup-script: $PINS is missing or incomplete; cargo-deny and cargo-nextest are skipped (restore it: splice update --channel bosun)" >&2
+  NEXTEST_VERSION="" CARGO_DENY_BIN_VERSION=""
+fi
 # Claude Code plugins. `keelstack` is bosun's marketplace (.claude-plugin/marketplace.json on this
 # branch of keelstackhq/bosun, owner-reviewed); it pins each plugin source by sha. A marketplace ref
 # must be a branch or tag (`#<sha>` fails to clone). Move the plugin pins with marketplace.json;
@@ -204,6 +212,15 @@ cargo_tool() {
   crate="$1" ver="$2" url="$3" sum="$4"
   dest="${CARGO_HOME:-${HOME:-/root}/.cargo}/bin"
   rec="$SETUP_STATE_DIR/$crate@$ver.bin.sha256"
+  if [ -z "$sum" ]; then
+    # No pinned checksum (the version comes from hull's pins.toml): no prebuilt, build that version.
+    if command -v cargo >/dev/null 2>&1; then
+      cargo install --locked "$crate" --version "$ver" || echo "setup-script: cargo install of $crate failed; continuing without it" >&2
+    else
+      echo "setup-script: no cargo found; skipping $crate" >&2
+    fi
+    return 0
+  fi
   if [ -f "$rec" ] && [ -x "$dest/$crate" ] &&
     [ "$(sha256sum "$dest/$crate" 2>/dev/null | cut -d' ' -f1)" = "$(cat "$rec")" ]; then return 0; fi
   if d="$(mktemp -d)" &&
@@ -224,6 +241,19 @@ cargo_tool() {
     echo "setup-script: no cargo found; skipping $crate" >&2
   fi
 }
+# A repo with hull's pins.toml and scripts/pins.mjs takes its nextest and cargo-deny versions from
+# there; a version other than the .bosun/pins.toml one has no checksum here and is built with cargo.
+if [ -f pins.toml ] && [ -f scripts/pins.mjs ] && command -v node >/dev/null 2>&1 &&
+  hull_pins="$(node scripts/pins.mjs --shell 2>/dev/null | grep -E '^PIN_[A-Z_]+=[0-9A-Za-z._-]*$')"; then
+  eval "$hull_pins"
+  if [ -n "${PIN_NEXTEST:-}" ] && [ "$PIN_NEXTEST" != "$NEXTEST_VERSION" ]; then
+    NEXTEST_VERSION="$PIN_NEXTEST" NEXTEST_LINUX_X64_SHA256="" NEXTEST_LINUX_ARM64_SHA256=""
+  fi
+  if [ -n "${PIN_CARGO_DENY:-}" ] && [ "$PIN_CARGO_DENY" != "$CARGO_DENY_BIN_VERSION" ]; then
+    CARGO_DENY_BIN_VERSION="$PIN_CARGO_DENY" CARGO_DENY_BIN_LINUX_X64_SHA256="" CARGO_DENY_BIN_LINUX_ARM64_SHA256=""
+  fi
+  :
+fi
 case "$(uname -m)" in
   aarch64 | arm64) DENY_ARCH=aarch64 NEXTEST_SUM="$NEXTEST_LINUX_ARM64_SHA256" DENY_SUM="$CARGO_DENY_BIN_LINUX_ARM64_SHA256" ;;
   *) DENY_ARCH=x86_64 NEXTEST_SUM="$NEXTEST_LINUX_X64_SHA256" DENY_SUM="$CARGO_DENY_BIN_LINUX_X64_SHA256" ;;
@@ -235,14 +265,14 @@ if [ -n "$HAS_RUST" ]; then
   if [ -n "$CARGO_DENY_VERSION" ] &&
     tool_warm cargo-deny "$(tool_arch)" "$SETUP_STATE_DIR/cargo-deny@${CARGO_DENY_VERSION}.sha256"; then
     : # installed from its pin
-  else
+  elif [ -n "$CARGO_DENY_BIN_VERSION" ]; then
     cargo_tool cargo-deny "$CARGO_DENY_BIN_VERSION" \
       "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_BIN_VERSION}/cargo-deny-${CARGO_DENY_BIN_VERSION}-${DENY_ARCH}-unknown-linux-musl.tar.gz" \
       "$DENY_SUM"
   fi
   # cargo-nextest only while the pinned bosun's test gate runs it (releases before 0.12.0, spec
   # §7) or a repo profile names it: `cargo install` builds it from source (minutes).
-  if { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
+  if [ -n "$NEXTEST_VERSION" ] && { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
     grep -qs nextest .bosun/profiles/rust.toml; }; then
     cargo_tool cargo-nextest "$NEXTEST_VERSION" \
       "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${DENY_ARCH}-unknown-linux-gnu.tar.gz" \
