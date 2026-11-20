@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use crate::app::{App, Result, is_writer, main_red, set_state};
+use crate::app::{App, Result, is_writer, set_state};
 use crate::cli::risk_check::{autonomous_clean, evaluate_local, review_models, verdict_inputs};
 use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{ApproverKey, Role, parse_ready_summary, ready_summary, verify_ed25519};
@@ -154,7 +154,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
         ));
     }
     data["verdicts"] = json!(verdicts);
-    let main = judge_local(gh, &pull, main_red(gh)?)?;
+    let main = judge_local(gh, &pull, &crate::gates::main_open::main_state(gh)?)?;
     if !main.pass {
         return Err(with(
             BosunError::halted(

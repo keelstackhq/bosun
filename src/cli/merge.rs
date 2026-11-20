@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, default_branch, kill_switch, main_red, sync_merged};
+use crate::app::{App, default_branch, kill_switch, sync_merged};
 use crate::cli::MergeArgs;
 use crate::cli::stamps;
 use crate::config::CiProvider;
@@ -171,7 +171,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             ),
         ));
     }
-    let main = judge_local(gh, pull, main_red(gh)?)?;
+    let main = judge_local(gh, pull, &crate::gates::main_open::main_state(gh)?)?;
     if !main.pass {
         return Err(BosunError::halted(
             main.description,

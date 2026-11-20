@@ -1,0 +1,1 @@
+- Monorepo folders (D-023): `[[folders]]` with `path` and `depends_on` in `.bosun/bosun.toml`; bosun gate code, floor, rules and trust files stay protected under its folder; `main-open` blocks only PRs touching a red `ci-<folder>` folder or one depending on it.

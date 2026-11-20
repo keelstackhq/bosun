@@ -47,6 +47,20 @@ pub struct Config {
     /// `[ci] provider` (spec §9): which CI the repo runs. Release ordering as for `intake`: set
     /// it only once `.bosun/version` pins a release that reads it.
     pub ci: Ci,
+    /// `[[folders]]` (spec §3): a monorepo's tool folders, each `path` with optional
+    /// `depends_on`. Empty (absent): one repo, today's behaviour. Release ordering as for
+    /// `intake`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<FolderConfig>,
+}
+
+/// One `[[folders]]` table.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FolderConfig {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
 }
 
 /// `[routines]`: the janitor is off unless `janitor = true`; `janitor_cron` (UTC) is its schedule.
@@ -162,6 +176,7 @@ impl Default for Config {
             mode: ModeConfig::default(),
             routines: Routines::default(),
             ci: Ci::default(),
+            folders: Vec::new(),
         }
     }
 }
@@ -634,7 +649,41 @@ impl Config {
                 ),
             ));
         }
+        if let Some(why) = crate::core::folders::invalid(&c.folder_list()) {
+            return Err(BosunError::error(
+                format!("{file}: folders: {why}"),
+                format!(
+                    "edit {file}: give each [[folders]] a distinct plain directory `path` (no nesting) and `depends_on` only other folders' paths, without cycles"
+                ),
+            ));
+        }
         Ok(c)
+    }
+
+    /// The `path` of every `[[folders]]` table in `text`, read leniently (only that key, any
+    /// other content ignored): where bosun's code may live must not vanish because the release
+    /// reading the base rejects another key.
+    pub fn folder_paths_lenient(text: &str) -> Vec<String> {
+        let v: toml::Value = match toml::from_str(text) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        (v.get("folders")
+            .and_then(|f| f.as_array())
+            .into_iter()
+            .flatten())
+        .filter_map(|f| f.get("path")?.as_str().map(str::to_string))
+        .collect()
+    }
+
+    /// The `[[folders]]` list as core folders (empty: one repo).
+    pub fn folder_list(&self) -> Vec<crate::core::folders::Folder> {
+        (self.folders.iter())
+            .map(|f| crate::core::folders::Folder {
+                path: f.path.clone(),
+                depends_on: f.depends_on.clone(),
+            })
+            .collect()
     }
 
     /// The knobs `[mode]` resolves to (explicit > preset > default).
@@ -678,6 +727,33 @@ impl Limits {
         match read_optional(&root.join(LIMITS_FILE), LIMITS_FILE)? {
             Some(t) => Limits::parse(&t, LIMITS_FILE),
             None => Ok(Limits::default()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::Config;
+
+    #[test]
+    fn folders_absent_is_one_repo() {
+        let c = Config::parse("", "f").unwrap();
+        assert!(c.folders.is_empty());
+        assert!(!toml::to_string(&c).unwrap().contains("folders"));
+    }
+
+    #[test]
+    fn folders_parse_and_validate() {
+        let t = "[[folders]]\npath = \"bosun\"\n[[folders]]\npath = \"splice\"\ndepends_on = [\"bosun\"]\n";
+        let c = Config::parse(t, "f").unwrap();
+        assert_eq!(c.folder_list()[1].depends_on, ["bosun"]);
+        for bad in [
+            "[[folders]]\npath = \"a\"\ndepends_on = [\"b\"]\n",
+            "[[folders]]\npath = \"../a\"\n",
+            "[[folders]]\npath = \"a\"\nextra = 1\n",
+        ] {
+            let e = Config::parse(bad, "f").unwrap_err();
+            assert!(!e.fix.is_empty(), "{bad}");
         }
     }
 }

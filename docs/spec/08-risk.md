@@ -363,6 +363,21 @@ High-risk PRs:
   critical too: all of `src/**` (the approval modules call most others, and any module can do
   I/O with the workflow's token once released), `Cargo.toml`, `Cargo.lock`, `build.rs` (any
   directory), `.cargo/**` and `npm/**` (`CRITICAL_PATHS` and `APPROVAL_CODE_PATHS` in
+  `src/core/risk.rs`). Monorepo (§3 `[[folders]]`): the code roots are read from the base
+  only (a PR cannot move them): the root when it has `src/cli/risk_check.rs`, and each folder
+  of the base's `[[folders]]` plus `bosun` (always, so a base without the table still protects
+  it; the folder paths are read leniently, so a base config the release rejects still names
+  them) that has `<folder>/src/cli/risk_check.rs`. Under each code root the floor adds
+  `CRITICAL_PATHS` and `APPROVAL_CODE_PATHS` re-rooted (`bosun/src/**`, `bosun/Cargo.toml`,
+  `bosun/.bosun/**`; a glob starting with `**` already matches at any depth) and keeps every
+  root `APPROVAL_CODE_PATHS` entry (the root workspace `Cargo.toml`, `Cargo.lock`, `.cargo/**`
+  build the folder too), the bootstrap
+  exclusions and the trust files (`bosun/.bosun/approvers.toml`, `bosun/governance/owners.toml`,
+  CODEOWNERS) likewise, and every risk rule's path globs gain a copy re-rooted there
+  (`Rules::rooted`: `src/core/risk.rs` R-gate also matches `bosun/src/core/risk.rs`). The root
+  globs always stay, so root `.bosun/**` and root `.github/workflows/**` are on the floor and a
+  folder prefix never makes a protected path unprotected; other folders' code is judged by the
+  repo's rules as written.
   `src/core/risk.rs`). On a critical PR every delegate match becomes an owner match, and the
   status reads `high risk, owner approval needed (critical: <rules and paths>): <ids>`;
   `data.critical` lists them. While a delegate may approve, the status reads `high risk, owner

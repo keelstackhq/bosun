@@ -14,7 +14,7 @@ use crate::config::CiProvider;
 use crate::core::meta::linked_issues;
 use crate::core::records::{Record, parse_record};
 use crate::core::state::State;
-use crate::gates::main_open::judge_pr;
+use crate::gates::main_open::{judge_pr, main_state_with};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -94,9 +94,14 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     }
     let changed = opened || closed;
     let (mut rejudged, mut errors) = (0, Vec::new());
+    let mut red_folders = Value::Null;
     if is_red || result == "success" {
+        let main = main_state_with(gh, red)?;
+        if !main.folders.is_empty() && red.is_some() {
+            red_folders = json!(main.red_folders);
+        }
         for pull in gh.list_pulls(None, IssueState::Open)? {
-            match judge_pr(gh, &w, &pull, red) {
+            match judge_pr(gh, &w, &pull, &main) {
                 Ok(_) => rejudged += 1,
                 Err(e) => errors.push(json!({"pr": pull.number, "error": e.message})),
             }
@@ -110,12 +115,15 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     {
         cf.errors.push(json!({"error": e.message}));
     }
-    let data = json!({
+    let mut data = json!({
         "result": result, "changed": changed, "main_red": red, "opened": opened,
         "closed": closed, "lesson": lesson, "gate_missed": gate_missed, "rejudged": rejudged, "rejudge_errors": errors,
         "conflicts": cf.flagged, "skipped_unknown": cf.skipped, "conflict_errors": cf.errors,
         "note": "main-health reports health; it checks no kill switch and starts no work",
     });
+    if !red_folders.is_null() {
+        data["red_folders"] = red_folders;
+    }
     if !errors.is_empty() {
         return Err(BosunError::error(
             format!("{} PR(s) could not be re-judged", errors.len()),

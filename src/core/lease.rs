@@ -558,3 +558,37 @@ mod tests {
         assert_eq!(got[0].depth, 2);
     }
 }
+
+/// Monorepo folders (spec §4): touch globs carry the folder prefix; overlap is unchanged.
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    fn held(touch: &[&str]) -> Lease {
+        Lease {
+            issue: 9,
+            session: "other".into(),
+            origin: String::new(),
+            expires: crate::time::parse_rfc3339("2026-11-20T12:00:00Z").unwrap(),
+            touch: touch.iter().map(|s| s.to_string()).collect(),
+            comment_id: 1,
+        }
+    }
+
+    fn hits(mine: &[&str], theirs: &[&str]) -> usize {
+        let mine = glob::parse_all(&mine.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        conflicts(&mine.unwrap(), &[held(theirs)], "me", Some(1)).len()
+    }
+
+    #[test]
+    fn folder_prefixed_touch_globs_overlap_as_paths() {
+        assert_eq!(hits(&["bosun/src/**"], &["bosun/src/core/lease.rs"]), 1);
+        assert_eq!(hits(&["bosun/**"], &["bosun/docs/spec/04-lifecycle.md"]), 1);
+        assert_eq!(hits(&["bosun/src/**"], &["splice/src/**"]), 0);
+        assert_eq!(hits(&["bosun/**"], &["bosunx/**"]), 0);
+        // A root-relative glob does not reach into a folder: `src/**` is root `src/` only.
+        assert_eq!(hits(&["src/**"], &["bosun/src/a.rs"]), 0);
+        assert_eq!(hits(&["**/Cargo.toml"], &["bosun/Cargo.toml"]), 1);
+        assert_eq!(hits(&["Cargo.lock"], &["Cargo.lock"]), 1);
+    }
+}

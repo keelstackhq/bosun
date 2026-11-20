@@ -14,6 +14,7 @@ pub mod checks;
 pub mod ci_minutes;
 pub mod cost;
 pub mod digest;
+pub mod folders;
 pub mod gate_record;
 pub mod glob;
 pub mod guard;

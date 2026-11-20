@@ -539,12 +539,32 @@ pub const TRUST_FILES: [&str; 5] = [
 pub fn trust_files_changed<'a>(
     files: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
 ) -> Vec<String> {
+    trust_files_changed_in(files, &[])
+}
+
+/// [`TRUST_FILES`] at the root and under each of `roots` (bosun's folder in a monorepo).
+pub fn trust_files_in(roots: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = TRUST_FILES.iter().map(|t| t.to_string()).collect();
+    for r in roots {
+        out.extend(super::folders::under(r, &TRUST_FILES));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// [`trust_files_changed`] with the trust files also under each of `roots`.
+pub fn trust_files_changed_in<'a>(
+    files: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    roots: &[String],
+) -> Vec<String> {
+    let trust = trust_files_in(roots);
     files
         .into_iter()
         .filter(|(p, prev)| {
             std::iter::once(*p)
                 .chain(*prev)
-                .any(|x| TRUST_FILES.contains(&x))
+                .any(|x| trust.iter().any(|t| t == x))
         })
         .map(|(p, _)| p.to_string())
         .collect()

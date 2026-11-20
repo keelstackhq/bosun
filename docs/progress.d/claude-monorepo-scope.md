@@ -1,0 +1,1 @@
+- 2026-11-20 · D-023 monorepo scope · `[[folders]]` config, folder-rooted risk floor/rules/trust files, per-folder main-open via `ci-<folder>` checks · this PR

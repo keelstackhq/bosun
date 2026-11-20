@@ -45,7 +45,7 @@ pub(crate) struct Prepared {
 /// What every plan of one run shares: rules, approvers, the existing checklist issues.
 pub(crate) struct Env {
     rules: Rules,
-    bosun_code: bool,
+    code_roots: Vec<String>,
     has_delegate: bool,
     base: PathBuf,
     roots: Vec<PathBuf>,
@@ -66,7 +66,17 @@ impl Env {
             })?,
             None => Rules::defaults(),
         };
-        let bosun_code = root.join(BOSUN_CODE_MARKER).is_file();
+        // Where bosun's code lives (spec §8 monorepo): the root, `bosun/` and each `[[folders]]`.
+        let mut candidates = vec![String::new(), "bosun".to_string()];
+        if let Some(t) = read(crate::config::CONFIG_FILE) {
+            candidates.extend(crate::config::Config::folder_paths_lenient(&t));
+        }
+        candidates.retain(|c| c.is_empty() || !c.split('/').any(|s| s == ".." || s.is_empty()));
+        candidates.sort();
+        candidates.dedup();
+        let code_roots: Vec<String> = (candidates.into_iter())
+            .filter(|c| root.join(c).join(BOSUN_CODE_MARKER).is_file())
+            .collect();
         let keys = read(APPROVERS_PATH).map(|t| parse_approvers(&t));
         if let Some(Err(e)) = &keys {
             warnings.push(format!("{APPROVERS_PATH}: {e}"));
@@ -81,7 +91,7 @@ impl Env {
         let existing = app.gh.list_issues(&[LABEL], IssueState::All)?;
         Ok(Env {
             rules,
-            bosun_code,
+            code_roots,
             has_delegate,
             base,
             roots,
@@ -194,7 +204,7 @@ impl Env {
             items.push(it);
         }
         items.extend(setup.iter().cloned());
-        let approvals = pq::approvals(&plan, &self.rules, self.bosun_code);
+        let approvals = pq::approvals_in(&plan, &self.rules, &self.code_roots);
         if !self.has_delegate && approvals.iter().any(|a| a.needs == "delegate") {
             items.push(delegate_key());
         }

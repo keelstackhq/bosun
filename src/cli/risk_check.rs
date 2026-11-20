@@ -14,7 +14,7 @@ use crate::core::approve;
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Policy, Role, orchestrator_counts,
     parse_approvers, signature_lines, signed_message, signed_message_autonomous,
-    signed_message_bootstrap, signed_message_v2, trust_files_changed, verify_ed25519,
+    signed_message_bootstrap, signed_message_v2, trust_files_changed_in, verify_ed25519,
 };
 use crate::core::lease::{Member, leases_of};
 use crate::core::meta::{closing_issues_in, linked_issues_in};
@@ -476,7 +476,8 @@ fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pu
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
-    let rules = base_rules(gh, base)?;
+    let roots = code_roots(&Remote(gh), base)?;
+    let rules = rules_rooted(&Remote(gh), base, &roots)?;
 
     let pr_files = gh.pull_files(n)?;
     // A plan file that only ticks checkboxes (spec §8) is no change for the rules.
@@ -642,8 +643,7 @@ fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pu
     }
     // The critical floor: a delegate never approves the approval system, secrets or prod.
     let critical = if matches.iter().any(|m| m.approval == Approval::Delegate) {
-        let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
-        risk::critical(&matches, &files, bosun_code)
+        risk::critical_in(&matches, &files, &roots)
     } else {
         Vec::new()
     };
@@ -680,10 +680,11 @@ fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pu
         Vec::new()
     };
     // Key and owner changes need the owner's own GitHub approval, never a signature.
-    let trust = trust_files_changed(
+    let trust = trust_files_changed_in(
         files
             .iter()
             .map(|f| (f.path.as_str(), f.previous_path.as_deref())),
+        &roots,
     );
     if !trust.is_empty() {
         eprintln!(
@@ -701,8 +702,7 @@ fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pu
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
     let (mut bootstrap, policy_source) = if high && signed_ok {
-        let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
-        let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
+        let excluded = bootstrap_excluded(&pr_files, &matches, &roots);
         let today = ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
@@ -986,6 +986,39 @@ pub(crate) fn base_rules(gh: &dyn Github, base: &str) -> Result<Rules> {
 }
 
 pub(crate) fn rules_from(src: &dyn Files, base: &str) -> Result<Rules> {
+    let roots = code_roots(src, base)?;
+    rules_rooted(src, base, &roots)
+}
+
+/// Where bosun's own code lives at `base` (spec §8 monorepo): `""` when the root has
+/// [`BOSUN_CODE_MARKER`], and each folder (the `[[folders]]` of the base config, plus `bosun`
+/// always, so a base without the table still protects it) that has it. Read from the base only:
+/// a PR cannot move its own trust root. An unreadable base config adds no folders.
+pub(crate) fn code_roots(src: &dyn Files, base: &str) -> Result<Vec<String>> {
+    let mut candidates = vec![String::new(), "bosun".to_string()];
+    if let Some(t) = src.read(CONFIG_FILE, base)? {
+        candidates.extend(Config::folder_paths_lenient(&t));
+    }
+    // A path that could leave the repo is never read.
+    candidates.retain(|c| c.is_empty() || !c.split('/').any(|s| s == ".." || s.is_empty()));
+    candidates.sort();
+    candidates.dedup();
+    let mut roots = Vec::new();
+    for c in candidates {
+        let marker = if c.is_empty() {
+            BOSUN_CODE_MARKER.to_string()
+        } else {
+            format!("{c}/{BOSUN_CODE_MARKER}")
+        };
+        if src.read(&marker, base)?.is_some() {
+            roots.push(c);
+        }
+    }
+    Ok(roots)
+}
+
+/// The risk rules at `base`, also applied under each of `roots` ([`Rules::rooted`]).
+pub(crate) fn rules_rooted(src: &dyn Files, base: &str, roots: &[String]) -> Result<Rules> {
     Ok(match src.read(RULES_PATH, base)? {
         Some(text) => Rules::parse(&text).map_err(|e| {
             BosunError::error(
@@ -994,7 +1027,8 @@ pub(crate) fn rules_from(src: &dyn Files, base: &str) -> Result<Rules> {
             )
         })?,
         None => Rules::defaults(),
-    })
+    }
+    .rooted(roots))
 }
 
 fn patch_files(files: &[PrFile]) -> Vec<risk::PatchFile<'_>> {
@@ -1090,8 +1124,8 @@ fn revert_evidence(
             evidence: Vec::new(),
         });
     }
-    let bosun_code = gh.file_at(BOSUN_CODE_MARKER, &pull.base_sha)?.is_some();
-    let critical = risk::critical(&ms, &changed, bosun_code);
+    let roots = code_roots(&Remote(gh), &pull.base_sha)?;
+    let critical = risk::critical_in(&ms, &changed, &roots);
     apply_floor(&mut ms, &critical);
     let owner = |m: &&risk::Match| {
         m.approval == Approval::Owner || ["R-weaken", "R-gate", "R-gov"].contains(&m.rule.as_str())
@@ -2110,7 +2144,7 @@ fn orchestrator_window(
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.
-fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match], bosun_code: bool) -> Vec<String> {
+fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match], roots: &[String]) -> Vec<String> {
     let f: Vec<_> = (files.iter())
         .map(|f| {
             (
@@ -2120,7 +2154,7 @@ fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match], bosun_code: boo
             )
         })
         .collect();
-    risk::bootstrap_excluded(&f, matches, bosun_code)
+    risk::bootstrap_excluded_in(&f, matches, roots)
 }
 
 /// Whether a comment on the PR has a bootstrap-mode signature line for `head`, valid or not.

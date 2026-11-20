@@ -119,6 +119,23 @@ impl Rules {
     pub fn defaults() -> Rules {
         Rules::parse(DEFAULT_RULES).expect("built-in risk rules parse")
     }
+
+    /// The rules also applied under each folder in `roots` where bosun's own code lives (spec §8
+    /// monorepo): every path glob gains a copy re-rooted there (`src/core/risk.rs` also matches
+    /// `bosun/src/core/risk.rs`). The root globs stay, so a folder never unprotects a path.
+    pub fn rooted(mut self, roots: &[String]) -> Rules {
+        for r in roots.iter().filter(|r| !r.is_empty()) {
+            for rule in &mut self.rules {
+                let extra = super::folders::under_globs(r, &rule.paths);
+                for g in extra {
+                    if !rule.paths.contains(&g) {
+                        rule.paths.push(g);
+                    }
+                }
+            }
+        }
+        self
+    }
 }
 
 /// A changed file: its path now, its path before a rename, and the lines the PR adds.
@@ -890,14 +907,46 @@ pub fn bootstrap_excluded(
     matches: &[Match],
     bosun_code: bool,
 ) -> Vec<String> {
-    let code: &[&str] = if bosun_code {
-        &APPROVAL_CODE_PATHS
+    bootstrap_excluded_in(files, matches, &code_roots_of(bosun_code))
+}
+
+/// `[""]` when `bosun_code` (bosun's code at the repo root), else none.
+fn code_roots_of(bosun_code: bool) -> Vec<String> {
+    if bosun_code {
+        vec![String::new()]
     } else {
-        &[]
-    };
-    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter().chain(code))
-        .map(|g| Glob::parse(g).expect("built-in bootstrap glob"))
-        .collect();
+        Vec::new()
+    }
+}
+
+/// The globs a list of built-in paths covers: at the root, and re-rooted under each code root
+/// (spec §8 monorepo), plus [`APPROVAL_CODE_PATHS`] under each code root.
+fn rooted_floor(base: &[&str], roots: &[String]) -> Vec<Glob> {
+    let mut texts: Vec<String> = base.iter().map(|g| g.to_string()).collect();
+    // A folder's build reads the root workspace (`Cargo.toml`, `Cargo.lock`, `.cargo/**`) too:
+    // with bosun's code anywhere, the root entries stay.
+    if !roots.is_empty() {
+        texts.extend(APPROVAL_CODE_PATHS.iter().map(|g| g.to_string()));
+    }
+    for r in roots {
+        texts.extend(super::folders::under(r, base));
+        texts.extend(super::folders::under(r, &APPROVAL_CODE_PATHS));
+    }
+    texts.sort();
+    texts.dedup();
+    (texts.iter())
+        .map(|g| Glob::parse(g).expect("built-in floor glob"))
+        .collect()
+}
+
+/// [`bootstrap_excluded`] with bosun's code at each of `roots` (`""` is the repo root, a folder
+/// such as `bosun` in a monorepo): the excluded paths apply at the root and under each root.
+pub fn bootstrap_excluded_in(
+    files: &[(&str, Option<&str>, Option<&str>)],
+    matches: &[Match],
+    roots: &[String],
+) -> Vec<String> {
+    let globs = rooted_floor(&BOOTSTRAP_EXCLUDED, roots);
     let environment = |patch: Option<&str>| {
         patch.is_none_or(|p| {
             p.lines().any(|l| {
@@ -1120,21 +1169,25 @@ pub fn workflow_files(files: &[(&str, Option<&str>)]) -> Vec<String> {
 /// Why a PR is critical: the critical rules it matches and the changed critical paths (a
 /// rename counts on both sides). `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: not critical.
 pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> Vec<String> {
+    critical_in(matches, files, &code_roots_of(bosun_code))
+}
+
+/// The critical floor globs with bosun's code at each of `roots`: [`CRITICAL_PATHS`] at the
+/// root (so root `.bosun/**` and `.github/workflows/**` always), and [`CRITICAL_PATHS`] and
+/// [`APPROVAL_CODE_PATHS`] under each root.
+pub fn critical_globs(roots: &[String]) -> Vec<Glob> {
+    rooted_floor(&CRITICAL_PATHS, roots)
+}
+
+/// [`critical`] with bosun's code at each of `roots` (`""` is the repo root, a folder such as
+/// `bosun` in a monorepo).
+pub fn critical_in(matches: &[Match], files: &[ChangedFile], roots: &[String]) -> Vec<String> {
     let mut why: Vec<String> = matches
         .iter()
         .filter(|m| CRITICAL_RULES.contains(&m.rule.as_str()))
         .map(|m| m.rule.clone())
         .collect();
-    let code: &[&str] = if bosun_code {
-        &APPROVAL_CODE_PATHS
-    } else {
-        &[]
-    };
-    let globs: Vec<Glob> = CRITICAL_PATHS
-        .iter()
-        .chain(code)
-        .map(|g| Glob::parse(g).expect("built-in critical glob"))
-        .collect();
+    let globs = critical_globs(roots);
     for f in files {
         let hit = std::iter::once(&f.path)
             .chain(f.previous_path.as_ref())
@@ -2665,5 +2718,95 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             };
             assert!(!critical(&[], &[f], false).is_empty(), "{t}");
         }
+    }
+}
+
+/// Monorepo layout (spec §8): a folder prefix never makes a protected path unprotected.
+#[cfg(test)]
+mod monorepo_tests {
+    use super::*;
+
+    fn file(p: &str) -> ChangedFile {
+        ChangedFile {
+            path: p.into(),
+            previous_path: None,
+            added_lines: Vec::new(),
+        }
+    }
+
+    fn roots() -> Vec<String> {
+        vec!["bosun".into()]
+    }
+
+    #[test]
+    fn bosun_folder_code_and_root_governance_stay_critical() {
+        for p in [
+            "bosun/src/core/risk.rs",
+            "bosun/src/cli/risk_check.rs",
+            "bosun/Cargo.toml",
+            "bosun/build.rs",
+            "bosun/.bosun/risk.toml",
+            "bosun/governance/owners.toml",
+            "bosun/.github/workflows/ci.yml",
+            ".bosun/bosun.toml",
+            ".github/workflows/ci.yml",
+            "governance/owners.toml",
+            "splice/action.yml",
+            // The root workspace builds the folder's code.
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo/config.toml",
+        ] {
+            assert!(!critical_in(&[], &[file(p)], &roots()).is_empty(), "{p}");
+        }
+        // A rename out of the protected folder counts too.
+        let mv = ChangedFile {
+            previous_path: Some("bosun/src/core/risk.rs".into()),
+            ..file("docs/x.rs")
+        };
+        assert!(!critical_in(&[], &[mv], &roots()).is_empty());
+        // Other folders' code is not bosun's: not on the floor (their rules still apply).
+        assert!(critical_in(&[], &[file("splice/src/lib.rs")], &roots()).is_empty());
+        // No folders: exactly the one-repo floor.
+        assert_eq!(
+            critical_in(&[], &[file("src/lib.rs")], &[String::new()]),
+            critical(&[], &[file("src/lib.rs")], true)
+        );
+        assert!(critical_in(&[], &[file("src/lib.rs")], &[]).is_empty());
+    }
+
+    #[test]
+    fn rules_also_match_under_the_bosun_folder() {
+        let r = Rules::defaults().rooted(&roots());
+        let gate = r.rules.iter().find(|r| r.id == "R-gate").unwrap();
+        assert!(matches_globs(&gate.paths, "src/core/risk.rs"));
+        assert!(matches_globs(&gate.paths, "bosun/src/core/risk.rs"));
+        let gov = r.rules.iter().find(|r| r.id == "R-gov").unwrap();
+        assert!(matches_globs(&gov.paths, ".bosun/bosun.toml"));
+        assert!(matches_globs(&gov.paths, "bosun/.bosun/bosun.toml"));
+        // Root rules unchanged without folders.
+        let plain = Rules::defaults().rooted(&[]);
+        let n = |r: &Rules| r.rules.iter().map(|x| x.paths.len()).sum::<usize>();
+        assert_eq!(n(&plain), n(&Rules::defaults()));
+    }
+
+    #[test]
+    fn bootstrap_and_trust_files_under_the_folder() {
+        let f = [("bosun/src/core/approve.rs", None, Some("+x"))];
+        assert!(!bootstrap_excluded_in(&f, &[], &roots()).is_empty());
+        let f = [(".bosun/version", None, Some("+x"))];
+        assert!(!bootstrap_excluded_in(&f, &[], &roots()).is_empty());
+        let t = crate::core::approve::trust_files_changed_in(
+            [
+                ("bosun/governance/owners.toml", None),
+                ("governance/owners.toml", None),
+                ("splice/README.md", None),
+            ],
+            &roots(),
+        );
+        assert_eq!(
+            t,
+            ["bosun/governance/owners.toml", "governance/owners.toml"]
+        );
     }
 }

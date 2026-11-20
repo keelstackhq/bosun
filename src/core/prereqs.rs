@@ -4,7 +4,7 @@
 
 use crate::core::glob::Glob;
 use crate::core::plan::{Plan, PlanError};
-use crate::core::risk::{APPROVAL_CODE_PATHS, Approval, CRITICAL_PATHS, CRITICAL_RULES, Rules};
+use crate::core::risk::{Approval, CRITICAL_RULES, Rules};
 use crate::core::text::inert;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
@@ -344,11 +344,19 @@ fn overlaps_any_case(g: &Glob, p: &Glob) -> bool {
 
 /// The tasks of a plan whose PR will need an approval, in plan order, in dependency batches.
 pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNeed> {
-    let glob = |g: &&str| Glob::parse(g).expect("built-in critical glob");
-    let mut floor: Vec<Glob> = CRITICAL_PATHS.iter().map(glob).collect();
-    if bosun_code {
-        floor.extend(APPROVAL_CODE_PATHS.iter().map(glob));
-    }
+    let roots = if bosun_code {
+        vec![String::new()]
+    } else {
+        Vec::new()
+    };
+    approvals_in(plan, rules, &roots)
+}
+
+/// [`approvals`] with bosun's code at each of `roots` (`""` the repo root, a monorepo folder
+/// such as `bosun`): the floor and the rules apply at the root and under each root.
+pub fn approvals_in(plan: &Plan, rules: &Rules, roots: &[String]) -> Vec<ApprovalNeed> {
+    let floor = crate::core::risk::critical_globs(roots);
+    let rules = &rules.clone().rooted(roots);
     let (mut out, mut memo) = (Vec::new(), HashMap::new());
     for it in &plan.items {
         for t in &it.tasks {
