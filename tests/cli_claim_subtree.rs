@@ -1,4 +1,5 @@
-//! A wildcard `--touch` inside a bundle is resolved against the default branch's tree.
+//! D-021: a wildcard `--touch` inside a bundle is not checked for gated paths: gated work
+//! bundles like any task, and risk-check asks the owner on the PR.
 
 mod common;
 
@@ -30,66 +31,19 @@ fn claim(fake: &FakeGithub) -> (i32, serde_json::Value) {
 }
 
 #[test]
-fn a_subtree_touch_holding_a_gated_file_is_refused() {
-    let (code, v) = claim(&world(Some(("packages/a/hoist.toml", false))));
-    assert_eq!(code, 3, "{v}");
-    let m = v["error"]["message"].as_str().unwrap();
-    assert!(m.contains("--touch packages/** is a gated path"), "{v}");
-}
-
-#[test]
-fn a_clean_subtree_touch_is_allowed() {
-    let (code, v) = claim(&world(Some(("packages/a/lib.rs", false))));
-    assert_eq!(code, 0, "{v}");
-}
-
-#[test]
-fn an_unresolvable_subtree_touch_is_refused() {
-    for tree in [None, Some(("packages/a/lib.rs", true))] {
-        let (code, v) = claim(&world(tree));
-        assert_eq!(code, 3, "{v}");
-        assert_eq!(v["error"]["fix"], "narrow --touch to explicit paths", "{v}");
+fn a_subtree_touch_is_allowed_whatever_the_tree_holds() {
+    for tree in [
+        Some(("packages/a/hoist.toml", false)),
+        Some(("packages/a/lib.rs", false)),
+        Some(("packages/a/lib.rs", true)),
+        None,
+    ] {
+        let fake = world(tree);
+        let (code, v) = claim(&fake);
+        assert_eq!(code, 0, "{tree:?}: {v}");
+        let trees = (fake.requests().iter())
+            .filter(|r| r.path.contains("/git/trees/"))
+            .count();
+        assert_eq!(trees, 0, "{tree:?}: the tree is not read for gating");
     }
-}
-
-#[test]
-fn claim_judges_gated_as_wave_does_not_by_the_stored_flag() {
-    // Imported before packages/a/hoist.toml existed: stored gated is false, but the default
-    // branch's tree makes the task gated now. Wave runs it alone, so claim must not refuse it
-    // as bundled into the active #12. (#11 of `world` is a plain bundled task.)
-    let fake = world(Some(("packages/a/hoist.toml", false)));
-    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
-    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
-    let lead = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/b.rs"]} -->"#;
-    fake.issue(12, "Task 12", &["bosun:state/claimed"], lead);
-    let (code, v) = run(&fake, "session_b", NOW, &["claim", "13"]);
-    assert_eq!(code, 0, "{v}");
-    let (code, v) = run(&fake, "session_c", NOW, &["claim", "11"]);
-    assert_eq!(code, 3, "the plain task is still bundled: {v}");
-}
-
-#[test]
-fn a_task_gated_by_the_tree_may_grow_onto_a_gated_path() {
-    // Gated now only by the default branch's tree: it runs alone, outside the bundle, so a
-    // `--touch` on a gated path is not refused as bundle growth.
-    let fake = world(Some(("packages/a/hoist.toml", false)));
-    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
-    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
-    let args = ["claim", "13", "--touch", ".github/workflows/x.yml"];
-    let (code, v) = run(&fake, "session_b", NOW, &args);
-    assert_eq!(code, 0, "{v}");
-}
-
-#[test]
-fn a_wildcard_touch_reads_the_tree_once_per_check() {
-    let fake = world(Some(("packages/a/x.rs", false)));
-    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
-    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
-    let args = ["claim", "13", "--touch", "packages/**"];
-    let (code, v) = run(&fake, "session_b", NOW, &args);
-    let trees = (fake.requests().iter())
-        .filter(|r| r.path.contains("/git/trees/"))
-        .count();
-    assert!(code == 0 || code == 3, "{v}");
-    assert!(trees <= 2, "tree read {trees} times");
 }

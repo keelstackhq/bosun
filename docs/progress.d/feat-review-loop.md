@@ -1,1 +1,0 @@
-- 2026-11-18 · M9 review-loop · src/cli/review_loop.rs, src/core/review_loop.rs, [mode] review_rounds, spec §7 §18 · this PR

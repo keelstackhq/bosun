@@ -1,1 +1,0 @@
-- 2026-11-18 · handoff notes path `docs/handoff/**` (normal risk, one-off ok) · spec §4 §8, tests/risk_hoist.rs, tests/cli_pr_oneoff_guard.rs · this PR

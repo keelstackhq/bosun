@@ -313,7 +313,7 @@ fn propose(app: &App, days: u32) -> CmdResult {
     let skipped = c.skipped;
     let all = trusted_blocks(app.gh.as_ref(), &c.facts, start)?;
     // Only rules the base `.bosun/risk.toml` defines can be loosened there (not built-ins
-    // such as R-bundle, not ids of a stale or forged note).
+    // such as R-unseen, not ids of a stale or forged note).
     let gh = app.gh.as_ref();
     let rules = match gh.file_at(".bosun/risk.toml", &default_branch(gh)?)? {
         Some(t) => Rules::parse(&t).map_err(|e| {

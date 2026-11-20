@@ -1,5 +1,5 @@
-//! `wave plan` resolves wildcard touches against the default branch's tree: a subtree holding a
-//! gated file runs alone; an unreadable tree fails closed with a warning.
+//! D-021: `wave plan` bundles a subtree touch whatever the default branch's tree holds: gated
+//! work bundles like any task, so the tree is not read for gating.
 
 mod common;
 
@@ -45,38 +45,28 @@ fn lead_closes(v: &Value) -> (u64, Vec<u64>) {
     (first["issue"].as_u64().unwrap(), closes)
 }
 
-fn runs(v: &Value) -> usize {
-    v["data"]["run"].as_array().unwrap().len()
-}
-
 #[test]
-fn a_subtree_holding_a_gated_file_stays_out_of_the_bundle() {
+fn a_subtree_holding_a_gated_file_joins_the_bundle() {
     let fake = world(Some((
         &[("packages/a/hoist.toml", "100644", "blob", "s")],
         false,
     )));
     let v = plan(&fake);
-    assert_eq!((runs(&v), lead_closes(&v)), (2, (12, vec![12])), "{v}");
-    assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
+    assert_eq!(lead_closes(&v), (11, vec![11, 12]), "{v}");
+    assert_eq!(v["data"]["run"].as_array().unwrap().len(), 1, "{v}");
 }
 
 #[test]
-fn a_clean_subtree_joins_the_bundle() {
-    let fake = world(Some((
-        &[("packages/a/lib.rs", "100644", "blob", "s")],
-        false,
-    )));
-    let v = plan(&fake);
-    assert_eq!((runs(&v), lead_closes(&v)), (1, (11, vec![11, 12])), "{v}");
-}
-
-#[test]
-fn an_unreadable_tree_fails_closed_with_a_warning() {
+fn an_unreadable_tree_changes_nothing() {
     for tree in [None, Some((&[][..], true))] {
         let fake = world(tree);
         let v = plan(&fake);
-        assert_eq!((runs(&v), lead_closes(&v)), (2, (12, vec![12])), "{v}");
-        let w = v["data"]["warnings"][0].as_str().unwrap();
-        assert!(w.contains("`packages/**` cannot be checked"), "{v}");
+        assert_eq!(lead_closes(&v), (11, vec![11, 12]), "{v}");
+        let w = v["data"]["warnings"].as_array().unwrap();
+        assert!(
+            !w.iter()
+                .any(|w| w.as_str().unwrap().contains("cannot be checked")),
+            "{v}"
+        );
     }
 }
