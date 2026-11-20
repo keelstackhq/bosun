@@ -5,9 +5,8 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use bosun::core::verdict::{Verdict, comment_body};
 use common::fake::FakeGithub;
-use common::{bosun, lease_note, one_object, stamps};
+use common::{bosun, lease_note, noci, one_object, stamps};
 use serde_json::{Value, json};
 
 const NOW: &str = "2026-11-10T10:00:00Z";
@@ -87,14 +86,7 @@ fn verdict(fake: &FakeGithub) {
 }
 
 fn verdict_by(fake: &FakeGithub, session: &str) {
-    let head = fake.pull_head(20);
-    let v = Verdict::parse(
-        &json!({"pr": 20, "head_sha": head, "verdict": "approve", "confidence": 0.95,
-            "findings": [], "escalate_risk": false})
-        .to_string(),
-    )
-    .unwrap();
-    fake.comment_by(20, "rev", &comment_body(&v, session, None));
+    noci::signed_verdict(fake, "rev", session);
 }
 
 fn chat(fake: &FakeGithub) {
@@ -454,6 +446,44 @@ fn merge_default_branch_github_head_none_takes_the_ci_path() {
     let (code, v) = merge(&fake, dir.path());
     assert_ne!(code, 0, "{v}");
     assert!(merge_puts(&fake).is_empty(), "{v}");
+}
+
+/// Merge counts only an enrolled key's signature as a verdict, never an App record.
+#[test]
+fn merge_counts_only_app_or_signed_verdicts() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    fake.state
+        .lock()
+        .unwrap()
+        .comments
+        .retain(|c| !c.body.contains("bosun-sig"));
+    let head = fake.pull_head(20);
+    fake.comment_by(
+        20,
+        "rev",
+        &noci::verdict_text(20, &head, "session_rev", "approve"),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(merge_puts(&fake).is_empty());
+    noci::app_verdict(&fake, "session_rev");
+    assert_eq!(merge(&fake, dir.path()).0, 5);
+}
+
+/// What must pass is the default branch's: the checkout's profile drops `lint`, the base keeps it.
+#[test]
+fn merge_reads_the_required_gates_from_the_default_branch() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    let lax = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"true\"]\n[gates.lint]\ncmd = [\"true\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", lax);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    std::fs::remove_file(stamps::stamp_dir(dir.path()).join("test")).unwrap();
+    // The base profile has no `test` gate: its absence is no gap, `deps` is not required either.
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
 }
 
 /// The identity-trusting commands refuse a `BOSUN_SESSION` that is not the session's own id or

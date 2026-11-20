@@ -92,6 +92,14 @@ fn default_out_is_under_home_and_never_overwritten() {
 }
 
 #[test]
+fn reviewer_is_a_key_role() {
+    let (repo, home) = (git_repo(), tempfile::tempdir().unwrap());
+    let (code, _, v) = keygen(repo.path(), home.path(), &["--role", "reviewer"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["role"], "reviewer");
+}
+
+#[test]
 fn refuses_out_inside_the_worktree() {
     let (repo, home) = (git_repo(), tempfile::tempdir().unwrap());
     let inside = repo.path().join("key.pem");

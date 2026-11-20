@@ -146,7 +146,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
             format!("`git fetch origin pull/{pr}/head`, then rerun `bosun merge {pr}`"),
         )
     })?;
-    let all = stamps::ready_gates(dir)?;
+    let all = stamps::ready_gates_at(gh)?;
     let missing: Vec<String> = all
         .iter()
         .filter(|g| !stamps::has(dir, &tree, g))
@@ -167,7 +167,7 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
         return Err(BosunError::needs_human(
             format!("PR #{pr} has no clean verdict on head {head} from another session"),
             format!(
-                "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from -`, then rerun `bosun merge {pr}`"
+                "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from - --sign-key <reviewer.pem>`, then rerun `bosun merge {pr}`"
             ),
         ));
     }

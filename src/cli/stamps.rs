@@ -153,3 +153,33 @@ pub fn ready_gates(root: &Path) -> Result<Vec<String>, BosunError> {
     }
     Ok(required_gates(&per_stack))
 }
+
+/// The gates a PR must pass, from the default branch's config and profiles at its current sha,
+/// never from a checkout (the PR cannot pick its own).
+pub fn ready_gates_at(gh: &dyn crate::github::Github) -> Result<Vec<String>, BosunError> {
+    let git_ref = crate::app::default_ref(gh)?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp = std::env::temp_dir().join(format!("bosun-gates-{}-{nanos:x}", std::process::id()));
+    let io = |e: std::io::Error| {
+        BosunError::error(format!("temp dir: {e}"), "make the temp directory writable")
+    };
+    std::fs::create_dir_all(tmp.join(".bosun/profiles")).map_err(io)?;
+    let out = (|| {
+        let text = gh
+            .file_at(crate::config::CONFIG_FILE, &git_ref)?
+            .unwrap_or_default();
+        let config = Config::parse(&text, crate::config::CONFIG_FILE)?;
+        std::fs::write(tmp.join(crate::config::CONFIG_FILE), &text).map_err(io)?;
+        for stack in &config.stack {
+            let file = format!(".bosun/profiles/{}.toml", stack.profile);
+            if let Some(t) = gh.file_at(&file, &git_ref)? {
+                std::fs::write(tmp.join(&file), t).map_err(io)?;
+            }
+        }
+        ready_gates(&tmp)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    out
+}

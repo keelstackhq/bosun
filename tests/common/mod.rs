@@ -97,6 +97,7 @@ pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
 }
 
 pub mod fake;
+pub mod noci;
 pub mod npm;
 pub mod schema_check;
 pub mod stamps;

@@ -7,9 +7,8 @@ use bosun::core::approve::{Readiness, parse_ready_summary, ready_summary, summar
 use std::path::Path;
 use std::process::Command;
 
-use bosun::core::verdict::{Verdict, comment_body};
 use common::fake::FakeGithub;
-use common::{bosun, lease_note, one_object, stamps};
+use common::{bosun, lease_note, noci, one_object, stamps};
 use serde_json::{Value, json};
 
 const NOW: &str = "2026-11-10T10:00:00Z";
@@ -79,15 +78,12 @@ fn setup_with(
     (fake, dir)
 }
 
+/// A verdict of `session` signed by the enrolled key: the only kind that counts without the App.
 fn verdict(fake: &FakeGithub, session: &str, decision: &str) {
     let head = fake.pull_head(20);
-    let v = Verdict::parse(
-        &json!({"pr": 20, "head_sha": head, "verdict": decision, "confidence": 0.95,
-            "findings": []})
-        .to_string(),
-    )
-    .unwrap();
-    fake.comment_by(20, "rev", &comment_body(&v, session, None));
+    noci::enroll(fake);
+    let t = noci::verdict_text(20, &head, session, decision);
+    fake.comment_by(20, "rev", &noci::sign(&t, "acme/widget", 20, &head));
 }
 
 fn chat(fake: &FakeGithub) {
@@ -166,9 +162,60 @@ fn ready_no_ci_needs_a_verdict_from_another_session() {
         "{v}"
     );
     assert!(summaries(&fake).is_empty());
-    // A reviewer that is not a writer does not count either.
-    fake.permission("rev", "read");
     verdict(&fake, "session_rev", "approve");
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+}
+
+/// A writer's verdict comment with a forged reviewer session, unsigned, is no review.
+#[test]
+fn ready_no_ci_unsigned_verdict_with_a_forged_session_tag_not_counted() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    noci::enroll(&fake);
+    let head = fake.pull_head(20);
+    fake.comment_by(
+        20,
+        "rev",
+        &noci::verdict_text(20, &head, "session_rev", "approve"),
+    );
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(summaries(&fake).is_empty());
+    // A signature copied onto another verdict text (or head) does not verify either.
+    let good = noci::sign(
+        &noci::verdict_text(20, &head, "session_rev", "request-changes"),
+        "acme/widget",
+        20,
+        &head,
+    );
+    let sig = good.lines().last().unwrap();
+    let forged = noci::verdict_text(20, &head, "session_rev", "approve");
+    fake.comment_by(20, "rev", &format!("{forged}\n{sig}"));
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+}
+
+/// The gate App's applied verdict record counts without any signature.
+#[test]
+fn ready_no_ci_app_record_never_counts() {
+    // `github-actions[bot]` is any writer's push workflow; no App record is a verdict without CI.
+    let (fake, dir) = setup(false, Some(NO_CI));
+    noci::app_verdict(&fake, "session_rev");
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    // A signed approval still counts beside it.
+    verdict(&fake, "session_rev", "approve");
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+}
+
+/// A signature for another PR or head does not count; the signed text is bound to this PR.
+#[test]
+fn ready_no_ci_signature_for_another_pr_not_counted() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    noci::enroll(&fake);
+    let head = fake.pull_head(20);
+    let t = noci::verdict_text(20, &head, "session_rev", "approve");
+    fake.comment_by(20, "rev", &noci::sign(&t, "acme/widget", 21, &head));
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+    fake.comment_by(20, "rev", &noci::sign(&t, "acme/other", 20, &head));
     assert_eq!(ready(&fake, dir.path()).0, 5);
 }
 
@@ -277,49 +324,117 @@ fn approve_list_no_ci_uses_summary() {
     assert_eq!(v["data"]["ready"], json!([]), "{v}");
 }
 
-fn rev_comment(fake: &FakeGithub, user: &str, edited: bool) {
-    let head = fake.pull_head(20);
-    let j = json!({"pr": 20, "head_sha": head, "verdict": "approve", "confidence": 0.95,
-        "findings": []});
-    let body = comment_body(
-        &Verdict::parse(&j.to_string()).unwrap(),
-        "session_rev",
-        None,
-    );
-    if edited {
-        fake.comment_edited(20, user, &body);
-    } else {
-        fake.comment_by(20, user, &body);
-    }
-}
-
 #[test]
-fn ready_no_ci_ignores_non_writer_and_edited_verdicts() {
+fn ready_no_ci_ignores_edited_verdicts() {
     let (fake, dir) = setup(false, Some(NO_CI));
-    fake.permission("mallory", "read");
-    rev_comment(&fake, "mallory", false);
-    rev_comment(&fake, "rev", true);
+    noci::enroll(&fake);
+    let head = fake.pull_head(20);
+    let t = noci::verdict_text(20, &head, "session_rev", "approve");
+    fake.comment_edited(20, "rev", &noci::sign(&t, "acme/widget", 20, &head));
     let (code, v) = ready(&fake, dir.path());
     assert_eq!(code, 5, "{v}");
     assert!(summaries(&fake).is_empty());
-    rev_comment(&fake, "rev", false);
+    verdict(&fake, "session_rev2", "approve");
     assert_eq!(ready(&fake, dir.path()).0, 0);
 }
 
+/// The summary is a hint only: a writer's counts as the hint, a non-writer's does not, and the
+/// readiness is recomputed (here: high risk, no approval).
 #[test]
-fn approve_list_no_ci_ignores_a_non_writer_summary() {
+fn approve_list_no_ci_hint_from_a_writer_only() {
     let (fake, dir) = setup(true, Some(NO_CI));
     fake.allow_anonymous_reads();
     let head = fake.pull_head(20);
     fake.compare_file(BASE, &head, ".github/workflows/ci.yml", "@@ -0,0 +1 @@\n+x");
-    let body = ready_summary(&head, &[], "high: R-ci", "s", None);
+    let body = ready_summary(&head, &[], "normal", "s", Some("lies"));
     fake.permission("mallory", "read");
     fake.comment_by(20, "mallory", &body);
     let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
     assert_eq!(v["data"]["ready"], json!([]), "{v}");
+    // The writer's summary says "normal": the base's rules still find the workflow change.
+    fake.permission("rev", "write");
     fake.comment_by(20, "rev", &body);
     let (_, v) = run(&fake, dir.path(), &["approve", "--list"]);
     assert_eq!(v["data"]["ready"].as_array().unwrap().len(), 1, "{v}");
+}
+
+/// Approve, reject, reposted approve (same key, same signature): the rejection blocks.
+#[test]
+fn ready_no_ci_replayed_approval_cannot_outvote_a_rejection() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    noci::enroll(&fake);
+    let head = fake.pull_head(20);
+    let post = |decision: &str, tag: &str| {
+        let t = noci::verdict_text(20, &head, tag, decision);
+        let signed = noci::sign(&t, "acme/widget", 20, &head);
+        fake.comment_by(20, "rev", &signed);
+        signed
+    };
+    let a = post("approve", "session_rev");
+    post("request-changes", "session_rev");
+    fake.comment_by(20, "rev", &a);
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    // A rejection under another session tag (same key) blocks too, before or after.
+    let (fake, dir) = setup(false, Some(NO_CI));
+    noci::enroll(&fake);
+    let post = |decision: &str, tag: &str| {
+        let t = noci::verdict_text(20, &head, tag, decision);
+        fake.comment_by(20, "rev", &noci::sign(&t, "acme/widget", 20, &head));
+    };
+    post("request-changes", "session_a");
+    post("approve", "session_b");
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+}
+
+/// Only owner and reviewer keys sign verdicts; delegate and signer keys never count.
+#[test]
+fn ready_no_ci_verdict_key_roles() {
+    for (role, code) in [
+        ("reviewer", 0),
+        ("owner", 5),
+        ("delegate", 5),
+        ("signer", 5),
+    ] {
+        let (fake, dir) = setup(false, Some(NO_CI));
+        let head = fake.pull_head(20);
+        noci::enroll_role(&fake, role);
+        let t = noci::verdict_text(20, &head, "session_rev", "approve");
+        fake.comment_by(20, "rev", &noci::sign(&t, "acme/widget", 20, &head));
+        assert_eq!(ready(&fake, dir.path()).0, code, "{role}");
+    }
+}
+
+/// `verdict comment --sign-key` refuses a delegate key.
+#[test]
+fn verdict_sign_key_refuses_non_reviewer_keys() {
+    for role in ["delegate", "owner", "signer"] {
+        let (fake, dir) = setup(false, Some(NO_CI));
+        noci::enroll_role(&fake, role);
+        let head = fake.pull_head(20);
+        let pem = dir.path().join("k.pem");
+        std::fs::write(&pem, common::TEST_ED25519_PEM).unwrap();
+        let verdict = dir.path().join("v.json");
+        let j = json!({"pr": 20, "head_sha": head, "verdict": "approve", "confidence": 0.95, "findings": []});
+        std::fs::write(&verdict, j.to_string()).unwrap();
+        let (code, v) = run(
+            &fake,
+            dir.path(),
+            &[
+                "verdict",
+                "comment",
+                "--from",
+                verdict.to_str().unwrap(),
+                "--sign-key",
+                pem.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(code, 1, "{v}");
+        assert!(
+            v["error"]["message"].as_str().unwrap().contains(role),
+            "{v}"
+        );
+    }
 }
 
 #[test]
@@ -365,6 +480,12 @@ fn ready_summary_round_trips() {
     let low = ready_summary(H, &g, "normal", "s", None);
     assert_eq!(summary_readiness(Some(&low)).0, Readiness::NotWaiting);
     assert_eq!(summary_readiness(None).0, Readiness::NotWaiting);
+    // An unreadable risk line is no "normal".
+    let odd = ready_summary(H, &g, "unknown", "s", None);
+    assert!(matches!(
+        summary_readiness(Some(&odd)).0,
+        Readiness::Waiting(_)
+    ));
 }
 
 #[test]

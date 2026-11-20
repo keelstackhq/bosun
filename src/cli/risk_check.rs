@@ -28,7 +28,7 @@ use crate::core::risk::{
 use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::core::verdict::{Verdict, bot_verdict_json, comment_json, effective};
 use crate::core::weaken;
-use crate::ctx::RepoId;
+use crate::ctx::{Ctx, RepoId};
 use crate::gates::{adapters, ts};
 use crate::github::gate::GateWriter;
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
@@ -96,7 +96,7 @@ pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
             e.message
         );
     }
-    let out = judge(&app, &w, pull.clone());
+    let out = judge(app.gh.as_ref(), &app.ctx, Some(&app), &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
         // The cleanup write must not fail on the time budget that stopped the run.
@@ -462,12 +462,17 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
 
 /// No-CI mode (spec §4): judge `pull` as the risk workflow would, with a writer that posts nothing.
 pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
-    let w = GateWriter::statuses(app.gh.as_ref()).dry(true);
-    judge(app, &w, pull.clone())
+    evaluate_with(app.gh.as_ref(), &app.ctx, pull)
 }
 
-fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
-    let gh = app.gh.as_ref();
+/// As [`evaluate_local`] with the client and context apart (the approve board has no `App`).
+pub fn evaluate_with(gh: &dyn Github, ctx: &Ctx, pull: &Pull) -> CmdResult {
+    let w = GateWriter::statuses(gh).dry(true);
+    judge(gh, ctx, None, &w, pull.clone())
+}
+
+/// `app` is `None` for a local judge (no `App`, and its writer is dry): no verdict re-apply.
+fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pull) -> CmdResult {
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
@@ -522,7 +527,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // D-021: gated work may bundle, so every task the PR closes counts for R-plan: links in the
     // body, and closing refs in the title and commit messages (GitHub reads all three). A
     // commit list cut at GitHub's cap (the author can pad it) fails closed to the owner.
-    let repo = app.ctx.repo.to_string();
+    let repo = ctx.repo.to_string();
     let mut linked = linked_issues_in(&pull.body, &repo);
     let (extra, incomplete) = closing_refs_outside_body(gh, &pull, &repo)?;
     for n in extra {
@@ -547,7 +552,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             plan_high.push(format!("#{i} is `risk: high` in the plan"));
         }
         if let (Some(meta), Some(issue)) = (meta, issue.as_ref()) {
-            one_off |= is_one_off(gh, issue, &meta, base, &app.ctx.config.project)?;
+            one_off |= is_one_off(gh, issue, &meta, base, &ctx.config.project)?;
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }
@@ -645,7 +650,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     apply_floor(&mut matches, &critical);
     let level = risk::level(&matches);
     let high = level == "high";
-    let out_of_touch = out_of_touch(app, task, &pr_files, pull.changed_files);
+    let out_of_touch = out_of_touch(gh, ctx, task, &pr_files, pull.changed_files);
 
     let warning = out_of_touch.as_deref().and_then(touch_warning);
     if let Some(w) = &warning {
@@ -698,13 +703,13 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let (mut bootstrap, policy_source) = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
-        let today = app.ctx.now.to_string();
+        let today = ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
     } else {
         (Err("signed approvals do not count on this PR".into()), None)
     };
-    let repo = app.ctx.repo.to_string();
+    let repo = ctx.repo.to_string();
     let linked = linked_issues_in(&pull.body, &repo);
     // D-017: the signature counts only with a clean verdict and a task the author leased.
     let auto = if policy_source.is_some() && bootstrap.is_ok() {
@@ -724,7 +729,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // owner's own GitHub approval (or comment) as the only form.
     let chat_on = high && signed_ok && chat_enabled(gh, base)?;
     let need = Need {
-        repo: &app.ctx.repo,
+        repo: &ctx.repo,
         pr: n,
         base_ref: &pull.base_ref,
         owners: &owners,
@@ -825,7 +830,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let carried = carry_status(gh, w, &pull, &linked);
     // A green head with no review-verdict gets its own verdict comment applied (spec §8).
     let reapplied = (passed && carried.is_none())
-        .then(|| reapply_verdict(app, w, &pull))
+        .then(|| app.and_then(|a| reapply_verdict(a, w, &pull)))
         .flatten();
     // An owner's approval of this exact head also clears an escalated verdict (spec §7).
     // A low-risk head reads the owners' approval only when an escalation waits for it.
@@ -835,15 +840,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         _ if high => Ok(None),
         _ => {
             let owners = owner_logins(gh, base)?;
-            let by = approver(
-                gh,
-                &app.ctx.repo,
-                n,
-                head,
-                &owners,
-                signed_ok,
-                (None, signer),
-            )?;
+            let by = approver(gh, &ctx.repo, n, head, &owners, signed_ok, (None, signer))?;
             if let Some(b) = by.filter(|b| b.1) {
                 return Ok(Some(b.0));
             }
@@ -934,7 +931,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     };
     let fix = if autonomous {
         format!(
-            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
+            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`; without CI add `--sign-key <reviewer.pem>`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
             risk::VERDICT_MIN_CONFIDENCE
         )
     } else if unlinked {
@@ -1452,7 +1449,8 @@ fn touch_warning(out: &[String]) -> Option<String> {
 /// the comments cannot be read. The task is the first linked issue with task metadata; humans'
 /// PRs have no lease and so get `None`.
 fn out_of_touch(
-    app: &App,
+    gh: &dyn Github,
+    ctx: &Ctx,
     task: Option<u64>,
     pr_files: &[PrFile],
     changed_files: u64,
@@ -1463,7 +1461,7 @@ fn out_of_touch(
     }
     let task = task?;
     // Only a warning: a failed read costs the warning, never the check.
-    let notes = match trusted_notes(app.gh.as_ref(), task) {
+    let notes = match trusted_notes(gh, task) {
         Ok(notes) => notes,
         Err(e) => {
             eprintln!(
@@ -1475,7 +1473,7 @@ fn out_of_touch(
     };
     let lease = leases_of(task, &notes)
         .into_iter()
-        .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())
+        .filter(|l| l.is_live(ctx.now) && !l.touch.is_empty())
         .max_by_key(|l| l.comment_id)?;
     let changed: Vec<Changed> = pr_files
         .iter()
@@ -1914,6 +1912,10 @@ pub(crate) fn autonomous_inputs(
     pull: &Pull,
     repo: &str,
 ) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
+    // Without CI a `github-actions[bot]` record is any writer's push workflow (spec section 8).
+    if super::pr_no_ci::provider_default(gh)? == crate::config::CiProvider::None {
+        return Ok(None);
+    }
     let mut task = false;
     for i in closing_issues_in(&pull.body, Some(repo)) {
         let open = |x: &Issue| x.state == "open" && !x.pull_request && task_meta(x).is_some();

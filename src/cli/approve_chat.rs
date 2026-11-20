@@ -63,7 +63,7 @@ fn is_short(t: &str) -> bool {
 /// zero or several matches refuse (exit 3), so a short head typed in Slack never picks a PR by
 /// guess. The PR named by `--question` must be that PR.
 fn resolve_short(app: &App, short: &str, question: &str) -> Result<(u64, String)> {
-    let board = crate::cli::approve::board(app.gh.as_ref(), true)?;
+    let board = crate::cli::approve::board(app.gh.as_ref(), &app.ctx, true)?;
     let mut hit = board.ready.iter().filter(|r| r.head_sha.starts_with(short));
     let (pr, head) = match (hit.next(), hit.next()) {
         (Some(r), None) => (r.pr, r.head_sha.clone()),

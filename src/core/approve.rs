@@ -214,6 +214,8 @@ pub enum Role {
     Delegate,
     /// The CI signer: verifies only the autonomous form, never any other owner use.
     Signer,
+    /// Signs independent review verdicts only (no-CI trust); never an approval of any form.
+    Reviewer,
 }
 
 impl Role {
@@ -222,6 +224,7 @@ impl Role {
             Role::Owner => "owner",
             Role::Delegate => "delegate",
             Role::Signer => "signer",
+            Role::Reviewer => "reviewer",
         }
     }
 
@@ -232,6 +235,8 @@ impl Role {
             Role::Delegate => "bosun-delegate",
             // Nothing accepts a v1 message with this prefix: a signer signs only the autonomous form.
             Role::Signer => "bosun-signer",
+            // Nothing accepts an approval signed with this prefix: a reviewer signs verdicts.
+            Role::Reviewer => "bosun-reviewer",
         }
     }
 }
@@ -715,10 +720,13 @@ pub fn summary_readiness(summary: Option<&str>) -> (Readiness, String) {
         .unwrap_or_default()
         .to_string();
     let risk = summary_field(body, "risk").unwrap_or_default();
-    let r = if risk.starts_with("high") && summary_field(body, "approval") == Some("none") {
-        Readiness::Ready(risk_ids(risk))
-    } else {
-        Readiness::NotWaiting
+    let waiting = risk.starts_with("high") && summary_field(body, "approval") == Some("none");
+    let r = match risk {
+        _ if waiting => Readiness::Ready(risk_ids(risk)),
+        "normal" => Readiness::NotWaiting,
+        r if r.starts_with("high") => Readiness::NotWaiting,
+        // An unreadable risk line is no "normal": the board says so.
+        _ => Readiness::Waiting("its ready summary has no readable risk line"),
     };
     (r, verdict)
 }

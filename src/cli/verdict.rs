@@ -8,7 +8,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::review_ci::flat;
-use super::{ApplyArg, FromArg, VerdictCmd};
+use super::{ApplyArg, CommentArgs, FromArg, VerdictCmd};
 use crate::app::default_branch;
 use crate::app::{App, kill_switch, set_state};
 use crate::config::{CONFIG_FILE, Config};
@@ -73,7 +73,10 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 None,
             )
         }
-        VerdictCmd::Comment(FromArg { from }) => {
+        VerdictCmd::Comment(CommentArgs {
+            from: FromArg { from },
+            sign_key,
+        }) => {
             // A verdict comment body relayed by another session keeps its reviewer and model.
             let text = read_input(from)?;
             let me = app.ctx.session.as_str();
@@ -96,15 +99,28 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
             let relayed_by = (reviewer != me).then_some(me);
+            // A key signs only its holder's own review: a relay never launders another's.
+            if relayed_by.is_some() && sign_key.is_some() {
+                return Err(BosunError::usage(
+                    format!(
+                        "--sign-key signs only this session's own verdict; this body is {reviewer}'s"
+                    ),
+                    "relay without --sign-key, or have the reviewer sign its own verdict with `bosun verdict comment --sign-key`",
+                ));
+            }
             // A relay keeps the body's model only: the relaying session's env is not the reviewer's.
             let model = match relayed_by {
                 Some(_) => model.map(str::to_string),
                 None => model.map(str::to_string).or_else(env_model),
             };
-            let body = relayed_comment_body(&verdict, reviewer, model.as_deref(), relayed_by);
+            let mut body = relayed_comment_body(&verdict, reviewer, model.as_deref(), relayed_by);
+            if let Some(path) = sign_key {
+                body = signed(&app, &verdict, body, path)?;
+            }
             let c = gh.add_comment(verdict.pr, &body)?;
             let mut data = json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
-                "comment_id": c.id, "applied_by": "the verdict workflow", "reviewer": reviewer});
+                "comment_id": c.id, "applied_by": "the verdict workflow", "reviewer": reviewer,
+                "signed": sign_key.is_some()});
             if let Some(r) = relayed_by {
                 data["relayed_by"] = json!(r);
             }
@@ -112,6 +128,41 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
         }
         VerdictCmd::Apply(ApplyArg { comment_id }) => apply(&app, *comment_id),
     }
+}
+
+/// `body` plus the `bosun-sig` line of the enrolled key at `path` (spec §4, no-CI trust).
+fn signed(app: &App, v: &Verdict, body: String, path: &Path) -> Result<String, BosunError> {
+    use crate::github::b64;
+    let pair = super::approve::read_key(path)?;
+    let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
+    let keys = super::risk_check::enrolled_keys(app.gh.as_ref()).map_err(|why| {
+        BosunError::error(
+            format!("signed verdicts are off: {why}"),
+            "enroll the key in .bosun/approvers.toml on the default branch",
+        )
+    })?;
+    let key = (keys.iter())
+        .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
+        .ok_or_else(|| {
+            BosunError::error(
+                "this key is not enrolled in .bosun/approvers.toml on the default branch",
+                "sign with an enrolled key",
+            )
+        })?;
+    if !matches!(key.role, crate::core::approve::Role::Reviewer) {
+        return Err(BosunError::error(
+            format!(
+                "key {} is a {} key: only reviewer keys sign verdicts",
+                key.id,
+                key.role.name()
+            ),
+            "sign with a reviewer key (never the orchestrator's owner key) enrolled in .bosun/approvers.toml",
+        ));
+    }
+    let r = &app.ctx.repo;
+    let msg = crate::core::verdict::signed_message(&r.owner, &r.name, v.pr, &v.head_sha, &body);
+    let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
+    Ok(format!("{body}\nbosun-sig ed25519 {} {sig}", key.id))
 }
 
 /// The reviewer model this session declares: `BOSUN_MODEL`, else `ANTHROPIC_MODEL` (as the

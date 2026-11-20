@@ -184,7 +184,7 @@ review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, 
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str, reviewer: str,
-    relayed_by?: str};
+    signed: bool, relayed_by?: str};
 verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}, relayed_by?: str}
     | {comment_id: int, author: str, refused: str, status: null};

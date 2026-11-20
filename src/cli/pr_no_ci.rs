@@ -6,13 +6,14 @@ use serde_json::{Value, json};
 use crate::app::{App, Result, is_writer, main_red, set_state};
 use crate::cli::risk_check::{autonomous_clean, evaluate_local, review_models, verdict_inputs};
 use crate::config::{CONFIG_FILE, CiProvider, Config};
-use crate::core::approve::{parse_ready_summary, ready_summary};
+use crate::core::approve::{ApproverKey, Role, parse_ready_summary, ready_summary, verify_ed25519};
 use crate::core::meta::linked_issues_in;
 use crate::core::records::Record;
 use crate::core::state::State;
-use crate::core::verdict::{COMMENT_MARKER, comment_clean};
+use crate::core::verdict::{COMMENT_MARKER, comment_clean, signed_message, split_signature};
+use crate::ctx::RepoId;
 use crate::gates::main_open::judge_local;
-use crate::github::{Github, Issue, Pull, is_ccr_refusal};
+use crate::github::{Github, Issue, Pull, b64, is_ccr_refusal};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 
 /// The CI provider in the config at `git_ref` (a PR never picks its own); `github` if unreadable.
@@ -29,7 +30,27 @@ pub fn provider_default(gh: &dyn Github) -> Result<CiProvider> {
     provider_at(gh, &crate::app::default_ref(gh)?)
 }
 
-/// Sessions with a clean verdict on the head, not the author or this one; no CI: writers' comments count.
+/// The id of the enrolled reviewer key (never an owner key: the orchestrator holds one) whose valid signature `body` carries for exactly
+/// this repo, PR and head, with the text it signs. Delegate and signer keys never sign verdicts.
+fn signed_by_enrolled<'b>(
+    keys: &[ApproverKey],
+    repo: &RepoId,
+    pr: u64,
+    head: &str,
+    body: &'b str,
+) -> Option<(&'b str, String, &'b str)> {
+    let (text, id, sig) = split_signature(body)?;
+    let msg = signed_message(&repo.owner, &repo.name, pr, head, text);
+    let key = keys.iter().find(|k| k.id == id)?;
+    let ok = key.role == Role::Reviewer
+        && (b64::decode(&key.ed25519).zip(b64::decode(sig)))
+            .is_some_and(|(k, s)| verify_ed25519(&k, msg.as_bytes(), &s));
+    ok.then(|| (text, key.id.clone(), sig))
+}
+
+/// Sessions with a clean verdict on the head, not the author or this one. Without CI only a
+/// verdict signed by an enrolled reviewer key counts: never an App record (any writer's push
+/// workflow posts as `github-actions[bot]`), an owner, delegate or signer key, or a self-declared session.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
     // The author is the lease holder of a linked task (as in D-017); with none, nothing counts.
@@ -42,15 +63,27 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let models = review_models(gh, &pull.base_sha)?;
     let head = &pull.head_sha;
     let found = autonomous_clean(&comments, head, &excluded, models.as_deref());
-    if !found.is_empty() || provider_default(gh)? != CiProvider::None {
+    if provider_default(gh)? != CiProvider::None {
         return Ok(found);
     }
-    let mut kept = Vec::new();
+    // Without CI only an enrolled key's signature counts (D-019), never an App record (any
+    // writer's push workflow posts as `github-actions[bot]`), a comment or a session tag.
+    let keys = super::risk_check::enrolled_keys(gh).unwrap_or_default();
+    let (repo, pr) = (&app.ctx.repo, pull.number);
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    let mut kept: Vec<(&str, bool, String)> = Vec::new();
     for c in comments.iter().filter(|c| c.body.contains(COMMENT_MARKER)) {
-        if is_writer(gh, &c.user)? {
-            kept.push((c.body.as_str(), c.unedited()));
+        let Some((text, key, sig)) = signed_by_enrolled(&keys, repo, pr, head, &c.body) else {
+            continue;
+        };
+        // The same signature again is a replay: only its first posting counts.
+        let raw = b64::decode(sig).unwrap_or_default();
+        if !seen.contains(&raw) {
+            seen.push(raw);
+            kept.push((text, c.unedited(), key));
         }
     }
+    let kept = kept.iter().map(|(t, u, k)| (*t, *u, k.as_str()));
     // An approval must list every chunk of the review pack, as `verdict apply` requires.
     let pack = super::review_pack::build(gh, &app.ctx.repo.to_string(), pull.number, false)?;
     let chunks = pack["chunks"].as_array().map_or(0, Vec::len);
@@ -69,16 +102,18 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let gh = app.gh.as_ref();
     let (pr, head) = (pull.number, pull.head_sha.clone());
     let rerun = format!("bosun pr {n} --ready");
-    super::pr::check_local_gates(app, &rerun, &pull).map_err(|mut e| {
-        if e.data
-            .as_ref()
-            .is_some_and(|d| d.get("missing_gates").is_some())
-        {
-            e.exit = Exit::NeedsHuman;
-        }
-        e
-    })?;
-    let gates = super::stamps::ready_gates(&app.ctx.dir)?;
+    // What must pass comes from the default branch, not this checkout; `bosun merge` reruns it.
+    let required = super::stamps::ready_gates_at(gh)?;
+    let gates =
+        super::pr::check_local_gates(app, &rerun, &pull, Some(required)).map_err(|mut e| {
+            if e.data
+                .as_ref()
+                .is_some_and(|d| d.get("missing_gates").is_some())
+            {
+                e.exit = Exit::NeedsHuman;
+            }
+            e
+        })?;
     let mut data = json!({"pr": pr, "head_sha": head, "created": false, "auto_merge": false, "draft": pull.draft, "stamps": gates});
     let with = |e: BosunError, data: &Value| {
         let mut d = data.clone();
@@ -91,7 +126,12 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let risk = evaluate_local(app, &pull);
     let risk_data = match &risk {
         Ok(o) => o.data.clone(),
-        Err(e) if e.exit == Exit::NeedsHuman => e.data.clone().unwrap_or_default(),
+        Err(e)
+            if e.exit == Exit::NeedsHuman
+                && e.data.as_ref().is_some_and(|d| d["level"] == "high") =>
+        {
+            e.data.clone().unwrap_or_default()
+        }
         Err(e) => return Err(with(e.clone(), &data)),
     };
     let ids =
@@ -107,7 +147,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
             BosunError::needs_human(
                 format!("PR #{pr} has no clean verdict on head {head} from another session"),
                 format!(
-                    "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from -` (approve, no blocker or major), then rerun `{rerun}`"
+                    "a reviewer session runs `bosun review-pack {pr}` and posts `bosun verdict comment --from - --sign-key <reviewer.pem>` (approve, no blocker or major), then rerun `{rerun}`"
                 ),
             ),
             &data,

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
-use common::{bosun, lease_note, one_object};
+use common::{bosun, lease_note, noci, one_object};
 use serde_json::{Value, json};
 
 const NOW: &str = "2026-11-10T10:00:00Z";
@@ -865,7 +865,9 @@ fn verdict_comment(fake: &FakeGithub) {
     )
     .unwrap();
     let body = bosun::core::verdict::comment_body(&v, "session_rev", None);
-    fake.comment_by(1, "rev", &body);
+    // Without CI only a signed verdict (or the App's record) counts.
+    noci::enroll(fake);
+    fake.comment_by(1, "rev", &noci::sign(&body, "acme/widget", 1, HEAD));
 }
 
 /// `setup` with the reviewer's verdict as a comment only, not a record.
@@ -898,6 +900,22 @@ fn chat_no_ci_reads_verdict_comments() {
     let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(chat_comments(&fake).len(), 1);
+}
+
+#[test]
+fn chat_no_ci_refuses_an_unsigned_verdict() {
+    let tmp = repo();
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let fake = setup_comment_only(Some("[ci]\nprovider = \"none\"\n"));
+    fake.state
+        .lock()
+        .unwrap()
+        .comments
+        .retain(|c| !c.body.contains("bosun-sig"));
+    let text = noci::verdict_text(1, HEAD, "session_rev", "approve");
+    fake.comment_by(1, "rev", &text);
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    refused(&fake, r, 5);
 }
 
 #[test]

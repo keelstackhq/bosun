@@ -1,0 +1,1 @@
+- Chat approval T13: no-CI verdict trust (reviewer-key signatures only; App records never count, also not for D-017), base-branch required gates, recomputed approve board, no signing of relayed verdicts; spec 04 states what is verified and advisory.

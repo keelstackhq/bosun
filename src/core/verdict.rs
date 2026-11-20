@@ -192,6 +192,26 @@ pub fn relayed_comment_body(
     )
 }
 
+/// The last `bosun-sig ed25519 <id> <sig>` line of a signed verdict comment: the text it signs
+/// (everything before that line), the key id and the base64 signature.
+pub fn split_signature(body: &str) -> Option<(&str, &str, &str)> {
+    let at = body.rfind("\nbosun-sig ed25519 ")?;
+    let line = body[at + 1..].lines().next()?;
+    match line.trim().split(' ').collect::<Vec<_>>().as_slice() {
+        ["bosun-sig", "ed25519", id, sig] => Some((&body[..at], id, sig)),
+        _ => None,
+    }
+}
+
+/// The bytes an enrolled key signs for a verdict comment: its own prefix, the repo, PR and head,
+/// and the SHA-256 of the signed text, so the signature binds the whole verdict and nothing else.
+pub fn signed_message(owner: &str, repo: &str, pr: u64, head: &str, text: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
+    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    format!("bosun-verdict v1 {o}/{r}#{pr} {head} sha256:{hex}")
+}
+
 const MODEL_TAG: &str = "<!-- bosun:model ";
 
 /// The reviewer model a verdict comment declares (self-declared, like the session), if any.
@@ -270,19 +290,22 @@ pub fn comment_json(body: &str) -> Option<&str> {
     Some(fenced[..end.unwrap_or(fenced.len())].trim())
 }
 
-/// No-CI mode: sessions whose newest verdict comment on `pr` at `head` is clean (approve, confidence
-/// at least [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, all `chunks` listed), unedited,
-/// not `excluded`, of an allowed model. Any unclean newest verdict blocks all.
+/// No-CI mode: sessions whose verdict on `pr` at `head` is clean (approve, confidence at least
+/// [`VERDICT_MIN_CONFIDENCE`], no major, not escalated, all `chunks` listed), unedited, not
+/// `excluded`, of an allowed model. Each item is `(signed text, unedited, key id)`: the newest per
+/// key id counts, never per self-declared session tag, and any unclean verdict on the head, in any
+/// order, blocks all (a replayed older approval cannot outvote a rejection).
 pub fn comment_clean<'a>(
-    comments: impl IntoIterator<Item = (&'a str, bool)>,
+    comments: impl IntoIterator<Item = (&'a str, bool, &'a str)>,
     pr: u64,
     head: &str,
     excluded: &[String],
     models: Option<&[String]>,
     chunks: usize,
 ) -> Vec<String> {
-    let mut newest: Vec<(String, bool, bool)> = Vec::new();
-    for (body, unedited) in comments {
+    let mut newest: Vec<(String, String, bool)> = Vec::new();
+    let mut blocked = false;
+    for (body, unedited, key) in comments {
         let Some(v) = comment_json(body).and_then(|t| Verdict::parse(t).ok()) else {
             continue;
         };
@@ -296,19 +319,24 @@ pub fn comment_clean<'a>(
             && (chunks <= 1 || (1..=chunks as u32).all(listed))
             && v.count("major") == 0
             && v.confidence >= VERDICT_MIN_CONFIDENCE;
+        blocked |= !clean;
         let model_ok =
             models.is_none_or(|m| comment_model(body).is_some_and(|x| m.iter().any(|y| y == x)));
         let counts =
             unedited && model_ok && session != "unknown" && !excluded.iter().any(|e| e == session);
-        newest.retain(|(s, ..)| s != session);
-        newest.push((session.to_string(), clean, counts));
+        newest.retain(|(k, ..)| k != key);
+        newest.push((key.to_string(), session.to_string(), counts));
     }
-    if newest.iter().any(|(_, clean, _)| !clean) {
+    if blocked {
         return Vec::new();
     }
-    (newest.into_iter())
-        .filter_map(|(s, _, counts)| counts.then_some(s))
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    for (_, s, counts) in newest {
+        if counts && !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
 }
 
 /// A trusted bot's verdict without markers: the one top-level fenced ```json block that parses
