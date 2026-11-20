@@ -1,1 +1,0 @@
-- Bootstrap PRs are gate-neutral: profile key `base_requires` (rust deps: deny.toml) skips a gate whose config the base lacks; `--locked` gates without Cargo.lock fail with a `cargo generate-lockfile` fix; test-integrity allows deleted-test and fewer-tests when the base has no `.bosun/` or lists the file in base `.bosun/template-tests` (finding `reason`).

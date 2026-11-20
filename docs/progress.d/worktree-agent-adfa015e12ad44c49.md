@@ -1,1 +1,0 @@
-- 2026-11-20 · lenient prereqs, tokenless plan import, `pr --single` · plan import fixes sloppy prerequisite bullets (`--fix`) and runs offline; `bosun prereqs` defaults to `plans/*.md`; `bosun pr --single` · this PR
