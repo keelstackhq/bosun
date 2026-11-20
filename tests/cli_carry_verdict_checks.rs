@@ -88,6 +88,7 @@ fn world() -> FakeGithub {
         confidence: Some(0.95),
         major: Some(0),
         model: None,
+        relayed_by: None,
     };
     fake.comment_by(
         1,

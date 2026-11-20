@@ -21,7 +21,9 @@ review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, s
     status: str, additions: int, deletions: int, patch: str | null}], instructions: str,
     review_md: str | null, lessons: [str], ucs: [str], untrusted: [str], task: {..} | null,
     bundle_tasks: [{..}], note?: str, required_checks: [{context: str, state: str}] | null,
-    gate_stamps: {tree: str, present: [str], missing: [str]} | null};
+    gate_stamps: {tree: str, present: [str], missing: [str]} | null, chunk_count: int,
+    verdict_skeleton: {pr: int, head_sha: str, verdict: str, confidence: num, findings: [any],
+    lessons_hit: [str], escalate_risk: bool, chunks_reviewed: [int]}};
 ci-log = {pr: int, head_sha: str, jobs: [{name: str, conclusion: str, url: str, log: str}]};
 ask = {issue: int, comment_id: int, owners: [str], drafted: [int], pr_draft_error: str | null};
 hold = {issue: int, id: str, checklist: {number: int, url: str}, released: bool, drafted: [int],
@@ -152,7 +154,9 @@ gate = {gate?: str, stack?: str | null, command?: [str], packages?: [str], exit_
     secs?: num, over_budget?: bool, skipped?: bool, reason?: str, stamp?: str | null,
     uncommitted?: [str], files?: [str], findings?: [any], base?: str, files_checked?: int,
     integrity?: str, head_sha?: str, main_red?: int | null, mainfix?: bool, pass?: bool, pr?: int,
-    checks_skipped?: bool,
+    checks_skipped?: bool, mode?: str, app_id?: int | null, verified?: bool, gates?: [{context: str,
+    status: {state: str, creator: str} | null, app_run: {state: str, id: int} | null,
+    other_runs: int, state: str | null, trusted: bool, disagree: bool}],
     ci?: {base: str, event: str, provider: str}, runs?: [{gate: str, stack: str | null,
     command: [str], packages: [str], exit_status: int, secs: num, over_budget: bool,
     skipped: bool}]};
@@ -169,7 +173,8 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     ref?: str, ci_ok?: str, comment_id?: int, question_id?: str | null};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
-    approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
+    approval_carried_from: str | null, verdict_carried_from: str | null, verdict_reapplied: int | null,
+    requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
     delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool,
     verdict_cleared_by?: str};
@@ -178,9 +183,10 @@ review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, 
     | {pr: int, head_sha: str, step: str, rounds: int, max: int, findings: [{..}], reasons: [str], reason: str | null};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
-verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
+verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str, reviewer: str,
+    relayed_by?: str};
 verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
-    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}}
+    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}, relayed_by?: str}
     | {comment_id: int, author: str, refused: str, status: null};
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     task_state: str | null, ready?: bool | "pending", merged?: bool, epic_closed?: bool,

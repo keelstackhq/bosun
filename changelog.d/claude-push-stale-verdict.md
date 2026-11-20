@@ -1,1 +1,0 @@
-- push-gates (`[mode] push_gates = "push"`) warns, never denies, when the pushed branch's open PR has a verdict for an older head than the pushed commit, pointing at `bosun review-loop N`.

@@ -1,0 +1,1 @@
+- 2026-11-18 · Release 0.21.0 · version bump, CHANGELOG (#606, #622-#632, #645: autonomous self-mode, review-loop, verdict relay, gate sources, dual-mode readers, pnpm stack path) · release PR

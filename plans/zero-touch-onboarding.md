@@ -4,7 +4,7 @@ project: bosun
 
 Implements docs/superpowers/specs/2026-11-02-zero-touch-onboarding-design.md (spec §6, tasks
 B1-B7, H1, P1, P2, D1). Gated per D-013 (workflows, templates, governance, .bosun, approval code,
-secrets, environments, releases) is marked `risk: high` and stays at most 400 lines; the rest is
+secrets, environments, releases) is marked `risk: high` with no line cap (D-021); the rest is
 low risk. Cross-repo tasks name their repo in the title. Their PR is opened in that repo, and the
 bosun task only records it in `docs/cross-repo/<id>.md` (the plan format has no repo field).
 

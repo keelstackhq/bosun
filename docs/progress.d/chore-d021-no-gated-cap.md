@@ -1,0 +1,1 @@
+- 2026-11-19 · D-021 no gated cap · gated PRs have no line cap and may bundle: plan lint, wave, claim, `bosun pr --bundle` and risk-check (R-bundle) drop the 400-line, one-task, alone rule; chunked review stays · this PR
