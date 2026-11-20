@@ -114,6 +114,10 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     if args.name == "main-open" {
         return gates::main_open::run(dir, args.pr);
     }
+    // Read-only: who posted each gate context on the PR head (spec §15).
+    if args.name == "sources" {
+        return gates::sources::run(dir, args.pr);
+    }
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;

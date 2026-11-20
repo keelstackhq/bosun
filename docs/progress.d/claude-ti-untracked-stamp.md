@@ -1,1 +1,0 @@
-- 2026-11-18 · Fix test-integrity stamp · judges untracked files, stamps the working tree like every gate · fix PR

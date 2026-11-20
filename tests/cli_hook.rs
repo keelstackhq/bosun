@@ -899,9 +899,12 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "n=BOSUN_SESSION; export ${!n}=orch; xargs bosun merge 1",
         "BOSUN_SESSION=x bosun merge 1",
         "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
-        // Global, with a session_id in the hook input; until the allowance (t10b) every setter.
-        "BOSUN_SESSION=session_me/12 bosun claim 12",
-        "BOSUN_ORIGIN=routine bosun join",
+        // Global, with a session_id in the hook input: another session's id, a bad task, the
+        // allowance on a trusting command, unset and env -u without any merge.
+        "BOSUN_SESSION=session_other/12 bosun claim 12",
+        "BOSUN_SESSION=session_me/a/b bosun claim 12",
+        "BOSUN_SESSION=session_me/12 bosun merge 12",
+        "BOSUN_ORIGIN=routine bosun join --origin routine",
         "unset BOSUN_SESSION",
         "env -u BOSUN_ORIGIN bosun status",
         "echo ${!p*}",
@@ -918,6 +921,9 @@ fn bosun_merge_env_tamper_is_denied_through_the_hook() {
         "bosun merge 12",
         "cargo test",
         "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
+        "BOSUN_SESSION=session_me/12 bosun claim 12",
+        "export BOSUN_SESSION=session_me/12 && bosun heartbeat 12",
+        "BOSUN_ORIGIN=routine bosun join",
         "export AWS_SESSION_TOKEN=x && gh pr view 1",
         "rg -n BOSUN_SESSION src",
     ] {

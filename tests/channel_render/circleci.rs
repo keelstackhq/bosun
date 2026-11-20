@@ -482,6 +482,100 @@ fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
     assert!(d.path().join("out/package.json").exists());
 }
 
+/// As in bosun.yml: a PR that adds a ts-pnpm stack still has its lockfile audited through a `{}`
+/// stand-in package.json, removed right after deps; later gates see the PR's own.
+#[test]
+fn circleci_deps_audits_a_new_stacks_lockfile_through_a_stand_in() {
+    let Some(step) = job_step(&["ts-pnpm"], "", "bosun gates") else {
+        return;
+    };
+    let main = format!("echo a > a && {COMMIT}");
+    let pr = format!(
+        "git checkout -qb pr && echo pr > package.json && echo lock > pnpm-lock.yaml && {COMMIT}"
+    );
+    let stub = tempfile::tempdir().unwrap();
+    fs::write(stub.path().join("pnpm"), "#!/bin/sh\nexit 0\n").unwrap();
+    git_in(stub.path(), "chmod +x pnpm");
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let env = [
+        ("CIRCLE_BRANCH", "pr"),
+        ("BOSUN_TS_PATHS", "."),
+        ("PATH", path.as_str()),
+    ];
+    let (d, sum) = ci_repo(&main, &pr);
+    let (ok, log) = run_step(d.path(), &sum, &step, &env);
+    assert!(ok, "{log}");
+    assert_eq!(
+        log,
+        "gate test-integrity pr\ngate ci-minutes pr\ngate deps {}\ngate fmt pr\ngate lint pr\ngate test pr\n"
+    );
+    // Deps alone: the stand-in does not outlive it.
+    let (d, sum) = ci_repo(&main, &pr);
+    let mut only = env.to_vec();
+    only.push(("GATES", "deps"));
+    let (ok, log) = run_step(d.path(), &sum, &step, &only);
+    assert!(ok && log == "gate deps {}\n", "{log}");
+    assert!(!d.path().join("repo/package.json").exists());
+}
+
+/// As in bosun.yml: the pnpm steps follow the ts-pnpm stacks of the base's .bosun/bosun.toml, not
+/// the render's ts_path.
+#[test]
+fn circleci_pnpm_steps_follow_the_configured_ts_stack_paths() {
+    let job = text(&mode(&["ts-pnpm"], &["circleci"], ""), JOB).to_string();
+    assert!(
+        !job.contains("./pnpm-lock.yaml") && !job.contains("./package.json"),
+        "{job}"
+    );
+    assert!(job.contains("[ -n \"$BOSUN_TS_PATH\" ] || exit 0"), "{job}");
+    assert!(job.contains("for d in $BOSUN_TS_PATHS; do"), "{job}");
+    let Some(step) = job_step(&["ts-pnpm"], "", "the base's config for the gates") else {
+        return;
+    };
+    let toml = |p: &str| format!("[[stack]]\\npath = \"{p}\"\\nprofile = \"ts-pnpm\"\\n");
+    let main = format!(
+        "mkdir -p .bosun action && echo 1.2.3 > .bosun/version && printf '{}' > .bosun/bosun.toml && touch action/pnpm-lock.yaml && {COMMIT}",
+        toml("action")
+    );
+    // The PR moves the stack in its own bosun.toml: the base's path still counts.
+    let pr = format!(
+        "git checkout -qb pr && mkdir web && touch web/pnpm-lock.yaml && printf '{}' > .bosun/bosun.toml && {COMMIT}",
+        toml("web")
+    );
+    let (d, sum) = ci_repo(&main, &pr);
+    let env = d.path().join("bash_env");
+    let (ok, _) = run_step(
+        d.path(),
+        &sum,
+        &step,
+        &[("BASH_ENV", env.to_str().unwrap())],
+    );
+    assert!(ok);
+    assert_eq!(
+        fs::read_to_string(&env).unwrap(),
+        "export BOSUN_TS_PATHS='action' BOSUN_TS_PATH='action'\n"
+    );
+    let bad = "[[stack]]\\npath = \"../x\"\\nprofile = \"ts-pnpm\"\\n";
+    let main = format!(
+        "mkdir -p .bosun && echo 1.2.3 > .bosun/version && printf '{bad}' > .bosun/bosun.toml && {COMMIT}"
+    );
+    let (d, sum) = ci_repo(&main, "git checkout -qb pr");
+    let env = d.path().join("bash_env");
+    assert!(
+        !run_step(
+            d.path(),
+            &sum,
+            &step,
+            &[("BASH_ENV", env.to_str().unwrap())]
+        )
+        .0
+    );
+}
+
 #[test]
 fn the_circleci_toolchain_is_validated_and_pinned_for_later_steps() {
     let Some((script, _)) = job_step(&["rust"], "", "rust toolchain") else {

@@ -19,6 +19,7 @@ use crate::core::repeat::{Verdict as Repeat, is_poll, repeat_key, repeat_step, r
 use crate::core::stamps::gate_loop;
 use crate::core::touch::{is_plan_file, is_plan_tick};
 use crate::core::verdict::{Verdict, comment_json};
+use crate::ctx::own_session;
 use crate::github::IssueState;
 
 /// The deny output of the hook protocol.
@@ -97,7 +98,8 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     )
     .map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string())
     .unwrap_or_else(|| "main".into());
-    if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
+    if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default, &own_session()) {
+        // `own_session` is the ctx session id (the hook's input `session_id` is Claude's UUID).
         return Some(deny(&why));
     }
     if let Some(why) = answers_lock(tool, &tool_input) {

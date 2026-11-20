@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::{APPROVABLE, CONTEXT as VERDICT};
+use super::verdict::{APPROVABLE, CONTEXT as VERDICT, apply as apply_verdict, neutral_refusal};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve;
@@ -26,6 +26,7 @@ use crate::core::risk::{
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside, plan_tick_file};
+use crate::core::verdict::{Verdict, bot_verdict_json, comment_json, effective};
 use crate::core::weaken;
 use crate::ctx::{Ctx, RepoId};
 use crate::gates::{adapters, ts};
@@ -95,7 +96,7 @@ pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
             e.message
         );
     }
-    let out = judge(app.gh.as_ref(), &app.ctx, &w, pull.clone());
+    let out = judge(app.gh.as_ref(), &app.ctx, Some(&app), &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
         // The cleanup write must not fail on the time budget that stopped the run.
@@ -467,10 +468,11 @@ pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
 /// As [`evaluate_local`] with the client and context apart (the approve board has no `App`).
 pub fn evaluate_with(gh: &dyn Github, ctx: &Ctx, pull: &Pull) -> CmdResult {
     let w = GateWriter::statuses(gh).dry(true);
-    judge(gh, ctx, &w, pull.clone())
+    judge(gh, ctx, None, &w, pull.clone())
 }
 
-fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
+/// `app` is `None` for a local judge (no `App`, and its writer is dry): no verdict re-apply.
+fn judge(gh: &dyn Github, ctx: &Ctx, app: Option<&App>, w: &GateWriter, pull: Pull) -> CmdResult {
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
@@ -522,7 +524,23 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
     let mut task = None;
     let mut plan_high = Vec::new();
     let mut one_off = false;
-    for i in linked_issues_in(&pull.body, &ctx.repo.to_string()) {
+    // D-021: gated work may bundle, so every task the PR closes counts for R-plan: links in the
+    // body, and closing refs in the title and commit messages (GitHub reads all three). A
+    // commit list cut at GitHub's cap (the author can pad it) fails closed to the owner.
+    let repo = ctx.repo.to_string();
+    let mut linked = linked_issues_in(&pull.body, &repo);
+    let (extra, incomplete) = closing_refs_outside_body(gh, &pull, &repo)?;
+    for n in extra {
+        if !linked.contains(&n) {
+            linked.push(n);
+        }
+    }
+    if incomplete {
+        plan_high.push(format!(
+            "the PR has {COMMIT_CAP} or more commits: closing refs in later commits cannot be ruled out"
+        ));
+    }
+    for i in linked {
         let issue = gh.get_issue(i)?;
         let meta = issue.as_ref().and_then(task_meta);
         // The body is the author's: it can only add. The plan file on the base, reached through
@@ -541,7 +559,7 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
-    // The plan rates a task high on more than paths (D-016); the PR never rates lower.
+    // The plan rates a task high on more than paths (D-021: owner approval stays); the PR never rates lower.
     if !plan_high.is_empty() {
         matches.push(risk::Match {
             rule: "R-plan".into(),
@@ -612,11 +630,6 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
         })
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
-    matches.extend(risk::bundle_gated(
-        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &ctx.repo.to_string())?.count(),
-        &files,
-        &rules,
-    ));
     if let Some((_, evidence)) = revert_findings(gh, &rules, &pull, &pr_files)
         && !evidence.is_empty()
     {
@@ -815,6 +828,10 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
     w.post_full(head, CONTEXT, state, &description, &summary)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
     let carried = carry_status(gh, w, &pull, &linked);
+    // A green head with no review-verdict gets its own verdict comment applied (spec §8).
+    let reapplied = (passed && carried.is_none())
+        .then(|| app.and_then(|a| reapply_verdict(a, w, &pull)))
+        .flatten();
     // An owner's approval of this exact head also clears an escalated verdict (spec §7).
     // A low-risk head reads the owners' approval only when an escalation waits for it.
     let signer = need.signer_on;
@@ -841,7 +858,8 @@ fn judge(gh: &dyn Github, ctx: &Ctx, w: &GateWriter, pull: Pull) -> CmdResult {
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
-        "verdict_carried_from": carried, "approval_carried_from": carried_from});
+        "verdict_carried_from": carried, "approval_carried_from": carried_from,
+        "verdict_reapplied": reapplied});
     if cleared.is_some() {
         data["verdict_cleared_by"] = json!(cleared);
     }
@@ -1278,6 +1296,110 @@ fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) ->
     settle(gh, w, head, &text).then_some(h)
 }
 
+/// The newest verdict comment for exactly the head (any session), applied when it is an
+/// approval, bosun is not halted (and can tell) and the head has no `review-verdict` (a doubt
+/// counts as having one, our own withdrawal does not). A red verdict is left to verdict.yml. A
+/// neutrally refused comment is ignored, as verdict.yml ignores it (at most `MAX_IGNORED`).
+/// After each apply the comments are read again and a newer verdict is applied instead, for at
+/// most `REAPPLY_ROUNDS` applies; an unreadable list, a newer verdict that is no approval, or
+/// one still racing withdraws. Never an error.
+fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
+    let gh = app.gh.as_ref();
+    let head = pull.head_sha.as_str();
+    let blocked = || {
+        let top = crate::github::gate::gate_statuses(gh, head)
+            .ok()
+            .and_then(|l| l.into_iter().find(is_verdict));
+        !top.is_some_and(|s| s.description.starts_with(WITHDRAWN)) && has_verdict(gh, head)
+    };
+    if w.is_dry() || !matches!(halt_reason(gh), Ok(None)) || blocked() {
+        return None;
+    }
+    // Verdict comments for exactly this PR and head newer than `after`, newest first.
+    let newer = |after: u64| {
+        let mut comments = gh.list_comments(pull.number).ok()?;
+        comments.retain(|c| {
+            // As `verdict apply` reads it: a Bot's marker-less ```json verdict counts too.
+            let text = comment_json(&c.body).or_else(|| {
+                (c.user_type == "Bot")
+                    .then(|| bot_verdict_json(&c.body))
+                    .flatten()
+            });
+            let v = text.and_then(|t| Verdict::parse(t).ok());
+            c.id > after && v.is_some_and(|v| v.head_sha == head && v.pr == pull.number)
+        });
+        comments.sort_unstable_by_key(|c| std::cmp::Reverse(c.id));
+        Some(comments)
+    };
+    let withdraw = |why: &str| {
+        eprintln!("bosun: risk-check: verdict re-apply withdrawn: {why}");
+        if let Err(e) = w.post(head, VERDICT, "failure", &format!("{WITHDRAWN}{why}")) {
+            eprintln!(
+                "bosun: risk-check: cannot withdraw the re-apply: {}",
+                e.message
+            );
+        }
+        None
+    };
+    let (mut cands, mut ignored, mut stands, mut rounds) = (newer(0)?, Vec::new(), None, 0);
+    loop {
+        // An apply that failed (it may have posted) and was not replaced is withdrawn.
+        let done = |stands: Option<u64>| match stands {
+            None if rounds > 0 => withdraw("the last re-apply failed"),
+            s => s,
+        };
+        let Some(c) = cands.iter().find(|c| !ignored.contains(&c.id)) else {
+            return done(stands);
+        };
+        let id = c.id;
+        if rounds == REAPPLY_ROUNDS {
+            return withdraw("newer verdicts kept racing it");
+        }
+        let applied = match neutral_refusal(gh, c) {
+            Ok((Some(_), ..)) => None,
+            Ok((None, text, ..)) => {
+                let v = text.and_then(|t| Verdict::parse(t).ok());
+                if !v.is_some_and(|v| effective(&v).approve && !v.escalate_risk) {
+                    if rounds == 0 {
+                        return None; // verdict.yml owns red statuses and task moves
+                    }
+                    return withdraw("a newer verdict that is no approval raced it");
+                }
+                if rounds == 0 && blocked() {
+                    return None;
+                }
+                Some(apply_verdict(app, id).map(|o| !o.data["status"].is_null()))
+            }
+            Err(e) => Some(Err(e)),
+        };
+        match applied {
+            // Past a green, an unseen older candidate may be a racing request for changes.
+            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED && rounds > 0 => {
+                return withdraw("too many refused verdict comments to confirm it");
+            }
+            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED => return None,
+            None | Some(Ok(false)) => {
+                ignored.push(id);
+                continue;
+            }
+            Some(Ok(true)) => stands = Some(id),
+            Some(Err(e)) => {
+                eprintln!("bosun: risk-check: verdict comment {id}: {}", e.message);
+                stands = None;
+            }
+        }
+        rounds += 1;
+        cands = match newer(id) {
+            Some(c) => c,
+            None => return withdraw("cannot confirm no newer verdict raced it"),
+        };
+    }
+}
+
+const REAPPLY_ROUNDS: u32 = 3;
+const MAX_IGNORED: usize = 20;
+const WITHDRAWN: &str = "re-apply withdrawn: ";
+
 const CARRIED: &str = "carried from ";
 const UNSURE: &str = "carry withdrawn: could not confirm no verdict raced it";
 
@@ -1663,6 +1785,9 @@ fn chat_comment_by<'a>(
                 let Some(at) = parse_rfc3339(&c.created_at) else {
                     return false;
                 };
+                if !approve::question_fresh(r.question.as_deref(), at.0) {
+                    return false;
+                }
                 let before: Vec<Note> = (reg.notes.iter())
                     .filter(|n| n.id < c.id)
                     .cloned()
@@ -2054,4 +2179,27 @@ pub fn owner_comment<'a>(comments: &'a [Comment], owner: &str, head: &str) -> Op
             && c.by_user_token()
             && comment_approves(&c.body, head)
     })
+}
+
+/// GitHub lists at most this many commits of a PR.
+const COMMIT_CAP: usize = 250;
+
+/// Closing refs to this repo's issues in the PR title and commit messages, and whether the
+/// commit list hit GitHub's 250-commit cap. A commit that cannot be read (an API error, not
+/// the author's choice) is skipped; risk-check runs again on every push.
+fn closing_refs_outside_body(
+    gh: &dyn crate::github::Github,
+    pull: &crate::github::Pull,
+    repo: &str,
+) -> crate::app::Result<(Vec<u64>, bool)> {
+    let mut out = closing_issues_in(&pull.title, Some(repo));
+    let shas = gh.pull_commits(pull.number)?;
+    let incomplete = shas.len() >= COMMIT_CAP;
+    for sha in &shas {
+        if let Ok(Some(c)) = gh.commit(sha) {
+            out.extend(closing_issues_in(&c.message, Some(repo)));
+        }
+    }
+    out.dedup();
+    Ok((out, incomplete))
 }

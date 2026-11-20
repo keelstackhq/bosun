@@ -1,1 +1,1 @@
-- No-CI trust: a verdict counts only from the gate App or an enrolled owner/reviewer key (`bosun verdict comment --sign-key`), required gates come from the default branch, and `approve --list` recomputes readiness instead of trusting a summary.
+- No-CI trust: a verdict counts only from the gate App or an enrolled owner/reviewer key (`bosun verdict comment --sign-key`), required gates come from the default branch, and `approve --list` recomputes readiness instead of trusting a summary; `--sign-key` refuses a relayed body (exit 2), so a key signs only its own session's review.

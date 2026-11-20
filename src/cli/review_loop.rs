@@ -106,7 +106,14 @@ fn seen(
     let mut writers: HashMap<String, bool> = HashMap::new();
     let mut out: Vec<(String, Seen)> = Vec::new();
     for c in gh.list_comments(n)? {
-        let Some(mut verdict) = comment_json(&c.body).and_then(|t| Verdict::parse(t).ok()) else {
+        let Some(text) = comment_json(&c.body) else {
+            continue;
+        };
+        // What `verdict apply` refuses never counts, a counted approval too.
+        let Some(mut verdict) = Verdict::parse(text)
+            .ok()
+            .filter(|v| !super::verdict::counted_approval(v, text))
+        else {
             continue;
         };
         if verdict.chunks_reviewed.is_empty() {

@@ -171,7 +171,7 @@ fn detect_ci(root: &Path) -> &'static str {
 
 /// The first release whose config parser knows `[ci] provider` (spec §9). Keep in sync with the
 /// `ci` key in `KNOWN` of `tests/pinned_config.rs` and the minimum in spec §11.
-const CI_MIN: &str = "0.21.0";
+const CI_MIN: &str = "0.22.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
 fn policy_min(value: &str) -> &'static str {

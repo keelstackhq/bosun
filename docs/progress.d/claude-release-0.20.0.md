@@ -1,1 +1,0 @@
-- 2026-11-18 · Release 0.20.0 · version bump, CHANGELOG (#612-#617: gov paths, review flow, rules --write, agent ergonomics, cloud proxy, stamps) · release PR

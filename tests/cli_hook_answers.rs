@@ -245,13 +245,36 @@ fn newest_answer_wins_between_hold_and_approve() {
     post_at(r.path(), &question(&[(12, &h)], "Hold"), t1);
     let approve = later(question(&[(12, &h)], "Approve #12 abc1234"), "1792663201");
     post_at(r.path(), &approve, t2);
-    assert_eq!(list(&fake, r.path())["data"]["held"], json!([]));
+    assert_eq!(list_at(&fake, r.path(), t2)["data"]["held"], json!([]));
     let hold = later(question(&[(12, &h)], "Hold"), "1792663202");
     post_at(r.path(), &hold, t3);
+    assert_eq!(
+        list_at(&fake, r.path(), t3)["data"]["held"],
+        json!([{"pr": 12, "head_sha": h}])
+    );
+}
+
+#[test]
+fn a_future_dated_answer_never_outranks_a_later_one_and_is_pruned() {
+    let r = repo();
+    let fake = FakeGithub::start();
+    let h = head("abc1234");
+    ready(&fake, 12, &h);
+    // A hold stored by the hook now, then an approve hand-written into the file a year ahead.
+    post_at(r.path(), &question(&[(12, &h)], "Hold"), NOW);
+    let mut s = stored(r.path());
+    s["12-abc1234-1"] = json!({"answer": "approve", "repo": "acme/widget", "pr": 12,
+        "head": h, "at": "2027-10-22T10:00:00Z", "session": "session_x",
+        "cli_session_id": "c", "tool_use_id": "t"});
+    std::fs::write(answers_file(r.path()), s.to_string()).unwrap();
+    // The future approve does not count: the hold stays the newest answer.
     assert_eq!(
         list(&fake, r.path())["data"]["held"],
         json!([{"pr": 12, "head_sha": h}])
     );
+    // The next write prunes it.
+    post_at(r.path(), &question(&[(13, &head("def5678"))], "Hold"), NOW);
+    assert!(stored(r.path()).get("12-abc1234-1").is_none());
 }
 
 #[test]
@@ -477,8 +500,14 @@ fn ready(fake: &FakeGithub, n: u64, h: &str) {
 }
 
 fn list(fake: &FakeGithub, repo: &Path) -> Value {
+    list_at(fake, repo, NOW)
+}
+
+/// `approve --list` run at `now` (answers dated after `now` never count).
+fn list_at(fake: &FakeGithub, repo: &Path, now: &str) -> Value {
     let out = bosun()
         .current_dir(repo)
+        .env("BOSUN_NOW", now)
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_OWNER_TOKEN", "canary-owner-token-7f3a")
         .env("BOSUN_HTTP_MAX_SLEEP_MS", "0")

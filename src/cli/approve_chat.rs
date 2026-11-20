@@ -13,7 +13,7 @@ use crate::app::{App, Result, default_branch, kill_switch};
 use crate::cli::answer::valid_slack_id;
 use crate::cli::pr_no_ci::clean_by_other;
 use crate::cli::risk_check::{chat_enabled, owner_slack_ids};
-use crate::core::approve::{chat_comment, is_orchestrator, parse_target};
+use crate::core::approve::{chat_comment, is_orchestrator, parse_target, question_fresh};
 use crate::ctx::Origin;
 use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -114,9 +114,9 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
     // The child flag is read directly too: BOSUN_ORIGIN can relabel `ctx.origin`, the flag
     // Claude Code sets for a child session cannot be dropped by it.
     let child_flag = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| !v.trim().is_empty());
-    if child_flag || app.ctx.origin == Origin::Spawned {
+    if child_flag || matches!(app.ctx.origin, Origin::Spawned | Origin::Routine) {
         return Err(BosunError::needs_human(
-            "this session is a spawned child (CLAUDE_CODE_CHILD_SESSION set or BOSUN_ORIGIN=spawned); only an orchestrator records a chat approval",
+            "this session is a spawned child or a routine (CLAUDE_CODE_CHILD_SESSION set, or origin spawned or routine); only an orchestrator records a chat approval",
             "hand the PR to the orchestrator with `bosun handoff-pr`; it asks the owner and records the answer",
         ));
     }
@@ -141,6 +141,18 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
                 pull.head_sha
             ),
             "show the owner the new head and record it only on their new answer",
+        ));
+    }
+    // The record's comment is created about now: risk-check rejects a question id whose time
+    // is more than 60 s ahead or 14 days behind the comment, so refuse that here, not later.
+    let q = args.question.as_deref();
+    if !question_fresh(q, app.ctx.now.0) {
+        return Err(BosunError::needs_human(
+            format!(
+                "question {:?} has no unix time within the last 14 days (or is later than now); risk-check would not count the record, so nothing was recorded",
+                q.unwrap_or_default()
+            ),
+            ASK_AGAIN,
         ));
     }
     if clean_by_other(app, &pull)?.is_empty() {
@@ -172,8 +184,9 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
             let repo = app.ctx.repo.to_string();
             let named = q.starts_with(&format!("{pr}-{}-", &head[..7]));
             // The id must be an ask `approve --list` issued as a Slack post for this PR and head.
-            let issued = answers::asked(&app.ctx.dir, &repo, q)
-                .is_some_and(|a| a.pr == pr && a.head == head);
+            let issued = answers::asked(&app.ctx.dir, &repo, q).is_some_and(|a| {
+                a.pr == pr && a.head == head && !a.session.is_empty() && a.session == *session
+            });
             if !named || !issued || answers::held(&app.ctx.dir, &repo, pr, head) {
                 return Err(BosunError::needs_human(
                     format!(
