@@ -67,7 +67,15 @@ naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending 
 `Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
 than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
 `answer "approve <short>…"`. Nothing ready, no `next`. Only the orchestrator asks the owner (D-018):
-a spawned or routine session gets no `next`, only `data.handoff` (hand the question to the orchestrator) with `ask` kept. This is the per-PR form; the daily digest below is the batch form
+a spawned or routine session gets no `next`, only `data.handoff` (hand the question to the orchestrator) with `ask` kept.
+The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
+`.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
+`<git common dir>/bosun/answers.json` (`question_id -> {answer, repo, pr, head, at, session, cli_session_id, tool_use_id}`; `session` is the bosun identity the hook resolves the way the CLI does (`BOSUN_SESSION`, else the remote session id), `cli_session_id` and `tool_use_id` come from the hook input, for audit; head read from the `head <short> = <full>)` that ends the line before the marker, as `approve --list` writes it, so no title or verdict text can swap it; the PR number is plain digits, no sign or leading zero). Answers come from `tool_response.answers` only: `tool_input.answers` is written by the model and never read. A write drops entries older than 14 days and entries for another head of a stored PR (tmp file + rename). The file is a local record, not proof (trust option A: it stops confused workers, not liars); `approve --chat` (T5) must also see the same session as the answer's `session`. Only a line's trailing `[bosun:<id>]` counts, matched exactly (case-sensitive): a look-alike in a title, or anything after the marker, is no marker and stores nothing. A picked `Approve #<pr> <short>` stores
+`approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
+wins; multi-select with Hold and Approve stores a hold and approves nothing); an unpicked or unknown label (matched exactly) stores nothing. It never denies and prints nothing. `--list` moves a PR
+whose newest answer (by `at`; a hold wins a tie) at its current head is a hold to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
+head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head. `answers.json` is a local hint, never proof: the trust anchor is the signed record (opt-in `chat_signed`, a later PR). Each answer stores the `repo` (a PostToolUse answer for another repo never counts) and a non-empty `session` and `cli_session_id` (an answer without one is refused and nothing is stored). A corrupt `answers.json` is warned about on stderr, not used (no hold, no approval) and never reset.
+This is the per-PR form; the daily digest below is the batch form
 and reads only `data`.
 
 **Daily digest (§18, `approvals_batch = "daily"`).** For Claude-Tag-first repos the Slack kind `digest` (§10, opt-in) posts the owner-waiting PRs with GitHub links and the comment to approve with; Slack itself approves nothing. `bosun digest` (the orchestrator, once a day)
