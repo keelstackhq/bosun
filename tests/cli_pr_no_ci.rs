@@ -394,3 +394,18 @@ fn the_no_ci_path_reads_the_default_branch_not_the_head_or_the_pr_base() {
     let _ = ready(&fake, dir.path());
     assert!(summaries(&fake).is_empty());
 }
+
+/// The owner's chat answer drops the PR from the board at once, before `pr --ready` reruns.
+#[test]
+fn approve_list_no_ci_drops_chat_approved_without_rerun() {
+    let (fake, dir) = setup(true, Some(NO_CI));
+    verdict(&fake, "session_rev", "approve");
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+    fake.allow_anonymous_reads();
+    let head = fake.pull_head(20);
+    fake.compare_file(BASE, &head, ".github/workflows/ci.yml", "@@ -0,0 +1 @@\n+x");
+    chat(&fake);
+    let (code, v) = run(&fake, dir.path(), &["approve", "--list"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ready"], json!([]), "{v}");
+}

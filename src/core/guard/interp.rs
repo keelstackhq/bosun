@@ -333,6 +333,9 @@ pub(super) fn script_walk(
                 ));
             }
         };
+        if let Some(why) = super::identity_tamper(&code, "") {
+            return Some(format!("in the script `{path}`: {why}"));
+        }
         let line = code.lines().next().unwrap_or("");
         let shell =
             shell || path.ends_with(".sh") || path.ends_with(".bash") || shell_shebang(line);
@@ -358,6 +361,7 @@ mod tests {
             &json!({ "command": cmd }),
             &|_| Some("feature".into()),
             "main",
+            "",
         )
     }
 

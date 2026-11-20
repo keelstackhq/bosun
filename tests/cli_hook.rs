@@ -874,3 +874,60 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
         assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
     }
 }
+
+/// D-019, end to end through `bosun hook pre-tool-use`: any command that names an identity
+/// variable or drops the environment is denied, whether or not it is spelled `bosun merge`.
+#[test]
+fn bosun_merge_env_tamper_is_denied_through_the_hook() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let bash = |c: &str| {
+        // The input's session_id (Claude's UUID) is not the identity: the env session is.
+        let i = json!({"hook_event_name":"PreToolUse","session_id":"1b2c-uuid","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "export CLAUDE_CODE_CHILD_SESSION=0; bosun merge 1",
+        "export BOSUN_ORIGIN=local && bosun merge 1",
+        "unset CLAUDE_CODE_CHILD_SESSION; bosun merge 1",
+        "env -u CLAUDE_CODE_CHILD_SESSION bosun merge 1",
+        "env -i bosun merge 1",
+        "exec -c bosun merge 1",
+        "command env -i ${b}un merge 1",
+        "{ \\env - bosun merge 1; }",
+        "(export BOSUN_ORIGIN=local; ${b}un merge 1)",
+        "n=BOSUN_SESSION; export ${!n}=orch; xargs bosun merge 1",
+        "BOSUN_SESSION=x bosun merge 1",
+        "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
+        // Global, with a session_id in the hook input: another session's id, a bad task, the
+        // allowance on a trusting command, unset and env -u without any merge.
+        "BOSUN_SESSION=session_other/12 bosun claim 12",
+        "BOSUN_SESSION=session_me/a/b bosun claim 12",
+        "BOSUN_SESSION=session_me/12 bosun merge 12",
+        "BOSUN_ORIGIN=routine bosun join --origin routine",
+        "unset BOSUN_SESSION",
+        "env -u BOSUN_ORIGIN bosun status",
+        "echo ${!p*}",
+    ] {
+        let o = bash(c);
+        assert!(o.stdout.contains("deny"), "{c}: {}", o.stdout);
+        assert!(
+            o.stdout.contains("identity environment"),
+            "{c}: {}",
+            o.stdout
+        );
+    }
+    for c in [
+        "bosun merge 12",
+        "cargo test",
+        "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
+        "BOSUN_SESSION=session_me/12 bosun claim 12",
+        "export BOSUN_SESSION=session_me/12 && bosun heartbeat 12",
+        "BOSUN_ORIGIN=routine bosun join",
+        "export AWS_SESSION_TOKEN=x && gh pr view 1",
+        "rg -n BOSUN_SESSION src",
+    ] {
+        let o = bash(c);
+        assert!(!o.stdout.contains("deny"), "{c}: {}", o.stdout);
+    }
+}

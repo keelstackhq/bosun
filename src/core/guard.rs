@@ -172,15 +172,19 @@ const READ_ONLY_GITHUB: &[&str] = &[
 
 /// Label-lock and merge-lock; `None` allows the call. `branch_at` reads the checked-out branch
 /// of the directory a git command acts on (after `cd dir &&` and `git -C dir`), and
-/// `default_branch` is the repo's default branch.
+/// `default_branch` is the repo's default branch; `own` is the session id (identity allowance).
 pub fn tool_rules(
     tool: &str,
     input: &Value,
     branch_at: BranchAt,
     default_branch: &str,
+    own: &str,
 ) -> Option<String> {
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        if let Some(why) = identity_tamper(command, own) {
+            return Some(why);
+        }
         return bash_rules(command, branch_at, default_branch);
     }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
@@ -566,6 +570,100 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
          (bosun prereqs --post writes the checklist); fix the plan instead"
             .to_string()
     })
+}
+
+const IDENTITY_FIX: &str = "the identity environment must not be touched (D-019): no setting, unsetting, exporting or reading by name of BOSUN_SESSION, BOSUN_ORIGIN, CLAUDE_CODE_CHILD_SESSION or CLAUDE_CODE_REMOTE_SESSION_ID, no `${!x}`, no `env -i`, `env -`, `exec -c`; only `BOSUN_SESSION=<your session>/<task>` and `BOSUN_ORIGIN=routine` on a command that is not bosun merge, approve, verdict or join --origin";
+const IDENTITY: &str =
+    "BOSUN_SESSION BOSUN_ORIGIN CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_REMOTE_SESSION_ID";
+
+/// The `<task>` of a `BOSUN_SESSION` value `<own>/<task>` (`[A-Za-z0-9._-]+`).
+pub fn task_of<'a>(value: &'a str, own: &str) -> Option<&'a str> {
+    let task = value.strip_prefix(own)?.strip_prefix('/')?;
+    let ok = |c: char| c.is_ascii_alphanumeric() || "._-".contains(c);
+    (!own.is_empty() && !task.is_empty() && task.chars().all(ok)).then_some(task)
+}
+
+/// D-019, everywhere (stops confused workers, not liars; spec 04): refuses `NAME=v`, or a name
+/// beside a verb (export, unset, env, read, ...), for the four identity names, any `${!`, and
+/// `env -i`, `env -`, `exec -c`; git, gh, rg, grep, echo text passes. Allowed: `BOSUN_SESSION=
+/// <own>/<task>` and `BOSUN_ORIGIN=routine` (prefix or one `export`) when `own` is set and the
+/// text has no `$`, `--origin`, merge, approve or verdict.
+fn identity_tamper(text: &str, own: &str) -> Option<String> {
+    let plain: String = text.chars().filter(|c| !"'\"\\".contains(*c)).collect();
+    let named = |w: &str| IDENTITY.split(' ').any(|n| w.contains(n));
+    let setter = |w: &str| w.split_once('=').is_some_and(|(n, _)| named(n));
+    let allowed = |w: &str| match w.split_once('=') {
+        Some(("BOSUN_SESSION", v)) => task_of(v, own).is_some(),
+        Some(("BOSUN_ORIGIN", v)) => v == "routine",
+        _ => false,
+    };
+    let no = ["$", "--origin", "merge", "approve", "verdict"];
+    let may = !own.is_empty() && !no.iter().any(|w| plain.contains(w));
+    let among = |list: &str, w: &str| list.split(' ').any(|c| c == base(w));
+    let verb = |w: &str| {
+        among(
+            "export unset declare typeset readonly local printf read env eval",
+            w,
+        )
+    };
+    let mut bad = plain.contains("${!");
+    for seg in plain.split([';', '&', '|', '\n']) {
+        let split = |c: char| c.is_whitespace() || "()`".contains(c);
+        let t: Vec<&str> = seg.split(split).filter(|w| !w.is_empty()).collect();
+        let first = t.iter().position(|w| !w.contains('='));
+        let quiet = first == Some(0)
+            && among("git gh rg grep echo", t[0])
+            && !seg.contains("$(")
+            && !seg.contains('`');
+        let ids: Vec<_> = t.iter().filter(|w| named(w)).collect();
+        let hit = !quiet
+            && (t.iter().any(|w| setter(w)) || (!ids.is_empty() && t.iter().any(|w| verb(w))));
+        let clean = ids.iter().all(|w| allowed(w))
+            && t.iter().filter(|w| verb(w)).all(|w| base(w) == "export")
+            && !t.contains(&"-n");
+        bad |= hit && !(may && clean);
+        bad |= t.iter().enumerate().any(|(i, w)| match base(w) {
+            "env" => drops_env(&t[i + 1..], 'i'),
+            "exec" => drops_env(&t[i + 1..], 'c'),
+            _ => {
+                first == Some(i)
+                    && w.contains('$')
+                    && ['i', 'c'].iter().any(|b| drops_env(&t[i + 1..], *b))
+            }
+        });
+    }
+    bad.then(|| IDENTITY_FIX.to_string())
+}
+
+/// Whether the options of `env` (`bad` = `i`) or `exec` (`c`) drop the environment.
+fn drops_env(args: &[&str], bad: char) -> bool {
+    let mut it = args.iter();
+    while let Some(&a) = it.next() {
+        if a == "-" || (bad == 'i' && long_prefix(a, "--ignore-environment", 3)) {
+            return true;
+        }
+        if a.starts_with("--") {
+            let takes = ["--unset", "--chdir", "--argv0"];
+            if !a.contains('=') && takes.iter().any(|f| long_prefix(a, f, 3)) {
+                it.next();
+            }
+        } else if let Some(c) = a.strip_prefix('-') {
+            for (n, ch) in c.char_indices() {
+                if ch == bad {
+                    return true;
+                }
+                if "uCa".contains(ch) {
+                    if n + 1 == c.len() {
+                        it.next();
+                    }
+                    break;
+                }
+            }
+        } else if !a.contains('=') {
+            return false;
+        }
+    }
+    false
 }
 
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
@@ -4353,6 +4451,7 @@ mod tests {
             &json!({ "command": cmd }),
             &|_| Some(branch.into()),
             "main",
+            "",
         )
     }
 
@@ -4685,6 +4784,32 @@ mod tests {
         assert!(bash("git commit -m x", "main").is_some());
     }
 
+    /// D-019: `bosun merge` (it checks the orchestrator and the gates itself) is allowed; every
+    /// other merge path stays refused (the MCP merge tool: `read_only_github_tools_skip_the_label_lock`).
+    #[test]
+    fn guard_allows_bosun_merge_denies_gh_merge() {
+        for cmd in [
+            "bosun merge 12",
+            "bosun merge 12 --method rebase",
+            "bosun -C . merge 3",
+        ] {
+            assert!(bash(cmd, "feature").is_none(), "{cmd}");
+            assert!(bash(cmd, "main").is_none(), "{cmd}");
+        }
+        for cmd in [
+            "gh pr merge 12 --squash",
+            "gh api -X PUT repos/o/r/pulls/12/merge -f sha=abc",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge",
+            "bosun merge 12 && gh pr merge 12",
+            "BOSUN_SESSION=orch bosun merge 12",
+            "BOSUN_ORIGIN=local bosun merge 12",
+            "CLAUDE_CODE_CHILD_SESSION=0 bosun merge 12",
+            "env BOSUN_ORIGIN=local bosun merge 12",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+    }
+
     /// The hook's directory is on `main`; `/wt` (and anything below `-C /wt`) is a worktree on
     /// `feature`. Returns the options the rule asked about, and its verdict.
     fn in_worktree(cmd: &str) -> (Vec<Vec<String>>, Option<String>) {
@@ -4696,7 +4821,7 @@ mod tests {
                 .any(|o| o == "/wt" || o.ends_with("=/wt/.git") || o.ends_with("=/wt"));
             Some(if wt { "feature" } else { "main" }.to_string())
         };
-        let why = tool_rules("Bash", &json!({ "command": cmd }), &branch_at, "main");
+        let why = tool_rules("Bash", &json!({ "command": cmd }), &branch_at, "main", "");
         (asked.into_inner(), why)
     }
 
@@ -4721,9 +4846,9 @@ mod tests {
         // A moved target git cannot read (a failed `cd`) leaves git in the start dir.
         let none = |_: &[String]| None;
         let cmd = json!({"command": "cd /missing; git commit -m x"});
-        assert!(tool_rules("Bash", &cmd, &none, "main").is_some());
+        assert!(tool_rules("Bash", &cmd, &none, "main", "").is_some());
         let cmd = json!({"command": "git commit -m x"});
-        assert_eq!(tool_rules("Bash", &cmd, &none, "main"), None);
+        assert_eq!(tool_rules("Bash", &cmd, &none, "main", ""), None);
     }
 
     #[test]
@@ -6103,7 +6228,7 @@ mod tests {
 
     #[test]
     fn read_only_github_tools_skip_the_label_lock() {
-        let call = |tool: &str, input: Value| tool_rules(tool, &input, &|_| None, "main");
+        let call = |tool: &str, input: Value| tool_rules(tool, &input, &|_| None, "main", "");
         let ready = json!({"labels": ["bosun:state/ready"], "state": "OPEN"});
         for tool in [
             "mcp__github__list_issues",
@@ -6491,28 +6616,34 @@ mod tests {
         assert!(bash("gh issue edit 4 --add-label bosun:state/merged", "x").is_some());
         assert_eq!(bash("bosun claim 4 # bosun:state/claimed", "x"), None);
         let mcp = json!({"issue_number": 4, "labels": ["bosun:state/queued"]});
-        assert!(tool_rules("mcp__github__issue_write", &mcp, &|_| None, "main").is_some());
+        assert!(tool_rules("mcp__github__issue_write", &mcp, &|_| None, "main", "").is_some());
         let other = json!({"issue_number": 4, "labels": ["bug"]});
         assert_eq!(
-            tool_rules("mcp__github__issue_write", &other, &|_| None, "main"),
+            tool_rules("mcp__github__issue_write", &other, &|_| None, "main", ""),
             None
         );
         // Prose that names a state label is not a label edit.
         let pr = json!({"title": "x", "body": "moves tasks to bosun:state/ready after merge"});
         assert_eq!(
-            tool_rules("mcp__github__create_pull_request", &pr, &|_| None, "main"),
+            tool_rules(
+                "mcp__github__create_pull_request",
+                &pr,
+                &|_| None,
+                "main",
+                ""
+            ),
             None
         );
         // Label fields at any depth, and label tools on their whole input, are still refused.
         let nested = json!({"issue": {"Labels": [{"name": "bosun:state/merged"}]}});
-        assert!(tool_rules("mcp__github__issue_write", &nested, &|_| None, "main").is_some());
+        assert!(tool_rules("mcp__github__issue_write", &nested, &|_| None, "main", "").is_some());
         let tool = json!({"name": "bosun:state/merged"});
-        assert!(tool_rules("mcp__github__update_label", &tool, &|_| None, "main").is_some());
+        assert!(tool_rules("mcp__github__update_label", &tool, &|_| None, "main", "").is_some());
         for t in [
             "mcp__github__merge_pull_request",
             "mcp__github__enable_pr_auto_merge",
         ] {
-            let why = tool_rules(t, &json!({}), &|_| None, "main").unwrap();
+            let why = tool_rules(t, &json!({}), &|_| None, "main", "").unwrap();
             assert!(why.contains("D13"));
             assert!(why.contains("bosun pr --pr <n> --auto-merge"), "{why}");
         }
@@ -6669,8 +6800,8 @@ mod tests {
         ("declare -p", true), ("declare -x", true), ("typeset -p", true), ("typeset -x", true),
         ("compgen -e", true), ("compgen -v", true), ("ps e", true), ("ps eww", true), ("ps -E", true),
         ("ps axe", true), ("echo ${!SOPS*}", true), ("v=SOPS_AGE_KEY; echo ${!v}", true),
-        ("for i in \"${!pkgs[@]}\"; do echo \"package $i\"; done", false),
-        ("echo \"${!prefix@}\" # usage", false), ("git grep SOPS_AGE_KEY", false),
+        ("for i in \"${!pkgs[@]}\"; do echo \"package $i\"; done", true),
+        ("echo \"${!prefix@}\" # usage", true), ("git grep SOPS_AGE_KEY", false),
         ("git log -S SOPS_AGE_KEY --oneline", false), ("git log --grep 'SOPS_AGE_KEY' --oneline", false),
         ("gh search code SOPS_AGE_KEY", false), ("sed -n s/SOPS_AGE_KEY//p f", true),
         ("gh api repos/o/r/environments/prod/secrets/SOPS_AGE_KEY", false),
@@ -7235,6 +7366,111 @@ mod tests {
         assert!(edit("/root/.claude/projects/p/s.jsonl"));
         assert!(edit("~/.claude/projects/p/../q/s.jsonl"));
         assert!(!edit("/r/.claude/settings.json"));
+    }
+
+    #[test]
+    fn merge_env_tamper_is_refused_in_every_spelling() {
+        let hit = |c: &str| {
+            tool_rules(
+                "Bash",
+                &json!({"command": c}),
+                &|_| Some("feature".into()),
+                "main",
+                "session_o",
+            )
+            .is_some()
+        };
+        for c in [
+            "export BOSUN_SESSION=x && bosun merge 1",
+            "BOSUN_SESSION=x bosun merge 1",
+            "export CLAUDE_CODE_CHILD_SESSION= ; bosun merge 1",
+            "unset CLAUDE_CODE_CHILD_SESSION && \\bosun merge 1",
+            "CLAUDE_CODE_REMOTE_SESSION_ID=o command bosun merge 1",
+            "bash -c 'unset CLAUDE_\"CODE\"_CHILD_SESSION; bosun merge 1'",
+            "env -u CLAUDE_CODE_CHILD_SESSION nice bosun merge 1",
+            "n=BOSUN_SESSION; export ${!n}=x",
+            "echo ${!x}",
+            "env -i claim",
+            "exec -c ls",
+            "${b}un merge 1; env -i x",
+            "env -i bosun merge 1",
+            "\\env -i bosun merge 1",
+            "/usr/bin/env -i bosun merge 1",
+            "env -iu X bosun merge 1",
+            "env -u X -i bosun merge 1",
+            "env -u X -C /r -i bosun merge 1",
+            "env FOO=1 -i bosun merge 1",
+            "env --ignore-environment bosun merge 1",
+            "env --ignore-env bosun merge 1",
+            "env - bosun merge 1",
+            "env -0i bosun merge 1",
+            "exec -c bosun merge 1",
+            "exec -a x -c bosun merge 1",
+            "exec -cl bosun merge 1",
+            "command env -i bosun merge 1",
+            "nice env -i bosun merge 1",
+            "xargs env -i bosun merge 1",
+            "(env -i bosun merge 1)",
+            "{ env -i bosun merge 1; }",
+            "$(which env) -i bosun merge 1",
+            "e=env; $e -i bosun merge 1",
+            "e=env; \"$e\" - bosun merge 1",
+            "bash -c 'env -i bosun merge 1'",
+            "echo x | env -i bosun merge 1",
+            // Global: no merge needed. Another session, a bad task, no task, and the allowance
+            // on a trusting command are refused.
+            "BOSUN_SESSION=session_x/12 bosun claim 12",
+            "BOSUN_SESSION=session_o/a/b bosun claim 12",
+            "BOSUN_SESSION=session_o/ bosun claim 12",
+            "BOSUN_SESSION=session_o bosun claim 12",
+            "BOSUN_SESSION=session_o/12 bosun merge 12",
+            "BOSUN_SESSION=session_o/12 bosun approve --chat",
+            "BOSUN_SESSION=session_o/12 bosun verdict post",
+            "BOSUN_ORIGIN=routine bosun join --origin routine",
+            "BOSUN_ORIGIN=local bosun join",
+            "export BOSUN_SESSION=session_o/12 && bosun merge 1",
+            "export BOSUN_SESSION=$SID; bosun pr 12",
+            "unset BOSUN_SESSION",
+            "export -n BOSUN_SESSION",
+            "env -u BOSUN_ORIGIN bosun status",
+            "declare -x BOSUN_ORIGIN=local",
+            "readonly CLAUDE_CODE_CHILD_SESSION=",
+            "printf -v BOSUN_SESSION x",
+            "read BOSUN_SESSION",
+            "echo ${!p*}",
+            "echo ${!p@}",
+            "echo ${!a[@]}",
+            "echo ${!n}",
+            "echo hi; BOSUN_ORIGIN=local true",
+            "echo $(unset BOSUN_SESSION)",
+        ] {
+            assert!(hit(c), "{c}");
+        }
+        for ok in [
+            "bosun merge 12",
+            "cargo test",
+            "git status",
+            "BOSUN_NOW=2026-01-01T00:00:00Z bosun x",
+            "BOSUN_GITHUB_API=http://x bosun status",
+            "env FOO=1 grep -i x f",
+            "env -u FOO bosun merge 1",
+            "env -C /r ls -i",
+            "exec ls -c",
+            "export PATH=/r/target/debug:$PATH && bosun merge 1",
+            "cd /r && bosun merge 1 2>&1 | jq .data",
+            "git log -i --grep x; \\bosun merge 1 | grep -i ok",
+            "BOSUN_SESSION=session_o/12 bosun claim 12",
+            "export BOSUN_SESSION=session_o/12 && bosun heartbeat 12",
+            "BOSUN_ORIGIN=routine bosun join",
+            "export AWS_SESSION_TOKEN=x && gh pr view 1",
+            "echo $BOSUN_ORIGIN; bosun merge 1",
+            "rg -n BOSUN_SESSION src && sed -n 1,5p x",
+            "grep -rn 'unset CLAUDE_CODE_CHILD_SESSION' docs",
+            "git commit -m 'unset BOSUN_SESSION in the merge docs'",
+            "echo $DBUS_SESSION_BUS_ADDRESS $AWS_SESSION_TOKEN $TMUX_SESSION; bosun merge 1",
+        ] {
+            assert!(!hit(ok), "{ok}");
+        }
     }
 
     #[test]
