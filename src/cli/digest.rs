@@ -217,16 +217,13 @@ fn summary(app: &App, items: &[Item], asks: &[(u64, String)]) -> Result<Value, B
     .filter(|p| recent(&p.merged_at))
     .collect();
     merged.sort_by_key(|p| p.number);
-    let released = match app.gh.latest_release() {
-        Ok(Some(r)) if recent(&r.published_at) => {
-            vec![json!({"tag": r.tag_name, "published_at": r.published_at})]
-        }
-        Ok(_) => Vec::new(),
+    let released = match app.gh.list_releases() {
+        Ok(list) => (list.iter())
+            .filter(|r| recent(&r.published_at))
+            .map(|r| json!({"tag": r.tag_name, "published_at": r.published_at}))
+            .collect(),
         Err(e) => {
-            eprintln!(
-                "bosun: digest: cannot read the latest release: {}",
-                e.message
-            );
+            eprintln!("bosun: digest: cannot read the releases: {}", e.message);
             Vec::new()
         }
     };

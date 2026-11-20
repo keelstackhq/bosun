@@ -190,6 +190,8 @@ pub trait Github {
     fn repo_owner(&self) -> &str;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
+    /// The newest releases (first page, up to 30), newest first; a repo with none gives none.
+    fn list_releases(&self) -> Result<Vec<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
     fn required_status_checks(&self, branch: &str) -> Result<Live>;
     /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
@@ -470,6 +472,13 @@ impl Github for LiveGithub {
         match self.http.get_json(&self.path("/releases/latest"))? {
             Some(v) => Ok(Some(self.parse("release", v)?)),
             None => Ok(None),
+        }
+    }
+
+    fn list_releases(&self) -> Result<Vec<Release>> {
+        match self.http.get_json(&self.path("/releases?per_page=30"))? {
+            Some(Value::Array(a)) => a.into_iter().map(|v| self.parse("release", v)).collect(),
+            _ => Ok(Vec::new()),
         }
     }
 

@@ -296,16 +296,25 @@ High-risk PRs:
   - Halt: in risk-check, if `halt_reason` says halted or cannot tell (a read error), the
     signature does not count (reason on stderr); `approve` refuses with exit 4 as everywhere.
   - Trust root (`risk::TRUST_ROOT`, `trust_root_changed`; always the owner's own GitHub approval
-    or chat approval): `.bosun/approvers.toml` (who may sign), `.bosun/bosun.toml` and, only
-    where `src/cli/risk_check.rs` exists at the base (bosun's own repo), `src/core/risk.rs`
-    (holds this list), `src/core/approve.rs` (signed messages, `verify_ed25519`, `Policy`) and
+    or chat approval): `.bosun/approvers.toml` (who may sign), `.bosun/bosun.toml`,
+    `.github/workflows/risk.yml` and `**/workflows/risk.yml*` (the workflow that picks and runs
+    the judging binary, channel template copies too) and, only where `src/cli/risk_check.rs`
+    exists at the base (bosun's own repo), `src/core/risk.rs`
+    (holds this list), `src/core/approve.rs` (signed messages, `verify_ed25519`, `Policy`),
+    `src/core/glob.rs` (path matching), `src/core/mode.rs` (`preset_policy`), `src/config.rs`
+    (policy parse), `src/cli/approve.rs` (signer gate), `src/core/records.rs` (verdict record
+    parsing), `src/github/gate.rs` (status posting) and
     `src/cli/risk_check.rs` (signature checks and the quorum gate). `.bosun/bosun.toml` matches
     as a whole file: a table-level diff (only `[approvals]`) is not done, so any edit of it
     needs the owner (the owner's PR is also R-weaken for `approvals.*`). A rename counts on both
     sides, any case, and a `..` segment is a hit. The list is compiled into the binary that
     judges the PR; the risk workflow runs the base pin, and the policy is read from the base
-    config, so a PR cannot widen or narrow it. A change of the list ships in a release, and the
-    pin-bump PR that adopts it is judged by the old binary.
+    config, so a single PR cannot widen or narrow it. A change of the list ships in a release, and
+    the pin-bump PR that adopts it is judged by the old binary.
+  - Accepted residual risk: `.bosun/version` is not trust root (that would make every pin bump
+    owner-only). A quorum-merged release plus a pin bump could change the judging binary. This is
+    mitigated by every judging file above being trust root, two independent reviewers, and
+    `bosun halt`.
   - Why `mode = "autonomous"` can map to quorum: base config plus the base-pinned binary judge
     each PR, so the switch takes effect only after an owner-approved pin bump (the bump PR is
     judged under the old autonomous policy, where `.bosun/**` is owner-only); before that, the

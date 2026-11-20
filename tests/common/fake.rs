@@ -104,6 +104,8 @@ pub struct State {
     pub release: Option<String>,
     /// `published_at` of the latest release, if set.
     pub release_at: Option<String>,
+    /// Further releases `GET /releases` lists after the latest: `(tag, published_at)`.
+    pub more_releases: Vec<(String, String)>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
     /// Repository permission by login; a login not listed has `write`.
@@ -677,6 +679,12 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         s.release = Some(tag.into());
         s.release_at = Some(at.into());
+    }
+
+    /// An additional release in the `GET /releases` list (the latest stays `release_published`).
+    pub fn release_also(&self, tag: &str, at: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.more_releases.push((tag.into(), at.into()));
     }
 
     pub fn release(&self, tag: &str) {
@@ -1593,6 +1601,17 @@ fn route(
                 v[k] = x.clone();
             }
             ok(v)
+        }
+        ("GET", ["releases"]) => {
+            let mut v: Vec<Value> = (s.release.iter())
+                .map(|t| json!({"tag_name": t, "published_at": s.release_at}))
+                .collect();
+            v.extend(
+                s.more_releases
+                    .iter()
+                    .map(|(t, at)| json!({"tag_name": t, "published_at": at})),
+            );
+            ok(Value::Array(v))
         }
         ("GET", ["releases", "latest"]) => match &s.release {
             Some(t) => ok(json!({"tag_name": t, "published_at": s.release_at})),

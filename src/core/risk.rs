@@ -1080,18 +1080,35 @@ pub fn autonomous_excluded(
 /// (only `[approvals]`) is not done, so any edit of the file needs the owner.
 ///
 /// The list is compiled into the binary that judges the PR. The risk workflow runs the base
-/// pin, so a PR cannot widen or shrink it for itself; a change to it lands with a pin bump the
-/// old binary judges (under the old policy, `.bosun/**` is owner-only).
-pub const TRUST_ROOT: [&str; 5] = [
+/// pin, so a single PR cannot widen or shrink it for itself; a change to it lands with a pin
+/// bump the old binary judges (under the old policy, `.bosun/**` is owner-only).
+///
+/// It names every file that chooses or runs the judging code: the risk workflow (also a channel
+/// template copy, `**/workflows/risk.yml*`) everywhere, and in bosun itself the glob matcher,
+/// mode presets, config parse, signer gate, verdict record parsing and status posting.
+///
+/// Accepted residual risk: `.bosun/version` is NOT listed (it would make every pin bump
+/// owner-only). A quorum-merged release plus a pin bump could change the judging binary; this is
+/// mitigated by every judging file above being trust root, two independent reviewers, and
+/// `bosun halt`.
+pub const TRUST_ROOT: [&str; 13] = [
     ".bosun/approvers.toml",
     ".bosun/bosun.toml",
+    ".github/workflows/risk.yml",
+    "**/workflows/risk.yml*",
     // Only in bosun's own repo (`bosun_code`): the code that holds this list and verifies signatures.
     "src/core/risk.rs",
     "src/core/approve.rs",
     "src/cli/risk_check.rs",
+    "src/core/glob.rs",
+    "src/core/mode.rs",
+    "src/config.rs",
+    "src/cli/approve.rs",
+    "src/core/records.rs",
+    "src/github/gate.rs",
 ];
 /// How many of [`TRUST_ROOT`] apply in every repo (the rest only where `bosun_code` is true).
-const TRUST_ROOT_EVERYWHERE: usize = 2;
+const TRUST_ROOT_EVERYWHERE: usize = 4;
 /// Counting verdicts from different sessions a quorum approval needs (D-022). One verdict's bar is
 /// [`VERDICT_MIN_CONFIDENCE`] (0.9), stricter than D-022's 0.85; it stays 0.9.
 pub const QUORUM_VERDICTS: usize = 2;
@@ -1314,7 +1331,7 @@ fn verdict_sessions<'a>(
             && !session.is_empty()
             && session != "unknown"
             && !is_bot_session(&session)
-            && !excluded.contains(&session)
+            && !excluded.iter().any(|e| same_session(e, &session))
         {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
             // A newest record relayed by an excluded session withdraws, never counts.
@@ -1336,8 +1353,24 @@ fn verdict_sessions<'a>(
 /// author). Wave agents share their orchestrator's session id (spec §4), so `S` and `S/task`
 /// are the same session here: fail closed.
 pub(crate) fn relayer_excluded(relayer: Option<&str>, excluded: &[String]) -> bool {
-    let root = |s: &str| s.split('/').next().unwrap_or_default().to_string();
-    relayer.is_some_and(|r| excluded.iter().any(|e| root(e) == root(r)))
+    relayer.is_some_and(|r| excluded.iter().any(|e| same_session(e, r)))
+}
+
+/// Whether two session ids share a root (`S` and `S/task` are one session, spec §4).
+fn same_session(a: &str, b: &str) -> bool {
+    a.split('/').next() == b.split('/').next()
+}
+
+/// One session id per root, the first seen: the quorum (D-022) counts sessions, and wave agents
+/// `S/r1`, `S/r2` are one session.
+pub fn distinct_roots(sessions: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in sessions {
+        if !out.iter().any(|o| same_session(o, &s)) {
+            out.push(s);
+        }
+    }
+    out
 }
 
 const CARGO_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
@@ -2736,6 +2769,51 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             assert_eq!(t(&[("src/z.rs", Some(f))], true).len(), 1, "{f}");
         }
         assert!(t(&[("src/core/risk_other.rs", None)], true).is_empty());
+        // The risk workflow and its channel template copies count in every repo, any case.
+        for f in [
+            ".github/workflows/risk.yml",
+            ".GITHUB/Workflows/RISK.yml",
+            "channel/pieces/core/files/.github/workflows/risk.yml.jinja",
+        ] {
+            assert_eq!(t(&[(f, None)], false), [f], "{f}");
+            assert_eq!(t(&[("docs/z.md", Some(f))], false).len(), 1, "{f}");
+        }
+        assert!(t(&[(".github/workflows/ci.yml", None)], true).is_empty());
+        // The rest of the judging code counts only in bosun's own repo.
+        for f in [
+            "src/core/glob.rs",
+            "src/core/mode.rs",
+            "src/config.rs",
+            "src/cli/approve.rs",
+            "src/core/records.rs",
+            "src/github/gate.rs",
+        ] {
+            assert!(t(&[(f, None)], false).is_empty(), "{f}");
+            assert_eq!(t(&[(f, None)], true), [f], "{f}");
+        }
+    }
+
+    #[test]
+    fn session_roots_count_once_and_exclude_by_root() {
+        assert_eq!(
+            distinct_roots(vec!["a/r1".into(), "a/r2".into(), "b".into(), "a".into()]),
+            ["a/r1", "b"]
+        );
+        let line = Record::Verdict {
+            session: "s/x".into(),
+            head_sha: "h".into(),
+            approved: true,
+            confidence: Some(0.95),
+            major: Some(0),
+            model: None,
+            relayed_by: None,
+        }
+        .to_line();
+        let body = format!("Review verdict: approve 0.95.\n\n{line}");
+        let c = [(VERDICT_AUTHOR, body.as_str(), true)];
+        let ex = |e: &str| vec![e.to_string()];
+        assert!(autonomous_verdicts(c, "h", &ex("s"), None).is_empty());
+        assert_eq!(autonomous_verdicts(c, "h", &ex("t"), None), ["s/x"]);
     }
 
     #[test]

@@ -21,6 +21,9 @@ const RULES: &str = concat!(
     "\n[[rule]]\nid = \"R-feature\"\nwhy = \"x\"\npaths = [\"src/feature/**\"]\n"
 );
 const WAITING: &str = "high risk, owner approval needed";
+const HALTED: &str = "high risk, quorum (D-022): bosun is halted, no signature counts:";
+const UNREADABLE: &str =
+    "high risk, quorum (D-022): cannot tell whether bosun is halted, no signature counts:";
 const QUORUM: &str =
     "high risk, quorum (D-022): 2 clean verdicts and orchestrator signature needed";
 
@@ -278,7 +281,12 @@ fn a_halted_bosun_counts_no_signature() {
     fake.variable("BOSUN_HALT", "1");
     let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
     assert_eq!(code, 5, "{v}");
-    assert!(description(&fake).starts_with(QUORUM));
+    assert!(
+        description(&fake).starts_with(HALTED),
+        "{}",
+        description(&fake)
+    );
+    assert!(!description(&fake).starts_with(WAITING));
     assert_eq!(sign(&fake, &k, "session_o").0, 4);
 }
 
@@ -289,6 +297,12 @@ fn an_unreadable_halt_state_counts_no_signature() {
     fake.fail_path("/issues", 500);
     let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
     assert_eq!(code, 5, "{v}");
+    assert!(
+        description(&fake).starts_with(UNREADABLE),
+        "{}",
+        description(&fake)
+    );
+    assert!(!description(&fake).starts_with(WAITING));
 }
 
 #[test]
@@ -442,4 +456,88 @@ fn approve_refuses_the_trust_root_and_a_halted_bosun() {
     post_verdict(&fake, "session_s", HEAD);
     fake.variable("BOSUN_HALT", "1");
     assert_eq!(sign(&fake, &k, "session_o").0, 4);
+}
+
+#[test]
+fn wave_agents_of_one_session_count_once_and_not_as_the_author() {
+    let k = key();
+    // S/r1 and S/r2 are one session.
+    let fake = quorum(&k);
+    let (code, v) = with(&fake, &k, &["session_r/r1", "session_r/r2"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(description(&fake).starts_with(QUORUM));
+    // Two real sessions still pass.
+    let fake = quorum(&k);
+    let (code, v) = with(&fake, &k, &["session_r/r1", "session_s/r1"]);
+    assert_eq!(code, 0, "{v}");
+    // The author (lease holder `session_w`) has wave agents too: they do not count.
+    let fake = quorum(&k);
+    let (code, v) = with(&fake, &k, &["session_w/x", "session_r"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(description(&fake).starts_with(QUORUM));
+}
+
+#[test]
+fn a_relayed_verdict_whose_relayer_holds_a_lease_does_not_count() {
+    let k = key();
+    let fake = quorum(&k);
+    post_verdict(&fake, "session_r", HEAD);
+    let relayed = verdict_of("session_s", HEAD, 0, true)
+        .replace("\"head_sha\"", "\"relayed_by\":\"session_w\",\"head_sha\"");
+    fake.comment_by(1, "github-actions[bot]", &relayed);
+    post_sig(&fake, &k);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert!(description(&fake).starts_with(QUORUM));
+}
+
+#[test]
+fn an_edited_verdict_comment_does_not_count() {
+    let k = key();
+    let fake = quorum(&k);
+    post_verdict(&fake, "session_r", HEAD);
+    fake.comment_edited(
+        1,
+        "github-actions[bot]",
+        &verdict_of("session_s", HEAD, 0, true),
+    );
+    post_sig(&fake, &k);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+}
+
+#[test]
+fn an_unseen_diff_gets_no_quorum_signature() {
+    let k = key();
+    let fake = quorum(&k);
+    fake.pull_set(1, "changed_files", json!(5));
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 5, "{v}");
+    owner_path(&fake, &v, "unseen");
+    // And `approve` refuses to sign it.
+    let fake = quorum(&k);
+    fake.pull_set(1, "changed_files", json!(5));
+    post_verdict(&fake, "session_r", HEAD);
+    post_verdict(&fake, "session_s", HEAD);
+    assert_eq!(sign(&fake, &k, "session_o").0, 1);
+}
+
+#[test]
+fn trust_root_covers_the_risk_workflow_anywhere_and_in_bosun_the_judging_files() {
+    for file in [".github/workflows/risk.yml", ".GitHub/Workflows/Risk.yml"] {
+        let k = key();
+        let fake = pr(&k, file, "quorum");
+        let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+        assert_eq!(code, 5, "{file}: {v}");
+        assert_eq!(sign(&fake, &k, "session_o").0, 1, "{file}");
+    }
+}
+
+#[test]
+fn approve_does_not_count_the_signers_wave_agents_as_reviewers() {
+    let k = key();
+    let fake = quorum(&k);
+    post_verdict(&fake, "session_r", HEAD);
+    post_verdict(&fake, "session_o/x", HEAD);
+    assert_eq!(sign(&fake, &k, "session_o").0, 1);
 }

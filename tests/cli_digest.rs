@@ -209,6 +209,19 @@ fn the_digest_summarizes_the_last_day_merged_released_and_blocked() {
     let blocked = s["blocked"].as_array().unwrap();
     assert!(blocked.iter().any(|b| b["pr"] == 12), "{s}");
     assert!(blocked.iter().any(|b| b["issue"] == 30), "{s}");
+    // Two releases the same day both count.
+    let fake = setup();
+    fake.release_published("v0.22.1", "2026-11-12T04:00:00Z");
+    fake.release_also("v0.22.0", "2026-11-12T02:00:00Z");
+    fake.release_also("v0.21.0", "2026-11-01T02:00:00Z");
+    let (_, v) = digest(&fake, &[], "");
+    let tags: Vec<&str> = v["data"]["summary"]["released"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, ["v0.22.1", "v0.22.0"]);
     // An old release is not news.
     let fake = setup();
     fake.release_published("v0.21.0", "2026-11-01T02:00:00Z");

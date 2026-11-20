@@ -1003,6 +1003,22 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>, policy: Policy
         .collect();
     let quorum = policy == Policy::Quorum;
     if quorum {
+        // D-022: a diff bosun cannot see may hide the trust root (as risk-check's R-unseen).
+        let views: Vec<risk::FileView> = (files.iter())
+            .map(|f| risk::FileView {
+                path: f.filename.clone(),
+                status: f.status.clone(),
+                has_patch: f.patch.is_some(),
+                changes: f.additions + f.deletions,
+                same_blob: false,
+            })
+            .collect();
+        if risk::unseen_diff(&views, pull.changed_files).is_some() {
+            return Err(BosunError::error(
+                "quorum (D-022) never covers a diff bosun cannot see (R-unseen): the owner approves",
+                "nothing was signed: the owner approves this PR (GitHub review, or a chat approval)",
+            ));
+        }
         // D-022: the trust root is the owner's (a halt refused the signature at the top already).
         let bosun_code = gh
             .file_at(crate::cli::risk_check::BOSUN_CODE_MARKER, &pull.base_sha)?
@@ -1100,7 +1116,8 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>, policy: Policy
         excluded.push(app.ctx.session.clone());
         // The CI signer's own session is no reviewer's: the session that asked is excluded too.
         excluded.extend(requester.map(String::from));
-        autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref())
+        let v = autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref());
+        if quorum { risk::distinct_roots(v) } else { v }
     });
     let min = if quorum { risk::QUORUM_VERDICTS } else { 1 };
     if clean.len() < min {

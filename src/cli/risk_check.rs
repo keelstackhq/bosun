@@ -727,6 +727,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     }
     let autonomous = auto.is_some();
     // D-022: a halted bosun (or one that cannot tell) counts no signature.
+    let mut halt_note: Option<&str> = None;
     if quorum && bootstrap.is_ok() {
         match halt_reason(gh) {
             Ok(None) => {}
@@ -734,6 +735,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
                 eprintln!(
                     "bosun: risk-check: bosun is halted ({why}): the quorum signature does not count"
                 );
+                halt_note = Some("bosun is halted");
                 bootstrap = Err(format!("bosun is halted: {why}"));
             }
             Err(e) => {
@@ -741,6 +743,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
                     "bosun: risk-check: cannot tell whether bosun is halted ({}): the quorum signature does not count",
                     e.message
                 );
+                halt_note = Some("cannot tell whether bosun is halted");
                 bootstrap = Err(format!(
                     "cannot tell whether bosun is halted: {}",
                     e.message
@@ -824,6 +827,11 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             "high risk ({}), approved by two verdicts: {}",
             ids.join(", "),
             verdicts.join(", ")
+        ),
+        (None, _) if halt_note.is_some() => format!(
+            "high risk, quorum (D-022): {}, no signature counts: {}",
+            halt_note.unwrap_or_default(),
+            ids.join(", ")
         ),
         (None, _) if autonomous && quorum => format!(
             "high risk, quorum (D-022): {} clean verdicts and orchestrator signature needed: {}",
@@ -1226,6 +1234,9 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     let mut bootstrap = need.bootstrap;
     if let Some((comments, excluded)) = need.autonomous {
         found.autonomous_verdicts = autonomous_clean(comments, sha, excluded, need.models);
+        if need.quorum {
+            found.autonomous_verdicts = risk::distinct_roots(found.autonomous_verdicts);
+        }
         let min = if need.quorum {
             risk::QUORUM_VERDICTS
         } else {
