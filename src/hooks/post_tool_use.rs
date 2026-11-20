@@ -17,8 +17,16 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if input.get("tool_name").and_then(Value::as_str) != Some("AskUserQuestion") {
         return None;
     }
+    if std::env::var_os("CLAUDE_CODE_CHILD_SESSION").is_some_and(|v| !v.is_empty()) {
+        eprintln!("bosun: warning: a child session's answer is not stored");
+        return None;
+    }
     let mut items = parse(input, &Timestamp::now().to_string());
     if items.is_empty() {
+        return None;
+    }
+    if let Err(why) = verify(input, &mut items) {
+        eprintln!("bosun: warning: the owner's answer is not stored: {why}");
         return None;
     }
     let Some(dir) = cwd
@@ -48,6 +56,118 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         eprintln!("bosun: warning: cannot store the owner's answer: {e}");
     }
     None
+}
+
+/// The transcript must be `$HOME/.claude/projects/<dir>/<session_id>.jsonl` (`session_id` of the
+/// hook input), a regular file, not a symlink.
+fn pinned(path: &str, session: &str) -> bool {
+    let home = std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok());
+    let regular = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
+    let (real, name) = (
+        Path::new(path).canonicalize().ok(),
+        format!("{session}.jsonl"),
+    );
+    regular
+        && !session.is_empty()
+        && home.zip(real).is_some_and(|(h, r)| {
+            r.starts_with(h.join(".claude").join("projects"))
+                && r.file_name().is_some_and(|n| *n == *name)
+        })
+}
+
+/// Whether a transcript `tool_result` (`content`, `toolUseResult.answers`) holds exactly the
+/// labels `said` for `question`.
+fn agrees(content: &Value, structured: &Value, question: &str, said: &[String]) -> bool {
+    let blob = match content {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    let key = format!("\"{question}\"=\"");
+    let seen = (blob.split(&key).nth(1)).and_then(|r| r.split('"').next());
+    let seen = seen.or_else(|| structured.get(question).and_then(Value::as_str));
+    seen.is_some_and(|s| {
+        s.split(", ")
+            .map(str::trim)
+            .eq(said.iter().map(String::as_str))
+    })
+}
+
+/// Keep only the items the session transcript backs (`transcript_path` of the hook input, pinned
+/// by [`pinned`]): an assistant `tool_use` with this `tool_use_id`, named `AskUserQuestion`,
+/// whose question holds the same marker (id, PR and full head), and a `tool_result` for that
+/// id whose picked labels equal `tool_response.answers` (a mismatch stores nothing). Only lines whose
+/// `sessionId` equals the input's `session_id` count. Whether Claude Code writes the `tool_result`
+/// line before PostToolUse is unverified: if it is missing, the answer is not stored.
+/// Anything else fails closed. A hint against forged hook input:
+/// it stops confused workers, not liars (spec 14).
+fn verify(input: &Value, items: &mut Vec<(String, Answer)>) -> Result<(), String> {
+    let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("");
+    let (path, id) = (field("transcript_path"), field("tool_use_id"));
+    if id.is_empty() || !pinned(path, field("session_id")) {
+        return Err("no transcript at ~/.claude/projects/<dir>/<session_id>.jsonl".into());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read transcript: {e}"))?;
+    let (mut asked, mut result): (Vec<_>, bool) = (Vec::new(), false);
+    let mut results = Vec::new();
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // every line that counts carries the hook input's `sessionId`; absent or other: ignored
+        if v.get("sessionId").and_then(Value::as_str) != Some(field("session_id")) {
+            continue;
+        }
+        let blocks = (v.pointer("/message/content")).and_then(Value::as_array);
+        for b in blocks.into_iter().flatten() {
+            let kind = b.get("type").and_then(Value::as_str);
+            if kind == Some("tool_result")
+                && b.get("tool_use_id").and_then(Value::as_str) == Some(id)
+            {
+                result = true;
+                // what the tool returned: its text (`"<question>"="<labels>"`) or `toolUseResult`
+                results.push((b["content"].clone(), v["toolUseResult"]["answers"].clone()));
+            }
+            let ours = b.get("id").and_then(Value::as_str) == Some(id)
+                && b.get("name").and_then(Value::as_str) == Some("AskUserQuestion");
+            if kind == Some("tool_use") && ours {
+                let qs = b.pointer("/input/questions").and_then(Value::as_array);
+                for q in qs.into_iter().flatten() {
+                    asked.extend(q.get("question").and_then(Value::as_str).map(markers));
+                }
+            }
+        }
+    }
+    if !result {
+        return Err("the transcript has no answer yet (no tool_result line for it)".into());
+    }
+    let qs = input
+        .pointer("/tool_input/questions")
+        .and_then(Value::as_array);
+    for text in qs
+        .into_iter()
+        .flatten()
+        .filter_map(|q| q.get("question")?.as_str())
+    {
+        let said = picked(input, text);
+        if !said.is_empty() && !results.iter().any(|(c, st)| agrees(c, st, text, &said)) {
+            return Err("the transcript's answer differs from the hook input".into());
+        }
+    }
+    items.retain(|(qid, a)| {
+        asked
+            .iter()
+            .flatten()
+            .any(|m| m.0 == *qid && m.1 == a.pr && m.3 == a.head)
+    });
+    if items.is_empty() {
+        return Err("the transcript has no such AskUserQuestion with this marker".into());
+    }
+    Ok(())
 }
 
 /// The marked PRs of `text`: `(question_id, pr, short, full head)`, one per line. Only a line's
