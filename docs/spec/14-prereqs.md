@@ -53,6 +53,13 @@ the GitHub MCP issue tools) that carries one of bosun's markers (`bosun:prereq`,
   changes) and reports `data.fixed_file`. Other prerequisite errors stay errors, on the same lines.
   `plan check` without `--fix` never writes: fixable bullets are a warning in `data.warnings` with the
   same `data.prereqs_fixed` rows (exit stays 0), and an unfixable prerequisite error is a warning too.
+- Inferred ids are not stable: a missing or duplicate id takes the lowest unused number, which shifts when a
+  bullet is inserted earlier. The lenient readers refuse nothing but warn (`plan check` and `bosun prereqs`: in
+  `data.warnings`, "prerequisite ids are inferred; run `bosun plan check <file> --fix` to make them stable"; the gate
+  and `hold`: on stderr). `plan import`/`amend` that writes (not `--dry-run`, with a token) therefore refuses such a
+  file (exit 1; fix: run `bosun plan import <file> --fix`, which rewrites the ids into the file, and commit it), so the
+  ids that reach GitHub are always written in the file. A formatting-only fix (`* ` bullets, `- Hn - title`) keeps
+  its id and is not refused.
 - `bosun plan import`/`amend` of a plan with prerequisites refreshes the checklist first (a dry run
   only reads), keeps such tasks `planned` (an epic too when its whole item is blocked) and lists
   them under `data.held`; the next import after the item is done promotes them.

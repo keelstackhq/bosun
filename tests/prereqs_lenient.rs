@@ -26,7 +26,7 @@ fn a_clean_section_is_unchanged() {
 }
 
 #[test]
-fn bare_h_duplicates_and_disorder_are_numbered_in_order() {
+fn bare_and_duplicate_ids_take_the_lowest_unused_number_valid_ones_stay() {
     let s = format!("- H: first\n{F}- H3: second\n{F}- H3: third\n{F}- H1: fourth\n{F}");
     let l = lenient(&s);
     let ids: Vec<&str> = l.prereqs.iter().map(|p| p.id.as_str()).collect();
@@ -110,4 +110,12 @@ fn strict_parse_still_refuses_the_sloppy_forms() {
     assert!(pq::parse(&t, &p).is_err());
     let t = format!("{PLAN}\n## Prerequisites\n\n* H1: a\n{F}");
     assert!(pq::parse(&t, &p).is_err());
+}
+
+#[test]
+fn only_missing_or_duplicate_ids_count_as_renumbered() {
+    assert!(lenient(&format!("- H: a\n{F}")).renumbered);
+    assert!(lenient(&format!("- H1: a\n{F}- H1: b\n{F}")).renumbered);
+    assert!(!lenient(&format!("* H1 - a\n{F}")).renumbered);
+    assert!(!lenient(&format!("- H2: b\n{F}- H1: a\n{F}")).renumbered);
 }

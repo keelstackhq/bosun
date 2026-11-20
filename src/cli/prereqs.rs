@@ -151,7 +151,11 @@ impl Env {
     ) -> Result<Prepared> {
         let gh = app.gh.as_ref();
         let plan = plan::parse(text).map_err(|e| plan_errors(file, &e))?;
-        let prereqs = pq::parse_read(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        let (prereqs, inferred) =
+            pq::parse_read_checked(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        if inferred {
+            warnings.push(pq::inferred_ids_warning(file));
+        }
         let plan_path = plan_key(file, &self.base, &self.roots);
         check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
@@ -251,9 +255,19 @@ impl Env {
 
     /// The checklist of one plan with no GitHub: nothing is verified or ticked, so an owner item
     /// and an API item are both open.
-    fn offline(&self, file: &str, text: &str, setup: &[CheckItem]) -> Result<PlanChecklist> {
+    fn offline(
+        &self,
+        file: &str,
+        text: &str,
+        setup: &[CheckItem],
+        warnings: &mut Vec<String>,
+    ) -> Result<PlanChecklist> {
         let plan = plan::parse(text).map_err(|e| plan_errors(file, &e))?;
-        let prereqs = pq::parse_read(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        let (prereqs, inferred) =
+            pq::parse_read_checked(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        if inferred {
+            warnings.push(pq::inferred_ids_warning(file));
+        }
         let plan_path = plan_key(file, &self.base, &self.roots);
         check_plan_path(&plan_path)?;
         let mut items: Vec<CheckItem> = prereqs.iter().map(CheckItem::from).collect();
@@ -364,7 +378,7 @@ fn run_offline(dir: Option<&Path>, args: &PrereqsArgs, files: &[String]) -> CmdR
     for (k, file) in files.iter().enumerate() {
         let text = read_plan_file(dir, file)?;
         let first = if k == 0 { &setup[..] } else { &[] };
-        let c = env.offline(file, &text, first)?;
+        let c = env.offline(file, &text, first, &mut warnings)?;
         if seen.contains(&c.plan_path) {
             warnings.push(format!("{file} names {} again: listed once", c.plan_path));
             continue;

@@ -126,7 +126,8 @@ fn kind(path: &str) -> Kind {
     }
 }
 
-/// Render sources of template and channel repos, never tests of the repo itself.
+/// Render sources of template and channel repos, never tests of the repo itself (only when the
+/// top dir has a `splice.toml` or `template.toml`).
 const TEMPLATE_SOURCES: [&str; 2] = ["template*/pieces/*/files/**", "channel/pieces/*/files/**"];
 
 impl Kit {
@@ -259,7 +260,8 @@ fn finding(
 /// `allow`: the base is the bare template render (no `.bosun/`), or the base's own
 /// `.bosun/template-tests` lists the file. Read from the base only, never from head.
 fn template_waiver(root: &Path, merge_base: &str) -> impl Fn(&str) -> Option<&'static str> {
-    let bootstrap = !super::git_has(root, &format!("{merge_base}:.bosun"));
+    // A git error is no bootstrap: no waiver is granted (fail closed).
+    let bootstrap = super::git_has(root, merge_base, ".bosun") == Some(false);
     let globs: Vec<Glob> = base_text(root, merge_base, ".bosun/template-tests")
         .unwrap_or_default()
         .lines()
@@ -325,9 +327,17 @@ pub fn run(req: &Request) -> CmdResult {
         .iter()
         .map(|g| Glob::parse(g).expect("built-in glob"))
         .collect();
-    let is_test_file = |p: &str, t: &str| {
-        !sources.iter().any(|g| g.matches(p)) && kit_for(&kits, p).is_test_file(p, t)
+    // The exemption holds only in a template or channel repo: the path's top dir carries a
+    // `splice.toml` or `template.toml` at HEAD (a git error counts as none: fail closed).
+    let is_source = |p: &str| {
+        sources.iter().any(|g| g.matches(p))
+            && p.split_once('/').is_some_and(|(top, _)| {
+                ["splice.toml", "template.toml"]
+                    .iter()
+                    .any(|m| super::git_has(req.root, "HEAD", &format!("{top}/{m}")) == Some(true))
+            })
     };
+    let is_test_file = |p: &str, t: &str| !is_source(p) && kit_for(&kits, p).is_test_file(p, t);
     let pending_markers = |p: &str, t: &str| kit_for(&kits, p).pending_markers(p, t);
     let test_count = |p: &str, t: &str| kit_for(&kits, p).test_count(p, t);
     let assertions = |p: &str, t: &str| kit_for(&kits, p).assertions(p, t);

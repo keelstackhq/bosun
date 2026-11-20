@@ -12,6 +12,19 @@ fn read(rel: &str) -> String {
     fs::read_to_string(root().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
+/// The head's committed copy of a file. CI swaps the whole `.bosun` dir for the base's copy
+/// before the gates run, so the working tree's copy is not the head's; `None` when git fails.
+fn head(rel: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{rel}")])
+        .current_dir(root())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 const READERS: [&str; 5] = [
     "channel/pieces/core/files/.github/workflows/bosun.yml.jinja",
     "channel/pieces/circleci/files/.circleci/src/jobs/bosun-ok.yml.jinja",
@@ -38,12 +51,13 @@ fn pin(text: &str, section: &str, key: &str) -> String {
 
 #[test]
 fn pins_toml_has_the_keys_and_the_channel_copy_matches_bosuns_own() {
-    let own = read(".bosun/pins.toml");
-    assert_eq!(
-        own,
-        read(READERS[4]),
-        "the channel copy and .bosun/pins.toml differ"
-    );
+    // The channel copy is the source of truth (never swapped by CI); bosun's own copy is
+    // compared as committed at HEAD.
+    let own = read(READERS[4]);
+    match head(".bosun/pins.toml") {
+        Some(h) => assert_eq!(h, own, "the channel copy and .bosun/pins.toml differ"),
+        None => eprintln!("note: git unavailable, own pins.toml comparison skipped"),
+    }
     assert_eq!(pin(&own, "rust", "fallback"), "1.97");
     for tool in ["nextest", "cargo-deny"] {
         let v = pin(&own, tool, "version");
@@ -65,7 +79,7 @@ fn pins_toml_has_the_keys_and_the_channel_copy_matches_bosuns_own() {
 
 #[test]
 fn no_template_or_setup_script_hard_codes_a_pin() {
-    let pins = read(".bosun/pins.toml");
+    let pins = read(READERS[4]);
     let mut needles = vec![pin(&pins, "rust", "fallback")];
     for t in ["nextest", "cargo-deny"] {
         needles.push(pin(&pins, t, "version"));

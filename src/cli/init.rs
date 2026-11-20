@@ -984,6 +984,11 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             v
         }
     };
+    // An owner taken from the signed-in login may be a machine user: the human confirms it.
+    let owner_confirm = matches!(owner_source, Some("api" | "gh"));
+    if let (true, Some(l)) = (owner_confirm, owner.as_deref()) {
+        steps.insert(0, format!("Confirm governance/owners.toml names you (inferred from the GitHub login {l}); edit it if that login is a machine user."));
+    }
     if own_ci && intake.is_none() {
         for s in &mut steps {
             *s = s.replace("main-open (hoist.toml)", "main-open, bosun-ok (hoist.toml)");
@@ -1185,6 +1190,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| mq.label()),
         "warnings": warnings, "branch_reused": reuse, "labels_todo": labels_todo,
         "owner": owner, "owner_source": owner_source, "owner_skipped": owner_skipped,
+        "owner_confirm": owner_confirm,
     });
     if args.no_pr {
         out["pr_title"] = json!(PR_TITLE);

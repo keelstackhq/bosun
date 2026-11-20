@@ -201,6 +201,16 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
                         ),
                         "fix": format!("run `bosun plan check {} --fix` to rewrite them", a.file),
                     }));
+                if len.renumbered {
+                    data["warnings"]
+                        .as_array_mut()
+                        .expect("warnings is an array")
+                        .push(json!({
+                            "line": len.fixed[0].line,
+                            "message": "prerequisite ids are inferred; run `bosun plan check <file> --fix` to make them stable",
+                            "fix": format!("run `bosun plan check {} --fix`", a.file),
+                        }));
+                }
                 data["prereqs_fixed"] = json!(len.fixed);
             }
             Ok(_) => {}
@@ -677,6 +687,27 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     let prereqs = len.prereqs.clone();
     if !amend && !crate::github::http::Http::has_token() {
         return offline_import(dir, a, &p, &len, &fixed_file);
+    }
+    // What reaches GitHub is always written in the file: inferred ids shift when a bullet is
+    // inserted earlier, and a checklist or hold names them. `--fix` writes them first.
+    if len.renumbered && fixed_file.is_none() && !a.dry_run {
+        return Err(BosunError::error(
+            format!(
+                "{}: prerequisite ids are inferred (missing or duplicate), so they are not stable",
+                a.file
+            ),
+            if amend {
+                format!(
+                    "run `bosun plan check {} --fix` (rewrites the ids into the file) and commit it",
+                    a.file
+                )
+            } else {
+                format!(
+                    "run `bosun plan import {} --fix` (rewrites the ids into the file) and commit it",
+                    a.file
+                )
+            },
+        ));
     }
     let app = App::load(dir)?;
     if let Some(project) = &p.project

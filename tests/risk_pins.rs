@@ -24,7 +24,16 @@ fn pins_are_r_ci_in_the_built_in_rules() {
 
 #[test]
 fn pins_are_r_ci_in_bosuns_own_rules() {
-    let rules = Rules::parse(&read(".bosun/risk.toml")).unwrap();
+    // The head's committed copy: CI swaps the working tree's copy for the base's.
+    let text = std::process::Command::new("git")
+        .args(["show", "HEAD:.bosun/risk.toml"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_else(|| read(".bosun/risk.toml"));
+    let rules = Rules::parse(&text).unwrap();
     for p in ["pins.toml", ".bosun/pins.toml"] {
         assert!(r_ci_matches(&rules, p), "{p}");
     }

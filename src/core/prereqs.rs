@@ -287,7 +287,20 @@ pub fn parse(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
 /// gate, `hold`): through `parse_lenient`, so a file `plan import` accepted is never refused
 /// later. The file itself is never rewritten here (only `plan check --fix` / `plan import --fix`).
 pub fn parse_read(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
-    parse_lenient(text, plan).map(|l| l.prereqs)
+    parse_read_checked(text, plan).map(|(p, _)| p)
+}
+
+/// `parse_read` and whether any bullet's id was inferred (missing or duplicate): such ids shift
+/// when a bullet is inserted earlier, so they are only stable once written into the file.
+pub fn parse_read_checked(text: &str, plan: &Plan) -> Result<(Vec<Prereq>, bool), Vec<PlanError>> {
+    parse_lenient(text, plan).map(|l| (l.prereqs, l.renumbered))
+}
+
+/// The warning for a plan whose prerequisite ids are inferred.
+pub fn inferred_ids_warning(file: &str) -> String {
+    format!(
+        "{file}: prerequisite ids are inferred; run `bosun plan check {file} --fix` to make them stable"
+    )
 }
 
 /// One prerequisite bullet that `parse_lenient` rewrote.
@@ -304,6 +317,8 @@ pub struct Fixed {
 pub struct Lenient {
     pub prereqs: Vec<Prereq>,
     pub fixed: Vec<Fixed>,
+    /// A bullet had a missing or duplicate id and took an inferred number.
+    pub renumbered: bool,
     pub text: String,
 }
 
@@ -385,6 +400,7 @@ pub fn parse_lenient(text: &str, plan: &Plan) -> Result<Lenient, Vec<PlanError>>
     Ok(Lenient {
         prereqs,
         fixed,
+        renumbered: keep.contains(&false),
         text,
     })
 }

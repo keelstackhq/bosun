@@ -171,7 +171,11 @@ fn plan_of(app: &App, plan_path: &str) -> Result<(String, Vec<u64>)> {
         .file_at(plan_path, &branch)?
         .ok_or_else(|| fail(format!("not on {branch}")))?;
     let parsed = plan::parse(&text).map_err(|e| fail(e[0].message.clone()))?;
-    let prereqs = pq::parse_read(&text, &parsed).map_err(|e| fail(e[0].message.clone()))?;
+    let (prereqs, inferred) =
+        pq::parse_read_checked(&text, &parsed).map_err(|e| fail(e[0].message.clone()))?;
+    if inferred {
+        eprintln!("bosun: {}", pq::inferred_ids_warning(plan_path));
+    }
     let replaced = prereqs.iter().flat_map(|p| &p.replaces);
     let numbers = replaced.filter_map(|x| pq::hold_number(x)).collect();
     Ok((parsed.title, numbers))

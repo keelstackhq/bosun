@@ -293,3 +293,36 @@ fn ready_on_a_bosun_repo_refuses_over_the_one_off_cap() {
     assert_eq!(code, 3, "{v}");
     assert!(fake.auto_merge_enabled(n).is_none());
 }
+
+#[test]
+fn a_truncated_base_tree_without_bosun_is_not_a_bootstrap() {
+    // Truncated: the missing `.bosun` proves nothing, so it fails closed to the one-off rules.
+    let (fake, dir) = setup();
+    fake.git_tree("main", &[("README.md", "100644", "blob", "b0")], true);
+    let (code, v) = single_ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["single_reason"], "one-off");
+
+    let (fake, dir) = setup();
+    fake.git_tree("main", &[("README.md", "100644", "blob", "b0")], true);
+    let (_, first) = pr(&fake, dir.path(), &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(&fake, dir.path(), n);
+    fake.pull_file(n, "src/big.rs", "added", 301, 0, None);
+    let (code, v) = pr(&fake, dir.path(), &["--single", "--ready"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(fake.auto_merge_enabled(n).is_none());
+}
+
+#[test]
+fn an_unreadable_base_tree_is_not_a_bootstrap_either() {
+    let (fake, dir) = setup();
+    fake.no_main_tree();
+    let (_, first) = pr(&fake, dir.path(), &["--single"]);
+    let n = first["data"]["pr"]["number"].as_u64().unwrap();
+    stamps::ready(&fake, dir.path(), n);
+    fake.pull_file(n, "src/big.rs", "added", 301, 0, None);
+    let (code, v) = pr(&fake, dir.path(), &["--single", "--ready"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(fake.auto_merge_enabled(n).is_none());
+}

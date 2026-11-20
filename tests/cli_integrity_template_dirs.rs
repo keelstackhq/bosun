@@ -30,6 +30,10 @@ fn put(root: &Path, rel: &str, text: &str) {
 
 /// Base has `.bosun/` (not a bootstrap PR) and the given test file; the branch moves it.
 fn run(path: &str, moved: &str) -> (i32, Value) {
+    run_with(path, moved, true)
+}
+
+fn run_with(path: &str, moved: &str, marker: bool) -> (i32, Value) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
@@ -37,6 +41,10 @@ fn run(path: &str, moved: &str) -> (i32, Value) {
     git(&root, &["config", "user.email", "t@example.com"]);
     put(&root, ".bosun/bosun.toml", "");
     put(&root, path, TWO_TESTS);
+    if marker {
+        let top = path.split('/').next().unwrap();
+        put(&root, &format!("{top}/splice.toml"), "");
+    }
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "base"]);
     git(&root, &["checkout", "-q", "-b", "work"]);
@@ -75,5 +83,15 @@ fn a_channel_piece_test_moved_to_jinja_is_no_finding() {
 #[test]
 fn a_real_test_moved_to_jinja_is_still_refused() {
     let (code, v) = run("tests/t.rs", "tests/t.rs.jinja");
+    assert_eq!(code, 1, "{v}");
+}
+
+#[test]
+fn a_look_alike_path_without_a_template_marker_is_still_refused() {
+    let (code, v) = run_with(
+        "template-rust/pieces/core/files/tests/t.rs",
+        "template-rust/pieces/core/files/tests/t.rs.jinja",
+        false,
+    );
     assert_eq!(code, 1, "{v}");
 }

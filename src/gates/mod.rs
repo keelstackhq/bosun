@@ -55,16 +55,18 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
-fn git_has(root: &Path, spec: &str) -> bool {
-    Command::new("git")
+/// Is `path` in the tree of `rev`? `Some(false)` only when git answered and the path is absent
+/// (`git ls-tree` exits 0 with no output); a bad rev or any other git error is `None`, so callers
+/// fail closed instead of mistaking a git failure for an absent file.
+pub(crate) fn git_has(root: &Path, rev: &str, path: &str) -> Option<bool> {
+    let out = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["cat-file", "-e", spec])
-        .stdout(Stdio::null())
+        .args(["ls-tree", "--name-only", rev, "--", path])
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .output()
+        .ok()?;
+    out.status.success().then_some(!out.stdout.is_empty())
 }
 
 /// Is `file` missing in the stack's working tree and at the base too? Also with `--all`: a
@@ -76,7 +78,7 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
         return false;
     }
     let path = Path::new(rel).join(file);
-    !git_has(req.root, &format!("{}:{}", req.base, path.display()))
+    git_has(req.root, req.base, &path.to_string_lossy()) == Some(false)
 }
 
 /// Is none of `files` present at the base commit, in the stack directory or any parent up to the
@@ -85,15 +87,15 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
 fn missing_in_base(req: &Request, stack: &Stack, files: &[String]) -> bool {
     let mut dir = PathBuf::from(stack_rel(&stack.path));
     loop {
-        if files
-            .iter()
-            .any(|f| git_has(req.root, &format!("{}:{}", req.base, dir.join(f).display())))
-        {
-            return false;
+        for f in files {
+            // Present, or git failed: the gate runs (fail closed).
+            if git_has(req.root, req.base, &dir.join(f).to_string_lossy()) != Some(false) {
+                return false;
+            }
         }
         if !dir.pop() {
             // A true bootstrap has no `.bosun/` in the base either; with one, the gate runs.
-            return !git_has(req.root, &format!("{}:.bosun", req.base));
+            return git_has(req.root, req.base, ".bosun") == Some(false);
         }
     }
 }
@@ -492,5 +494,43 @@ mod tests {
         let changed = vec!["web/a.ts".to_string(), "src/b.rs".to_string()];
         assert_eq!(under_stack("web/", &changed), vec!["a.ts"]);
         assert_eq!(under_stack(".", &changed).len(), 2);
+    }
+
+    #[test]
+    fn git_has_tells_absent_from_a_git_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::create_dir(tmp.path().join(".bosun")).unwrap();
+        std::fs::write(tmp.path().join(".bosun/a"), "x").unwrap();
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "c",
+        ]);
+        assert_eq!(git_has(tmp.path(), "HEAD", ".bosun"), Some(true));
+        assert_eq!(git_has(tmp.path(), "HEAD", ".bosun/a"), Some(true));
+        assert_eq!(git_has(tmp.path(), "HEAD", "nope"), Some(false));
+        // A bad rev is an error, never "absent".
+        assert_eq!(git_has(tmp.path(), "no-such-rev", ".bosun"), None);
+        // A directory that is no repository too.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(git_has(plain.path(), "HEAD", ".bosun"), None);
     }
 }

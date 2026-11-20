@@ -165,3 +165,14 @@ fn a_template_tests_file_added_in_the_pr_allows_nothing() {
     assert_eq!(code, 1, "{v}");
     assert_eq!(finding(&v, "deleted-test")["allowed"], false);
 }
+
+#[test]
+fn a_head_that_deletes_bosun_does_not_make_itself_a_bootstrap() {
+    let r = repo(&[(".bosun/bosun.toml", "")]);
+    fs::remove_dir_all(r.root.join(".bosun")).unwrap();
+    fs::remove_file(r.root.join("tests/t.rs")).unwrap();
+    r.commit();
+    let (code, v) = r.check();
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(finding(&v, "deleted-test")["allowed"], false);
+}

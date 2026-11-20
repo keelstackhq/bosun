@@ -294,7 +294,9 @@ fn owner_from_the_flag_the_api_or_gh() {
     assert_eq!(v["data"]["owner_source"], "api");
     assert!(e.argv().contains("--data owner=apiuser"), "{}", e.argv());
     assert!(
-        !v["data"]["owner_steps"].to_string().contains("owners.toml"),
+        !v["data"]["owner_steps"]
+            .to_string()
+            .contains("Fill governance/owners.toml"),
         "{v}"
     );
     // gh
@@ -332,4 +334,41 @@ fn a_bot_or_agent_login_is_never_taken_as_owner() {
         assert!(v["data"]["owner_steps"].to_string().contains("owners.toml"));
         assert!(!e.argv().contains("--data owner="), "{}", e.argv());
     }
+}
+
+#[test]
+fn an_owner_inferred_from_the_login_must_be_confirmed() {
+    let confirm = |v: &Value, login: &str| {
+        assert_eq!(v["data"]["owner_confirm"], true, "{v}");
+        let step = &v["data"]["owner_steps"][0];
+        let s = step.as_str().unwrap();
+        assert!(
+            s.contains("confirm") || s.contains("Confirm"),
+            "first step: {v}"
+        );
+        assert!(s.contains(&format!("GitHub login {login}")), "{s}");
+        assert!(s.contains("machine user"), "{s}");
+    };
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    fake.viewer("apiuser");
+    let (code, v) = e.run(&fake, true, false, &[]);
+    assert_eq!(code, 0, "{v}");
+    confirm(&v, "apiuser");
+
+    let e = Env::new();
+    e.gh(false, "ghuser", "");
+    let fake = FakeGithub::start();
+    let (code, v) = e.run(&fake, false, true, &[]);
+    assert_eq!(code, 0, "{v}");
+    confirm(&v, "ghuser");
+
+    // The owner named by hand needs no confirmation.
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    fake.viewer("apiuser");
+    let (code, v) = e.run(&fake, true, false, &["--owner", "octocat"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["owner_confirm"], false, "{v}");
+    assert!(!v["data"]["owner_steps"].to_string().contains("Confirm"));
 }
