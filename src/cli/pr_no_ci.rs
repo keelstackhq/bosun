@@ -48,8 +48,9 @@ fn signed_by_enrolled<'b>(
     ok.then(|| (text, key.id.clone(), sig))
 }
 
-/// Sessions with a clean verdict on the head, not the author or this one. Without CI the verdict
-/// must be a gate App record or signed by an enrolled key; a self-declared session never counts.
+/// Sessions with a clean verdict on the head, not the author or this one. Without CI only a
+/// verdict signed by an enrolled reviewer key counts: never an App record (any writer's push
+/// workflow posts as `github-actions[bot]`), an owner, delegate or signer key, or a self-declared session.
 pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
     let gh = app.gh.as_ref();
     // The author is the lease holder of a linked task (as in D-017); with none, nothing counts.

@@ -1,5 +1,5 @@
-//! Verdicts that count without CI (spec §4): a gate App record, or a comment signed by an
-//! enrolled key (the RFC 8032 test 1 key, `k1`).
+//! Verdicts without CI (spec §4): only a comment signed by an enrolled reviewer key (the RFC 8032
+//! test 1 key, `k1`) counts; a gate App record (`app_verdict`) is posted to show it never does.
 #![allow(dead_code)]
 
 use bosun::core::records::Record;
