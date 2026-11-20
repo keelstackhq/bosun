@@ -1,0 +1,1 @@
+- Chat approval T13c: gate helper git and cargo calls go through `gates::cmd`, spec 04 drops them from the known limits.

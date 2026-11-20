@@ -93,7 +93,7 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 
 /// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
 fn git_has(root: &Path, spec: &str) -> bool {
-    Command::new("git")
+    cmd("git")
         .arg("-C")
         .arg(root)
         .args(["cat-file", "-e", spec])
@@ -302,7 +302,7 @@ fn execute(
         .split('\0')
         .filter(|f| !f.is_empty())
         {
-            let out = Command::new("git")
+            let out = cmd("git")
                 .arg("-C")
                 .arg(req.root)
                 .args(["diff", "--no-index", "--", "/dev/null", f])
@@ -380,7 +380,7 @@ fn execute(
 
 /// Workspace packages with a library target (`lib`, `rlib` or `proc-macro`).
 fn lib_packages(dir: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("cargo")
+    let Ok(out) = cmd("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(dir)
         .output()
@@ -411,7 +411,7 @@ fn lib_packages(dir: &Path) -> Vec<String> {
 /// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
 fn nextest_installed() -> bool {
     std::env::var_os("BOSUN_NO_NEXTEST").is_none()
-        && Command::new("cargo")
+        && cmd("cargo")
             .args(["nextest", "--version"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -459,5 +459,24 @@ mod tests {
         let changed = vec!["web/a.ts".to_string(), "src/b.rs".to_string()];
         assert_eq!(under_stack("web/", &changed), vec!["a.ts"]);
         assert_eq!(under_stack(".", &changed).len(), 2);
+    }
+
+    /// The helper calls must go through `cmd`, or `bosun merge`'s isolated environment misses them.
+    #[test]
+    fn helper_git_and_cargo_calls_use_the_isolated_cmd() {
+        let files = [
+            ("gates/mod.rs", include_str!("mod.rs")),
+            ("gates/integrity.rs", include_str!("integrity.rs")),
+            ("gates/packages.rs", include_str!("packages.rs")),
+            ("cli/stamps.rs", include_str!("../cli/stamps.rs")),
+            ("cli/gate.rs", include_str!("../cli/gate.rs")),
+        ];
+        for (name, src) in files {
+            let code = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let plain = code.matches("Command::new(\"git\")").count()
+                + code.matches("Command::new(\"cargo\")").count();
+            // `cmd` itself is the one `Command::new(program)`.
+            assert_eq!(plain, 0, "{name} runs git or cargo outside gates::cmd");
+        }
     }
 }
