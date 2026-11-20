@@ -259,9 +259,20 @@ fn finding(
 /// Why `deleted-test` and `fewer-tests` are waived for a test file, besides the plan task's
 /// `allow`: the base is the bare template render (no `.bosun/`), or the base's own
 /// `.bosun/template-tests` lists the file. Read from the base only, never from head.
+/// The bootstrap waiver holds only when git answered that the merge base has no `.bosun`; a git
+/// error (`None`) grants nothing.
+fn bootstrap_waived(has_bosun: Option<bool>) -> bool {
+    has_bosun == Some(false)
+}
+
+/// The template-source exemption needs a marker git confirmed at the merge base; an error is none.
+fn marker_present(has_marker: Option<bool>) -> bool {
+    has_marker == Some(true)
+}
+
 fn template_waiver(root: &Path, merge_base: &str) -> impl Fn(&str) -> Option<&'static str> {
     // A git error is no bootstrap: no waiver is granted (fail closed).
-    let bootstrap = super::git_has(root, merge_base, ".bosun") == Some(false);
+    let bootstrap = bootstrap_waived(super::git_has(root, merge_base, ".bosun"));
     let globs: Vec<Glob> = base_text(root, merge_base, ".bosun/template-tests")
         .unwrap_or_default()
         .lines()
@@ -328,13 +339,14 @@ pub fn run(req: &Request) -> CmdResult {
         .map(|g| Glob::parse(g).expect("built-in glob"))
         .collect();
     // The exemption holds only in a template or channel repo: the path's top dir carries a
-    // `splice.toml` or `template.toml` at HEAD (a git error counts as none: fail closed).
+    // `splice.toml` or `template.toml` at the merge base, never at HEAD, so a PR cannot add its own
+    // marker (a git error counts as none: fail closed).
     let is_source = |p: &str| {
         sources.iter().any(|g| g.matches(p))
             && p.split_once('/').is_some_and(|(top, _)| {
-                ["splice.toml", "template.toml"]
-                    .iter()
-                    .any(|m| super::git_has(req.root, "HEAD", &format!("{top}/{m}")) == Some(true))
+                ["splice.toml", "template.toml"].iter().any(|m| {
+                    marker_present(super::git_has(req.root, &merge_base, &format!("{top}/{m}")))
+                })
             })
     };
     let is_test_file = |p: &str, t: &str| !is_source(p) && kit_for(&kits, p).is_test_file(p, t);
@@ -516,6 +528,16 @@ pub fn run(req: &Request) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_git_error_grants_no_waiver_and_no_exemption() {
+        assert!(bootstrap_waived(Some(false)));
+        assert!(!bootstrap_waived(Some(true)));
+        assert!(!bootstrap_waived(None));
+        assert!(marker_present(Some(true)));
+        assert!(!marker_present(Some(false)));
+        assert!(!marker_present(None));
+    }
 
     #[test]
     fn name_status_lines_parse() {

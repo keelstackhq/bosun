@@ -207,7 +207,7 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
                         .expect("warnings is an array")
                         .push(json!({
                             "line": len.fixed[0].line,
-                            "message": "prerequisite ids are inferred; run `bosun plan check <file> --fix` to make them stable",
+                            "message": pq::inferred_ids_warning(&a.file),
                             "fix": format!("run `bosun plan check {} --fix`", a.file),
                         }));
                 }

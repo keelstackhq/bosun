@@ -78,7 +78,13 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
         return false;
     }
     let path = Path::new(rel).join(file);
-    git_has(req.root, req.base, &path.to_string_lossy()) == Some(false)
+    absent_at_base(git_has(req.root, req.base, &path.to_string_lossy()))
+}
+
+/// True only when git answered that the path is absent; an error (`None`) is not absence, so the
+/// gate runs instead of being skipped.
+fn absent_at_base(has: Option<bool>) -> bool {
+    has == Some(false)
 }
 
 /// Is none of `files` present at the base commit, in the stack directory or any parent up to the
@@ -89,13 +95,13 @@ fn missing_in_base(req: &Request, stack: &Stack, files: &[String]) -> bool {
     loop {
         for f in files {
             // Present, or git failed: the gate runs (fail closed).
-            if git_has(req.root, req.base, &dir.join(f).to_string_lossy()) != Some(false) {
+            if !absent_at_base(git_has(req.root, req.base, &dir.join(f).to_string_lossy())) {
                 return false;
             }
         }
         if !dir.pop() {
             // A true bootstrap has no `.bosun/` in the base either; with one, the gate runs.
-            return git_has(req.root, req.base, ".bosun") == Some(false);
+            return absent_at_base(git_has(req.root, req.base, ".bosun"));
         }
     }
 }
@@ -494,6 +500,13 @@ mod tests {
         let changed = vec!["web/a.ts".to_string(), "src/b.rs".to_string()];
         assert_eq!(under_stack("web/", &changed), vec!["a.ts"]);
         assert_eq!(under_stack(".", &changed).len(), 2);
+    }
+
+    #[test]
+    fn a_git_error_is_not_absence() {
+        assert!(absent_at_base(Some(false)));
+        assert!(!absent_at_base(Some(true)));
+        assert!(!absent_at_base(None));
     }
 
     #[test]

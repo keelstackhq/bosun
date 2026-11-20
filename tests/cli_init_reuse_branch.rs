@@ -290,11 +290,12 @@ fn owner_from_the_flag_the_api_or_gh() {
     fake.viewer("apiuser");
     let (code, v) = e.run(&fake, true, false, &[]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["owner"], "apiuser");
+    assert!(v["data"]["owner"].is_null(), "{v}");
+    assert_eq!(v["data"]["owner_suggested"], "apiuser");
     assert_eq!(v["data"]["owner_source"], "api");
-    assert!(e.argv().contains("--data owner=apiuser"), "{}", e.argv());
+    assert!(!e.argv().contains("--data owner="), "{}", e.argv());
     assert!(
-        !v["data"]["owner_steps"]
+        v["data"]["owner_steps"]
             .to_string()
             .contains("Fill governance/owners.toml"),
         "{v}"
@@ -305,9 +306,10 @@ fn owner_from_the_flag_the_api_or_gh() {
     let fake = FakeGithub::start();
     let (code, v) = e.run(&fake, false, true, &[]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["owner"], "ghuser");
+    assert!(v["data"]["owner"].is_null(), "{v}");
+    assert_eq!(v["data"]["owner_suggested"], "ghuser");
     assert_eq!(v["data"]["owner_source"], "gh");
-    assert!(e.argv().contains("--data owner=ghuser"), "{}", e.argv());
+    assert!(!e.argv().contains("--data owner="), "{}", e.argv());
     // none
     let e = Env::new();
     let fake = FakeGithub::start();
@@ -315,6 +317,7 @@ fn owner_from_the_flag_the_api_or_gh() {
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["owner"].is_null());
     assert!(v["data"]["owner_source"].is_null());
+    assert!(v["data"]["owner_suggested"].is_null());
 }
 
 #[test]
@@ -327,6 +330,7 @@ fn a_bot_or_agent_login_is_never_taken_as_owner() {
         assert_eq!(code, 0, "{login}: {v}");
         assert!(v["data"]["owner"].is_null(), "{login}: {v}");
         assert!(v["data"]["owner_source"].is_null(), "{login}: {v}");
+        assert!(v["data"]["owner_suggested"].is_null(), "{login}: {v}");
         assert!(
             v["data"]["owner_skipped"].as_str().unwrap().contains(login),
             "{login}: {v}"
@@ -337,38 +341,58 @@ fn a_bot_or_agent_login_is_never_taken_as_owner() {
 }
 
 #[test]
-fn an_owner_inferred_from_the_login_must_be_confirmed() {
-    let confirm = |v: &Value, login: &str| {
-        assert_eq!(v["data"]["owner_confirm"], true, "{v}");
-        let step = &v["data"]["owner_steps"][0];
-        let s = step.as_str().unwrap();
+fn an_inferred_login_is_suggested_never_written() {
+    let suggested = |v: &Value, login: &str| {
+        assert!(v["data"]["owner"].is_null(), "{v}");
+        assert_eq!(v["data"]["owner_suggested"], login, "{v}");
+        let steps = v["data"]["owner_steps"].to_string();
         assert!(
-            s.contains("confirm") || s.contains("Confirm"),
-            "first step: {v}"
+            steps.contains(&format!(
+                "Fill governance/owners.toml with your GitHub login (suggested: {login}), or rerun `bosun init --owner {login}`"
+            )),
+            "{v}"
         );
-        assert!(s.contains(&format!("GitHub login {login}")), "{s}");
-        assert!(s.contains("machine user"), "{s}");
+        assert!(!steps.contains("Confirm"), "{v}");
     };
     let e = Env::new();
     let fake = FakeGithub::start();
     fake.viewer("apiuser");
     let (code, v) = e.run(&fake, true, false, &[]);
     assert_eq!(code, 0, "{v}");
-    confirm(&v, "apiuser");
+    suggested(&v, "apiuser");
+    assert!(!e.argv().contains("--data owner="), "{}", e.argv());
 
     let e = Env::new();
     e.gh(false, "ghuser", "");
     let fake = FakeGithub::start();
     let (code, v) = e.run(&fake, false, true, &[]);
     assert_eq!(code, 0, "{v}");
-    confirm(&v, "ghuser");
+    suggested(&v, "ghuser");
 
-    // The owner named by hand needs no confirmation.
+    // The owner named by hand is written and needs no step.
     let e = Env::new();
     let fake = FakeGithub::start();
     fake.viewer("apiuser");
     let (code, v) = e.run(&fake, true, false, &["--owner", "octocat"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["owner_confirm"], false, "{v}");
-    assert!(!v["data"]["owner_steps"].to_string().contains("Confirm"));
+    assert_eq!(v["data"]["owner"], "octocat");
+    assert!(v["data"]["owner_suggested"].is_null(), "{v}");
+    assert!(!v["data"]["owner_steps"].to_string().contains("owners.toml"));
+}
+
+#[test]
+fn an_agent_login_passed_as_owner_is_refused() {
+    for login in ["claude", "claude-agent", "renovate[bot]"] {
+        let e = Env::new();
+        let fake = FakeGithub::start();
+        let (code, v) = e.run(&fake, true, false, &["--owner", login]);
+        assert_eq!(code, 2, "{login}: {v}");
+        assert!(
+            v["error"]["fix"]
+                .as_str()
+                .unwrap()
+                .contains("pass the human owner's GitHub login: `--owner <login>`"),
+            "{login}: {v}"
+        );
+    }
 }

@@ -38,6 +38,11 @@ const PR_TITLE: &str = "chore: set up bosun";
 /// Files `bosun init` never seeds: the intake file only exists with `--intake` (bosun copies it),
 /// and the session rules are the built-in text until the owner writes a file (P1-7, P1-8).
 const NOT_SEEDED: [&str; 2] = [".bosun/intake.toml", ".bosun/session-rules.toml"];
+/// A `[bot]` login or the app/agent identity doctor step 2 knows: never an owner.
+fn is_agent_login(l: &str) -> bool {
+    let l = l.to_lowercase();
+    l.ends_with("[bot]") || super::doctor::app_user(&l)
+}
 const STEP_OWNERS: &str =
     "Fill governance/owners.toml with the owners' GitHub logins (pass --owner to seed it).";
 const STEP_HOIST: &str = "Run `hoist apply` once: branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).";
@@ -738,6 +743,12 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             "pass --plan with the path of an existing file",
         ));
     }
+    if let Some(o) = args.owner.as_deref().filter(|o| is_agent_login(o)) {
+        return Err(BosunError::usage(
+            format!("--owner {o} is a bot or agent identity, not a person"),
+            "pass the human owner's GitHub login: `--owner <login>`",
+        ));
+    }
     if let Some(o) = args
         .owner
         .as_deref()
@@ -925,14 +936,14 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         ));
     }
     let owner_flag = args.owner.is_some();
-    let mut owner = args.owner.clone();
+    let owner = args.owner.clone();
     let mut owner_source = owner_flag.then_some("flag");
     let mut owner_skipped: Option<String> = None;
+    // A login read from the API or `gh` is only a suggestion: it may be a machine user, so it is
+    // never written to owners.toml. Only the human's `--owner` is.
+    let mut owner_suggested: Option<String> = None;
     if owner.is_none() && !root.join("governance/owners.toml").exists() {
-        let is_agent = |l: &str| {
-            let l = l.to_lowercase();
-            l.ends_with("[bot]") || super::doctor::app_user(&l)
-        };
+        let is_agent = is_agent_login;
         let valid = |l: &String| {
             !l.is_empty()
                 && !is_agent(l)
@@ -952,13 +963,13 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             skip(l);
             valid(l)
         }) {
-            owner = Some(l);
+            owner_suggested = Some(l);
             owner_source = Some("api");
         } else if let Some(l) = crate::github::ghcli::login().filter(|l| {
             skip(l);
             valid(l)
         }) {
-            owner = Some(l);
+            owner_suggested = Some(l);
             owner_source = Some("gh");
         }
     }
@@ -974,7 +985,10 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         None => {
             let mut v: Vec<String> = Vec::new();
             if !owner_given {
-                v.push(STEP_OWNERS.into());
+                v.push(match owner_suggested.as_deref() {
+                    Some(l) => format!("Fill governance/owners.toml with your GitHub login (suggested: {l}), or rerun `bosun init --owner {l}`"),
+                    None => STEP_OWNERS.into(),
+                });
             }
             v.push(STEP_HOIST.into());
             if !make_labels {
@@ -984,11 +998,6 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             v
         }
     };
-    // An owner taken from the signed-in login may be a machine user: the human confirms it.
-    let owner_confirm = matches!(owner_source, Some("api" | "gh"));
-    if let (true, Some(l)) = (owner_confirm, owner.as_deref()) {
-        steps.insert(0, format!("Confirm governance/owners.toml names you (inferred from the GitHub login {l}); edit it if that login is a machine user."));
-    }
     if own_ci && intake.is_none() {
         for s in &mut steps {
             *s = s.replace("main-open (hoist.toml)", "main-open, bosun-ok (hoist.toml)");
@@ -1190,7 +1199,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| mq.label()),
         "warnings": warnings, "branch_reused": reuse, "labels_todo": labels_todo,
         "owner": owner, "owner_source": owner_source, "owner_skipped": owner_skipped,
-        "owner_confirm": owner_confirm,
+        "owner_suggested": owner_suggested,
     });
     if args.no_pr {
         out["pr_title"] = json!(PR_TITLE);

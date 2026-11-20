@@ -84,7 +84,7 @@ fn plan_check_warns_that_inferred_ids_are_not_stable() {
     assert_eq!(out.status.code(), Some(0), "{v}");
     assert!(
         v["data"]["warnings"].to_string().contains(
-            "prerequisite ids are inferred; run `bosun plan check <file> --fix` to make them stable"
+            "plan.md: prerequisite ids are inferred; run `bosun plan check plan.md --fix` to make them stable"
         ),
         "{v}"
     );

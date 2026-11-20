@@ -94,7 +94,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
     pr_body?: str, intake?: str, labels_created?: [str], labels_todo?: [str], branch_reused?: bool,
-    owner?: str | null, owner_source?: str | null, owner_skipped?: str | null, owner_confirm?: bool, routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
+    owner?: str | null, owner_source?: str | null, owner_skipped?: str | null, owner_suggested?: str | null, routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};

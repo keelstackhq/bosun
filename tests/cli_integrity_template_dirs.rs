@@ -95,3 +95,50 @@ fn a_look_alike_path_without_a_template_marker_is_still_refused() {
     );
     assert_eq!(code, 1, "{v}");
 }
+
+/// Base has `.bosun/` and a test under `path` but no marker; the PR adds the marker and deletes
+/// the test. The marker must be read from the merge base, so this stays a finding.
+fn marker_added_by_the_pr(path: &str, marker: &str) -> (i32, Value) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["config", "user.name", "t"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    put(&root, ".bosun/bosun.toml", "");
+    put(&root, path, TWO_TESTS);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "base"]);
+    git(&root, &["checkout", "-q", "-b", "work"]);
+    put(&root, marker, "");
+    git(&root, &["rm", "-q", path]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "add marker, drop test"]);
+    let out = bosun()
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("BOSUN_PR_BODY")
+        .env_remove("BOSUN_INTEGRITY_ALLOW")
+        .arg("-C")
+        .arg(&root)
+        .args(["test-integrity", "--base", "main"])
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+#[test]
+fn a_marker_added_by_the_pr_does_not_exempt_a_template_path() {
+    let (code, v) = marker_added_by_the_pr(
+        "template-rust/pieces/core/files/tests/t.rs",
+        "template-rust/splice.toml",
+    );
+    assert_eq!(code, 1, "{v}");
+}
+
+#[test]
+fn a_channel_marker_added_by_the_pr_does_not_exempt_a_channel_path() {
+    let (code, v) = marker_added_by_the_pr(
+        "channel/pieces/rust/files/tests/t.rs",
+        "channel/splice.toml",
+    );
+    assert_eq!(code, 1, "{v}");
+}
