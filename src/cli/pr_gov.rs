@@ -22,17 +22,9 @@ fn pr_json(p: &Pull) -> serde_json::Value {
     json!({"number": p.number, "head_sha": p.head_sha, "draft": p.draft})
 }
 
-pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
-    let app = App::load(dir)?;
-    let gh = app.gh.as_ref();
-    kill_switch(gh)?;
-    let mut pull = gh.get_pull(n)?.ok_or_else(|| {
-        BosunError::error(
-            format!("PR #{n} does not exist"),
-            "check the number of the PR, then rerun",
-        )
-    })?;
-    let rerun = format!("bosun pr --pr {n} --ready");
+/// A PR bosun may queue without a task: open, from this repo, into the default branch (returned).
+pub(crate) fn require_queueable(app: &App, pull: &Pull, rerun: &str) -> Result<String, BosunError> {
+    let (gh, n) = (app.gh.as_ref(), pull.number);
     if pull.state != "open" {
         return Err(BosunError::conflict(
             format!("PR #{n} is {}, not open", pull.state),
@@ -55,8 +47,13 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             format!("retarget the PR to {base}, then rerun `{rerun}`"),
         ));
     }
-    let repo = app.ctx.repo.to_string();
-    let linked = linked_issues_in(&pull.body, &repo);
+    Ok(base)
+}
+
+/// Exit 3 when the PR belongs to a task (a closing reference or a task marker).
+pub(crate) fn refuse_task_pr(app: &App, pull: &Pull) -> Result<(), BosunError> {
+    let n = pull.number;
+    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
     if pull.body.contains("<!-- bosun:task-pr") || !linked.is_empty() {
         let fix = match linked.first() {
             Some(k) => format!("PR #{n} belongs to task #{k}: run `bosun pr {k} --ready` instead"),
@@ -69,6 +66,22 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             fix,
         ));
     }
+    Ok(())
+}
+
+pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
+    let app = App::load(dir)?;
+    let gh = app.gh.as_ref();
+    kill_switch(gh)?;
+    let pull = gh.get_pull(n)?.ok_or_else(|| {
+        BosunError::error(
+            format!("PR #{n} does not exist"),
+            "check the number of the PR, then rerun",
+        )
+    })?;
+    let rerun = format!("bosun pr --pr {n} --ready");
+    let base = require_queueable(&app, &pull, &rerun)?;
+    refuse_task_pr(&app, &pull)?;
     // Only a governance PR of a repo writer goes this way; anything else is a task's work.
     let not_governance = |why: String| {
         BosunError::conflict(
@@ -110,6 +123,14 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             )));
         }
     }
+    queue(&app, pull, &base, &rerun, ready)
+}
+
+/// The draft-to-auto-merge flow of a task-less PR: with `ready`, every ready gate must be stamped
+/// on the local HEAD (the PR head), the ruleset must require the gates; then the PR is marked
+/// ready and auto-merge is turned on. No task state moves and no queue comment is written.
+pub(crate) fn queue(app: &App, mut pull: Pull, base: &str, rerun: &str, ready: bool) -> CmdResult {
+    let (gh, n) = (app.gh.as_ref(), pull.number);
     let trailers = super::trailers::check_pr(gh, n, app.ctx.config.trailers.require)?;
     if !ready {
         return Ok(Outcome::data(json!({
@@ -125,10 +146,10 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             "open a task for the change (`bosun pr <issue> --ready`), or the orchestrator merges it with `bosun merge`",
         ));
     }
-    check_local_gates(&app, &rerun, &pull)?;
-    let pending = not_green(gh, &base, &pull.head_sha)?;
+    check_local_gates(app, rerun, &pull)?;
+    let pending = not_green(gh, base, &pull.head_sha)?;
     let gates = merge_gates(gh, &pull.head_sha)?;
-    let enforced = enforced_checks(gh, &base, &pull, &rerun)?;
+    let enforced = enforced_checks(gh, base, &pull, rerun)?;
     let line: Vec<String> = gates.iter().map(|(c, s)| format!("{c}={s}")).collect();
     eprintln!(
         "bosun: auto-merge on PR #{n} relies on the gates {}; enforcement is {enforced}",
@@ -150,7 +171,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
                     "pr": pr_json(&pull), "task": null, "ready": "pending", "auto_merge": false,
                     "enforced_checks": enforced, "note": note, "trailers": trailers,
                 }));
-                out.next.push(update_pull_call(&app, n, false));
+                out.next.push(update_pull_call(app, n, false));
                 return Ok(out);
             }
             Err(e) => return Err(e),
@@ -163,7 +184,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
                 format!("the orchestrator merges PR #{n} (hand it over; you never merge)"),
             )
             .with_data(json!({"pr": n, "head_sha": pull.head_sha, "already_clean": true}));
-            super::result::clean_handoff(&app, clean, n, &pull.head_sha)
+            super::result::clean_handoff(app, clean, n, &pull.head_sha)
         } else if is_unstable(&e) {
             BosunError::error(
                 format!("PR #{n} has a failing check, so GitHub cannot turn on auto-merge"),

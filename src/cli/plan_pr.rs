@@ -71,6 +71,7 @@ pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
             ready: a.auto_merge,
             bundle: vec![],
             one_off: false,
+            single: false,
             touch: vec![],
         },
     )

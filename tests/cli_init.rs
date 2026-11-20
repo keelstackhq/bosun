@@ -257,20 +257,26 @@ fn a_splice_failure_is_an_error_with_its_messages() {
 }
 
 #[test]
-fn no_token_fails_before_anything_changes() {
+fn no_token_returns_the_create_pull_request_call() {
+    // No token and no gh: init still commits and pushes, and hands the PR to the MCP tool.
     let e = Env::new();
     let fake = FakeGithub::start();
     let splice = e.splice(OK_JSON, 0);
     let (code, v) = e.run_with(&fake, &splice, &["--stack", "rust"], |c| {
         c.env_remove("GITHUB_TOKEN");
     });
-    assert_eq!(code, 1, "{v}");
-    assert!(e.argv().is_empty());
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["pr"].is_null(), "{v}");
     assert_eq!(
+        v["next"][0]["tool"], "mcp__github__create_pull_request",
+        "{v}"
+    );
+    assert!(!e.argv().is_empty());
+    assert_ne!(
         git_out(e.repo.path(), &["branch", "--show-current"]),
         "main"
     );
-    assert!(!e.origin_has_branch());
+    assert!(e.origin_has_branch());
 }
 
 #[test]

@@ -116,3 +116,11 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | ----- | ------- | -------- |
 | `may_build` | false | A thread is for asking and requesting; code comes from spawned sessions with the full checks. |
 | Message length | at most 500 characters | Steering messages must stay short; long context goes into the issue. |
+
+## Tool pins: `.bosun/pins.toml`
+
+One channel-owned file holds the rust fallback toolchain (`[rust] fallback = "1.97"`, used when a
+repo has no `rust-toolchain(.toml)`), cargo-nextest (`[nextest]`) and cargo-deny (`[cargo-deny]`):
+version and linux x64 and arm64 sha256. bosun.yml, the CircleCI `bosun-ok` job and the setup
+script read it (CI reads the base copy, never the PR one), so a pin moves in one place;
+`splice update --channel bosun` moves it.

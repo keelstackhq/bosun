@@ -19,6 +19,7 @@ enum Kind {
     Deny,
     Cargo,
     Profile,
+    TemplateTests,
 }
 
 fn kind(path: &str) -> Option<Kind> {
@@ -28,6 +29,8 @@ fn kind(path: &str) -> Option<Kind> {
     Some(
         if lower.starts_with(".bosun/limits") && toml || name.contains("budget") && toml {
             Kind::Caps
+        } else if lower == ".bosun/template-tests" {
+            Kind::TemplateTests
         } else if lower == ".bosun/bosun.toml" {
             Kind::Config
         } else if lower == ".bosun/risk.toml" || name == "risk_default.toml" {
@@ -145,6 +148,22 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
     let Some(kind) = kind(path) else {
         return Vec::new();
     };
+    // `.bosun/template-tests` is a glob list, not TOML: a line added (a new or widened glob)
+    // waives test-integrity for more tests; removing lines does not.
+    if kind == Kind::TemplateTests {
+        let lines = |t: Option<&str>| -> Vec<String> {
+            (t.unwrap_or_default().lines())
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect()
+        };
+        let old = lines(base);
+        return (lines(head).into_iter())
+            .filter(|l| !old.contains(l))
+            .map(|l| format!("{path}: template-tests (none) → {l}"))
+            .collect();
+    }
     // An unparseable `.bosun/bosun.toml` base counts as empty, so `[mode]` is still judged.
     let b = match parse(base) {
         Some(b) => b,
@@ -304,6 +323,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                 }
             }
         }
+        Kind::TemplateTests => {}
         Kind::Rules => {
             let rules = |v: &Value| -> Vec<(String, Value)> {
                 let all = v.get("rule").and_then(Value::as_array);

@@ -2,6 +2,7 @@
 
 pub mod b64;
 pub mod gate;
+pub mod ghcli;
 pub mod http;
 pub mod types;
 
@@ -188,6 +189,8 @@ pub trait Github {
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The owner (user or org) of the repository this client talks to.
     fn repo_owner(&self) -> &str;
+    /// The login the token belongs to (`GET /user`); `None` when GitHub will not say.
+    fn current_user(&self) -> Result<Option<String>>;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
     /// The status checks the default branch enforces: rulesets plus classic branch protection.
@@ -455,6 +458,10 @@ impl LiveGithub {
 }
 
 impl Github for LiveGithub {
+    fn current_user(&self) -> Result<Option<String>> {
+        Ok(self.own_login())
+    }
+
     fn repo_owner(&self) -> &str {
         &self.owner
     }

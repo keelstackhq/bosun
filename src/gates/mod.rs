@@ -55,16 +55,18 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
-fn git_has(root: &Path, spec: &str) -> bool {
-    Command::new("git")
+/// Is `path` in the tree of `rev`? `Some(false)` only when git answered and the path is absent
+/// (`git ls-tree` exits 0 with no output); a bad rev or any other git error is `None`, so callers
+/// fail closed instead of mistaking a git failure for an absent file.
+pub(crate) fn git_has(root: &Path, rev: &str, path: &str) -> Option<bool> {
+    let out = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["cat-file", "-e", spec])
-        .stdout(Stdio::null())
+        .args(["ls-tree", "--name-only", rev, "--", path])
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .output()
+        .ok()?;
+    out.status.success().then_some(!out.stdout.is_empty())
 }
 
 /// Is `file` missing in the stack's working tree and at the base too? Also with `--all`: a
@@ -76,7 +78,32 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
         return false;
     }
     let path = Path::new(rel).join(file);
-    !git_has(req.root, &format!("{}:{}", req.base, path.display()))
+    absent_at_base(git_has(req.root, req.base, &path.to_string_lossy()))
+}
+
+/// True only when git answered that the path is absent; an error (`None`) is not absence, so the
+/// gate runs instead of being skipped.
+fn absent_at_base(has: Option<bool>) -> bool {
+    has == Some(false)
+}
+
+/// Is none of `files` present at the base commit, in the stack directory or any parent up to the
+/// repo root? Only the base counts: a bootstrap PR that adds the config has it at head, and the
+/// gate stays neutral until the base has it.
+fn missing_in_base(req: &Request, stack: &Stack, files: &[String]) -> bool {
+    let mut dir = PathBuf::from(stack_rel(&stack.path));
+    loop {
+        for f in files {
+            // Present, or git failed: the gate runs (fail closed).
+            if !absent_at_base(git_has(req.root, req.base, &dir.join(f).to_string_lossy())) {
+                return false;
+            }
+        }
+        if !dir.pop() {
+            // A true bootstrap has no `.bosun/` in the base either; with one, the gate runs.
+            return absent_at_base(git_has(req.root, req.base, ".bosun"));
+        }
+    }
 }
 
 /// The profile's manifest when the stack has none, head or base: a stack that never had one has
@@ -172,17 +199,29 @@ pub fn run(req: &Request) -> CmdResult {
 
     let mut runs: Vec<Value> = Vec::new();
     let mut failed: Option<i64> = None;
+    let mut no_lock: Option<(String, String)> = None;
     for (stack, profile, files) in &plan {
         let gate = profile.gate(req.gate)?;
         let lacks = gate
             .requires
             .as_deref()
             .filter(|f| missing_file(req, stack, f));
+        let bootstrap = (!gate.base_requires.is_empty()
+            && missing_in_base(req, stack, &gate.base_requires))
+        .then(|| gate.base_requires.join(", "));
         let run = match missing_manifest(req, stack, profile) {
             Some(manifest) => json!({
                 "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
                 "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
                 "reason": format!("no {manifest} in {}", stack.path),
+            }),
+            None if bootstrap.is_some() => json!({
+                "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                "reason": format!(
+                    "no {} in base: bootstrap PR, gate neutral",
+                    bootstrap.unwrap_or_default()
+                ),
             }),
             None => match lacks {
                 Some(file) => json!({
@@ -194,6 +233,26 @@ pub fn run(req: &Request) -> CmdResult {
             },
         };
         let status = run["exit_status"].as_i64().unwrap_or(0);
+        if status != 0
+            && gate.is_locked()
+            && let Some(lock) = profile.lockfile.as_deref()
+            && !lockfile_exists(req.root, stack_rel(&stack.path), lock)
+        {
+            let at = match stack_rel(&stack.path) {
+                "" => String::new(),
+                rel => format!(" in {rel}"),
+            };
+            no_lock = Some((
+                format!(
+                    "gate {} failed (exit {status}): no {lock}{at} or in a parent up to the repo root, and the gate runs with `--locked`",
+                    req.gate
+                ),
+                format!(
+                    "run `cargo generate-lockfile` and commit {lock}, then rerun `bosun gate {}`",
+                    req.gate
+                ),
+            ));
+        }
         runs.push(run);
         if status != 0 {
             failed = Some(status);
@@ -207,14 +266,32 @@ pub fn run(req: &Request) -> CmdResult {
     data["uncommitted"] = json!(dirty);
     match failed {
         None => Ok(Outcome::data(data)),
-        Some(code) => Err(BosunError::error(
-            format!("gate {} failed (exit {code})", req.gate),
-            format!(
-                "fix the failures above, then rerun `bosun gate {}`",
-                req.gate
-            ),
-        )
-        .with_data(data)),
+        Some(code) => {
+            let (message, fix) = no_lock.unwrap_or_else(|| {
+                (
+                    format!("gate {} failed (exit {code})", req.gate),
+                    format!(
+                        "fix the failures above, then rerun `bosun gate {}`",
+                        req.gate
+                    ),
+                )
+            });
+            Err(BosunError::error(message, fix).with_data(data))
+        }
+    }
+}
+
+/// Whether `lock` exists in the stack dir or a parent up to the repo root (a workspace member's
+/// lockfile sits at the workspace root).
+fn lockfile_exists(root: &Path, rel: &str, lock: &str) -> bool {
+    let mut dir = root.join(rel);
+    loop {
+        if dir.join(lock).exists() {
+            return true;
+        }
+        if dir == root || !dir.pop() {
+            return false;
+        }
     }
 }
 
@@ -423,5 +500,50 @@ mod tests {
         let changed = vec!["web/a.ts".to_string(), "src/b.rs".to_string()];
         assert_eq!(under_stack("web/", &changed), vec!["a.ts"]);
         assert_eq!(under_stack(".", &changed).len(), 2);
+    }
+
+    #[test]
+    fn a_git_error_is_not_absence() {
+        assert!(absent_at_base(Some(false)));
+        assert!(!absent_at_base(Some(true)));
+        assert!(!absent_at_base(None));
+    }
+
+    #[test]
+    fn git_has_tells_absent_from_a_git_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::create_dir(tmp.path().join(".bosun")).unwrap();
+        std::fs::write(tmp.path().join(".bosun/a"), "x").unwrap();
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "c",
+        ]);
+        assert_eq!(git_has(tmp.path(), "HEAD", ".bosun"), Some(true));
+        assert_eq!(git_has(tmp.path(), "HEAD", ".bosun/a"), Some(true));
+        assert_eq!(git_has(tmp.path(), "HEAD", "nope"), Some(false));
+        // A bad rev is an error, never "absent".
+        assert_eq!(git_has(tmp.path(), "no-such-rev", ".bosun"), None);
+        // A directory that is no repository too.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(git_has(plain.path(), "HEAD", ".bosun"), None);
     }
 }

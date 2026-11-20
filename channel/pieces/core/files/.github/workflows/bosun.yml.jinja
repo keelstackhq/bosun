@@ -81,6 +81,9 @@ jobs:
       ts_lock: ${{ steps.stack.outputs.lock }}
 {% endraw %}{% if "rust" in pieces %}{% raw %}      rust: ${{ steps.toolchain.outputs.channel }}
       rust_file: ${{ steps.toolchain.outputs.file }}
+      rust_fallback: ${{ steps.pins.outputs.rust_fallback }}
+      nextest: ${{ steps.pins.outputs.nextest }}
+      deny: ${{ steps.pins.outputs.deny }}
 {% endraw %}{% endif %}{% else %}{% raw %}  # The required CI check (spec D15). It fails unless the pin check and every gate succeeded.
   # Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok. A draft PR fails it in a few
   # seconds, before any heavy step (never skipped: a skipped required check counts as passed);
@@ -289,9 +292,41 @@ jobs:
           fi
           if [ -n "$first" ]; then lock=true; else lock=false; fi
           { echo "paths=$paths"; echo "path=$first"; echo "lock=$lock"; } >> "$GITHUB_OUTPUT"
-{% endraw %}{% endif %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
+{% endraw %}{% endif %}{% if "rust" in pieces %}      # The tool pins: .bosun/pins.toml, the base's copy (step `the base's config for the gates`,
+      # never the PR's; only while the base has none yet, the change that adds it, its copy is used).
+      # One source for this job, the PR-code job, docs/setup-script.sh and CircleCI.
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
+        name: tool pins
+        id: pins
+        env:
+{% raw %}          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}{% endraw %}
+        run: |
+          case "$BASE" in ""|0000000000000000000000000000000000000000) BASE="$GITHUB_SHA";; esac
+          f=.bosun/pins.toml
+          if [ ! -f "$f" ]; then
+            echo "::warning::the base has no .bosun/pins.toml yet (first adoption): this change's copy is used"
+            mkdir -p .bosun
+            git show HEAD:.bosun/pins.toml > "$f" || { echo "::error::.bosun/pins.toml is missing: run splice update --channel bosun"; exit 1; }
+          fi
+          pin() { awk -v s="[$1]" -v k="$2" '$0 == s { on = 1; next } /^\[/ { on = 0 } on && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$f"; }
+          fallback="$(pin rust fallback)"; nextest="$(pin nextest version)"; deny="$(pin cargo-deny version)"
+          # A repo whose base has hull's pins.toml and scripts/pins.mjs takes the versions from the
+          # base's pins.toml [pins] table (read with awk here, never the PR's copy).
+          if git cat-file -e "$BASE:pins.toml" 2>/dev/null && git cat-file -e "$BASE:scripts/pins.mjs" 2>/dev/null; then
+            git show "$BASE:pins.toml" > "$RUNNER_TEMP/hull-pins.toml"
+            f="$RUNNER_TEMP/hull-pins.toml"
+            v="$(pin pins rust)"; [ -z "$v" ] || fallback="$v"
+            v="$(pin pins nextest)"; [ -z "$v" ] || nextest="$v"
+            v="$(pin pins cargo_deny)"; [ -z "$v" ] || deny="$v"
+          fi
+          [[ "$fallback" =~ ^[0-9A-Za-z._-]+$ ]] || { echo "::error::.bosun/pins.toml: [rust] fallback is missing or not a toolchain name"; exit 1; }
+          [[ "$nextest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.bosun/pins.toml: [nextest] version is missing or not X.Y.Z"; exit 1; }
+          [[ "$deny" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.bosun/pins.toml: [cargo-deny] version is missing or not X.Y.Z"; exit 1; }
+          echo "PIN_RUST_FALLBACK=$fallback" >> "$GITHUB_ENV"
+          { echo "rust_fallback=$fallback"; echo "nextest=$nextest"; echo "deny=$deny"; } >> "$GITHUB_OUTPUT"
+      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
       # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
-      # old pin (docs/setup-script.sh has none: it skips Rust without the file): a bare
+      # fallback pin of .bosun/pins.toml (docs/setup-script.sh has none: it skips Rust without the file): a bare
       # `rustup toolchain install` would install the runner's default (stable).
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         name: rust toolchain
@@ -308,7 +343,7 @@ jobs:
           # TOML parser still checks it: only a [toolchain] with a plain channel, components,
           # targets and profile (a `path` would make rustup run another compiler), and later
           # steps get RUSTUP_TOOLCHAIN, so rustup reads no toolchain file after this step.
-          ch=1.97
+          ch="$PIN_RUST_FALLBACK"
           if [ -n "$found" ]; then
             ch="$(python3 -I - "$d" <<'PY'
           import os, re, sys, tomllib
@@ -354,15 +389,15 @@ jobs:
           if [ -n "$found" ]; then
             rustup toolchain install
           else
-            rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
-            rustup default 1.97
+            rustup toolchain install "$ch" --profile minimal -c rustfmt,clippy
+            rustup default "$ch"
           fi
           rustup component add rustfmt clippy
 {% if "ts-pnpm" in pieces %}      # No cache here: a cache is saved by the job that runs PR code. cargo-deny only (deps).
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
-          tool: cargo-deny
+          tool: {% raw %}cargo-deny@${{ steps.pins.outputs.deny }}{% endraw %}
 {% else %}      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -373,7 +408,7 @@ jobs:
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
-          tool: cargo-nextest,cargo-deny
+          tool: {% raw %}cargo-nextest@${{ steps.pins.outputs.nextest }},cargo-deny@${{ steps.pins.outputs.deny }}{% endraw %}
 {% endif %}{% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack, for the deps gate's `pnpm audit` only: Node 24 and the pnpm release that the
       # base's package.json `packageManager` names (the PR's while the base names none), an exact
       # version 9 or later from the registry, never a path, URL or range. No install, no cache. Skipped
@@ -614,11 +649,12 @@ jobs:
 {% raw %}        env:
           CHANNEL: ${{ needs.bosun-trusted.outputs.rust }}
           FILE: ${{ needs.bosun-trusted.outputs.rust_file }}
+          FALLBACK: ${{ needs.bosun-trusted.outputs.rust_fallback }}
 {% endraw %}        run: |
           if [ -n "$FILE" ]; then
             rustup toolchain install
           else
-            rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+            rustup toolchain install "$FALLBACK" --profile minimal -c rustfmt,clippy
           fi
           echo "RUSTUP_TOOLCHAIN=$CHANNEL" >> "$GITHUB_ENV"
           RUSTUP_TOOLCHAIN="$CHANNEL" rustup component add rustfmt clippy
@@ -630,7 +666,7 @@ jobs:
       - if: needs.bosun-trusted.outputs.pr_gates != ''
         uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
-          tool: cargo-nextest
+          tool: {% raw %}cargo-nextest@${{ needs.bosun-trusted.outputs.nextest }}{% endraw %}
 {% endif %}      # Node 24, pnpm from package.json `packageManager`, the Turborepo cache through hoard. A
       # plain install: the PR's install scripts run here, after bosun-trusted passed.
 {% raw %}      - uses: pnpm/action-setup@v4

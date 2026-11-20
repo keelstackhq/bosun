@@ -44,6 +44,9 @@ static HOLD: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^X[1-9][0-9]{0,2}$")
 static WHO: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,38}$"));
 static LIST: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([-*+]|[0-9]+\.) "));
 static BULLET: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^- ([^:\s]+):\s*(\S.*)$"));
+static LOOSE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    re(r"^[-*+] (H[0-9]*)(?:[ \t]*:[ \t]*|[ \t]+[-\u{2013}\u{2014}][ \t]+)(\S.*)$")
+});
 static KEY: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([a-z-]+):\s*(.*)$"));
 static NAME: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z_][A-Za-z0-9_]*$"));
 static ENV: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z0-9_.-]+$"));
@@ -278,6 +281,128 @@ pub fn parse(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
         finish(o, plan, &mut out, &mut errs);
     }
     if errs.is_empty() { Ok(out) } else { Err(errs) }
+}
+
+/// The prerequisites of a plan as every reader takes them (the checklist, `bosun prereqs`, the
+/// gate, `hold`): through `parse_lenient`, so a file `plan import` accepted is never refused
+/// later. The file itself is never rewritten here (only `plan check --fix` / `plan import --fix`).
+pub fn parse_read(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
+    parse_read_checked(text, plan).map(|(p, _)| p)
+}
+
+/// `parse_read` and whether any bullet's id was inferred (missing or duplicate): such ids shift
+/// when a bullet is inserted earlier, so they are only stable once written into the file.
+pub fn parse_read_checked(text: &str, plan: &Plan) -> Result<(Vec<Prereq>, bool), Vec<PlanError>> {
+    parse_lenient(text, plan).map(|l| (l.prereqs, l.renumbered))
+}
+
+/// The warning for a plan whose prerequisite ids are inferred.
+pub fn inferred_ids_warning(file: &str) -> String {
+    format!(
+        "{file}: prerequisite ids are inferred; run `bosun plan check {file} --fix` to make them stable"
+    )
+}
+
+/// One prerequisite bullet that `parse_lenient` rewrote.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fixed {
+    pub line: usize,
+    pub from: String,
+    pub to: String,
+}
+
+/// What `parse_lenient` made of a plan: the prerequisites, the bullets it rewrote and the plan
+/// text with only those lines changed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lenient {
+    pub prereqs: Vec<Prereq>,
+    pub fixed: Vec<Fixed>,
+    /// A bullet had a missing or duplicate id and took an inferred number.
+    pub renumbered: bool,
+    pub text: String,
+}
+
+/// `parse` after normalizing the bullets of the `## Prerequisites` section: `* ` and `+ `
+/// bullets, `- H3 - title`, and `- H:` or `- H<n>:` with a missing, duplicate or out-of-order
+/// number. Only bullets with a missing or duplicate id are renumbered (lowest unused H<n>, in
+/// file order); every unique valid id stays, even out of order. Fields and every other line are left as written, so the other errors are
+/// `parse`'s, on the same lines.
+pub fn parse_lenient(text: &str, plan: &Plan) -> Result<Lenient, Vec<PlanError>> {
+    let (bom, body) = match text.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", text),
+    };
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let (mut in_sec, mut fence): (bool, Option<&str>) = (false, None);
+    // (index into `lines`, digits after H, title)
+    let mut found: Vec<(usize, String, String)> = Vec::new();
+    for (i, raw) in lines.iter().enumerate() {
+        let line = raw.trim_end();
+        let marker = ["```", "~~~"]
+            .into_iter()
+            .find(|m| line.trim_start().starts_with(m));
+        if let Some(m) = marker.filter(|m| fence.is_none_or(|f| f == *m)) {
+            fence = if fence.is_some() { None } else { Some(m) };
+            continue;
+        }
+        if fence.is_some() || line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with("## ") {
+            in_sec = line == "## Prerequisites";
+        } else if in_sec
+            && !line.starts_with([' ', '\t'])
+            && let Some(c) = LOOSE.captures(line)
+        {
+            found.push((i, c[1][1..].to_string(), c[2].trim().to_string()));
+        }
+    }
+    let number = |d: &str| -> Option<u32> {
+        ID.is_match(&format!("H{d}"))
+            .then(|| d.parse().ok())
+            .flatten()
+    };
+    // A unique valid id stays as is, even out of order; a missing or duplicate one (the later
+    // bullet of a pair) takes the lowest unused number, in file order.
+    let nums: Vec<Option<u32>> = found.iter().map(|f| number(&f.1)).collect();
+    let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let keep: Vec<bool> = nums
+        .iter()
+        .map(|n| n.is_some_and(|n| used.insert(n)))
+        .collect();
+    let mut next = 1u32;
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    let mut fixed = Vec::new();
+    for (k, (i, digits, title)) in found.iter().enumerate() {
+        let id = if keep[k] {
+            digits.clone()
+        } else {
+            while used.contains(&next) {
+                next += 1;
+            }
+            used.insert(next);
+            next.to_string()
+        };
+        let to = format!("- H{id}: {title}");
+        let raw = lines[*i];
+        let from = raw.trim_end();
+        if to != from {
+            out[*i] = format!("{to}{}", &raw[from.len()..]);
+            fixed.push(Fixed {
+                line: i + 1,
+                from: from.to_string(),
+                to,
+            });
+        }
+    }
+    let text = format!("{bom}{}", out.concat());
+    let prereqs = parse(&text, plan)?;
+    Ok(Lenient {
+        prereqs,
+        fixed,
+        renumbered: keep.contains(&false),
+        text,
+    })
 }
 
 /// Ids of the prerequisites that block this task (listed as `<item>/<task>` or as `<item>`).
