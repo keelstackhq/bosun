@@ -2130,14 +2130,13 @@ fn signed_approver(
 
 /// The trust-root entries a changed `.bosun/version` adds under quorum (D-022): one reason from
 /// [`risk::pin_change_trust_root`], or none when the pin is untouched or an upgrade to a released
-/// version. A pin names releases of keelstackhq/bosun, whose `v{version}` ref only bosun's own
-/// repo (`bosun_code`) can look up with this client, so elsewhere a changed pin fails closed; any
-/// API error does too.
+/// version. A pin names releases of bosun's upstream repo (`[approvals] bosun_repo` read at base,
+/// default keelstackhq/bosun), whose `v{version}` ref is looked up there, whatever repo the PR is
+/// in. An unparsable base config, an invalid `bosun_repo` and any API error fail closed.
 pub(crate) fn pin_trust_root(
     gh: &dyn Github,
     paths: &[(&str, Option<&str>)],
     (base, head): (&str, &str),
-    bosun_code: bool,
 ) -> Vec<String> {
     if !risk::pin_changed(paths) {
         return Vec::new();
@@ -2154,12 +2153,31 @@ pub(crate) fn pin_trust_root(
     let same = old.as_deref().map(str::trim) == new.as_deref().map(str::trim);
     let released = same
         || match new.as_deref().map(str::trim) {
-            Some(v) if bosun_code => gh.tag_exists(&format!("v{v}")).unwrap_or(false),
-            _ => false,
+            Some(v) => match upstream_repo(gh, base) {
+                Ok((o, r)) => gh.tag_exists_in(&o, &r, &format!("v{v}")).unwrap_or(false),
+                Err(why) => return vec![why],
+            },
+            None => false,
         };
     (risk::pin_change_trust_root(old.as_deref(), new.as_deref(), released))
         .into_iter()
         .collect()
+}
+
+/// The bosun upstream repo from `[approvals] bosun_repo` at `base` (never the head).
+fn upstream_repo(gh: &dyn Github, base: &str) -> std::result::Result<(String, String), String> {
+    let approvals = match gh.file_at(CONFIG_FILE, base) {
+        Ok(Some(t)) => {
+            Config::parse(&t, CONFIG_FILE)
+                .map_err(|e| format!("{CONFIG_FILE} at base does not parse: {}", e.message))?
+                .approvals
+        }
+        Ok(None) => Default::default(),
+        Err(e) => return Err(format!("{CONFIG_FILE} unreadable: {}", e.message)),
+    };
+    approvals
+        .bosun_repo_pair()
+        .map_err(|v| format!("[approvals] bosun_repo {v:?} is not owner/name"))
 }
 
 /// The signing policy (autonomous or quorum) in force at base and who set it; `None` for the rest.
@@ -2196,7 +2214,7 @@ fn orchestrator_window(
     autonomous_excluded.extend(risk::path_attributes(&patches));
     let mut trust_root = risk::trust_root_changed(&paths, bosun_code);
     if approvals.policy() == Policy::Quorum {
-        trust_root.extend(pin_trust_root(gh, &paths, (base, head), bosun_code));
+        trust_root.extend(pin_trust_root(gh, &paths, (base, head)));
     }
     let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),

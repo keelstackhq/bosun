@@ -99,8 +99,9 @@ pub trait Github {
     fn label_exists(&self, name: &str) -> Result<bool>;
     /// Whether the branch exists on GitHub (is pushed).
     fn branch_exists(&self, name: &str) -> Result<bool>;
-    /// Whether the git tag `name` exists in the repository (404 is `false`).
-    fn tag_exists(&self, name: &str) -> Result<bool>;
+    /// Whether the git tag `name` exists in the repository `owner/repo`, which need not be this
+    /// one (404 is `false`). Same token and API base as every other call.
+    fn tag_exists_in(&self, owner: &str, repo: &str, name: &str) -> Result<bool>;
     /// Delete the label from the repository; one that does not exist is fine.
     fn delete_label(&self, name: &str) -> Result<()>;
     /// Create the label; one that already exists is fine.
@@ -586,8 +587,13 @@ impl Github for LiveGithub {
         Ok(self.http.get_json(&path)?.is_some())
     }
 
-    fn tag_exists(&self, name: &str) -> Result<bool> {
-        let path = self.path(&format!("/git/ref/tags/{}", enc(name)));
+    fn tag_exists_in(&self, owner: &str, repo: &str, name: &str) -> Result<bool> {
+        let path = format!(
+            "/repos/{}/{}/git/ref/tags/{}",
+            enc(owner),
+            enc(repo),
+            enc(name)
+        );
         Ok(self.http.get_json(&path)?.is_some())
     }
 

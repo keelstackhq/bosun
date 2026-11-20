@@ -1029,7 +1029,6 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>, policy: Policy
             gh,
             &paths,
             (&pull.base_sha, &pull.head_sha),
-            bosun_code,
         ));
         if !root.is_empty() {
             return Err(BosunError::error(

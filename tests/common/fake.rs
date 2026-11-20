@@ -139,7 +139,7 @@ pub struct State {
     /// Branches `GET /branches/<name>` answers 404 for; every other branch exists.
     pub missing_branches: Vec<String>,
     /// Git refs `GET /git/ref/tags/<name>` answers 200 for; every other one is 404.
-    pub release_refs: Vec<String>,
+    pub release_refs: Vec<(String, String)>,
 }
 
 type Mutation = Box<dyn FnOnce(&mut State) + Send>;
@@ -662,9 +662,16 @@ impl FakeGithub {
             .push(name.into());
     }
 
-    /// Publish the release ref `name` (such as `v0.22.0`): `GET /git/ref/tags/<name>` answers 200.
+    /// Publish the release ref `name` (such as `v0.22.0`) in bosun's upstream repo
+    /// `keelstackhq/bosun`: `GET /repos/keelstackhq/bosun/git/ref/tags/<name>` answers 200.
     pub fn release_ref(&self, name: &str) {
-        self.state.lock().unwrap().release_refs.push(name.into());
+        self.release_ref_in("keelstackhq/bosun", name);
+    }
+
+    /// Publish the release ref `name` in the repo `owner/name`; the same ref in another repo is 404.
+    pub fn release_ref_in(&self, repo: &str, name: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.release_refs.push((repo.into(), name.into()));
     }
 
     pub fn graphql_status(&self, status: u16, message: &str) {
@@ -1098,9 +1105,10 @@ fn route(
             None => msg(404, "Not Found"),
         };
     }
-    let ["repos", _, _, rest @ ..] = seg.as_slice() else {
+    let ["repos", repo_owner, repo_name, rest @ ..] = seg.as_slice() else {
         return msg(404, "Not Found");
     };
+    let repo_full = format!("{repo_owner}/{repo_name}");
     let find = |s: &State, n: &str| {
         n.parse::<u64>()
             .ok()
@@ -1292,7 +1300,7 @@ fn route(
             ok(json!({"name": name}))
         }
         ("GET", ["git", "ref", "tags", name]) => {
-            if s.release_refs.iter().any(|t| t == name) {
+            if (s.release_refs.iter()).any(|(r, t)| *r == repo_full && t == name) {
                 return ok(json!({"ref": format!("refs/tags/{name}")}));
             }
             msg(404, "Not Found")

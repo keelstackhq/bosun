@@ -585,13 +585,80 @@ fn a_pin_upgrade_to_a_released_version_passes_quorum() {
 }
 
 #[test]
-fn a_pin_change_outside_bosuns_own_repo_fails_closed() {
+fn a_consumer_repo_pin_bump_to_a_released_upstream_tag_passes() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.release_ref("v0.23.0"); // on keelstackhq/bosun, not on this repo
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_consumer_repo_pin_bump_to_a_missing_tag_stays_with_the_owner() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.release_ref_in("o/r", "v0.23.0"); // a tag in the PR's own repo is not a release
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 5, "{v}");
+    owner_path(&fake, &v, "missing tag");
+}
+
+#[test]
+fn a_bosun_repo_override_at_base_is_the_lookup_repo() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.content(
+        ".bosun/bosun.toml",
+        BASE,
+        "[approvals]\npolicy = \"quorum\"\nbosun_repo = \"acme/bosun-fork\"\n",
+    );
+    fake.release_ref("v0.23.0"); // the default repo is no longer asked
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 5, "{v}");
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.content(
+        ".bosun/bosun.toml",
+        BASE,
+        "[approvals]\npolicy = \"quorum\"\nbosun_repo = \"acme/bosun-fork\"\n",
+    );
+    fake.release_ref_in("acme/bosun-fork", "v0.23.0");
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_head_only_bosun_repo_override_is_ignored_and_a_bad_one_fails_closed() {
+    let k = key();
+    let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+    fake.content(
+        ".bosun/bosun.toml",
+        HEAD,
+        "[approvals]\npolicy = \"quorum\"\nbosun_repo = \"acme/fork\"\n",
+    );
+    fake.release_ref_in("acme/fork", "v0.23.0");
+    let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+    assert_eq!(code, 5, "{v}");
+    for bad in ["bosun", "a/b/c", "../x", "a/", "/b", "a b/c"] {
+        let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
+        fake.content(
+            ".bosun/bosun.toml",
+            BASE,
+            &format!("[approvals]\npolicy = \"quorum\"\nbosun_repo = \"{bad}\"\n"),
+        );
+        fake.release_ref("v0.23.0");
+        let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
+        assert_eq!(code, 5, "{bad}: {v}");
+    }
+}
+
+#[test]
+fn an_api_error_looking_up_the_tag_fails_closed() {
     let k = key();
     let fake = pin_pr(&k, "0.22.0\n", Some("0.23.0\n"), false);
     fake.release_ref("v0.23.0");
+    fake.fail_path("/git/ref/tags/v0.23.0", 500);
     let (code, v) = with(&fake, &k, &["session_r", "session_s"]);
     assert_eq!(code, 5, "{v}");
-    owner_path(&fake, &v, "other repo");
 }
 
 #[test]
