@@ -7,9 +7,17 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::hooks::git_out;
-use crate::time::parse_rfc3339;
+use crate::time::{Timestamp, parse_rfc3339};
 
 const MAX_AGE_SECS: i64 = 14 * 86_400;
+/// How far (seconds) an answer's `at` may lie after now: a later one never counts, so a
+/// future-dated entry cannot outrank every later answer, and it is pruned on the next write.
+const FUTURE_SKEW_SECS: i64 = 60;
+
+/// Whether `at` is not later than now plus [`FUTURE_SKEW_SECS`].
+fn not_future(at: &str, now: Timestamp) -> bool {
+    when(at) <= now.0 + FUTURE_SKEW_SECS
+}
 
 /// One stored answer: `answer` is `approve` or `hold`; `session` is the bosun identity the hook resolves like the
 /// CLI does (`BOSUN_SESSION`, else the remote session id; T5 needs the same session as the
@@ -80,12 +88,14 @@ pub fn get(dir: &Path, repo: &str, question_id: &str) -> Option<Answer> {
 }
 
 /// The newest answer to `pr` of `repo` at exactly `head` (by `at`; a hold wins a tie). A new
-/// head is asked again, so only the exact head counts.
+/// head is asked again, so only the exact head counts. An answer dated after now (plus a small
+/// skew) is ignored.
 pub fn current(dir: &Path, repo: &str, pr: u64, head: &str) -> Option<Answer> {
     let map = read(&path(dir)?)?;
+    let now = Timestamp::now();
     map.values()
         .filter_map(answer_of)
-        .filter(|a| a.repo == repo && a.pr == pr && a.head == head)
+        .filter(|a| a.repo == repo && a.pr == pr && a.head == head && not_future(&a.at, now))
         .max_by_key(|a| (when(&a.at), a.answer == "hold"))
 }
 
@@ -95,7 +105,8 @@ pub fn held(dir: &Path, repo: &str, pr: u64, head: &str) -> bool {
 }
 
 /// Store `(question_id, answer)` pairs, replacing earlier answers to the same ids. Entries older
-/// than 14 days and entries for another head of a stored PR are dropped. Atomic (tmp + rename).
+/// than 14 days, dated after now (plus the skew), or for another head of a stored PR are dropped;
+/// an answer dated after now is refused. Atomic (tmp + rename).
 /// The file is a local hint, never proof (spec 14): a guard stops confused workers, not liars.
 /// An answer with no `session`, `cli_session_id` or `repo` is refused and nothing is stored; so is a corrupt
 /// file (it is not reset).
@@ -113,16 +124,23 @@ pub fn store(dir: &Path, items: &[(String, Answer)]) -> std::io::Result<()> {
             "an answer needs the bosun session, the hook's session_id and the repo",
         ));
     }
+    let now = Timestamp::now();
+    if items.iter().any(|(_, a)| !not_future(&a.at, now)) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "an answer is dated after now",
+        ));
+    }
     let Some(mut map) = read(&file) else {
         return Err(Error::new(
             ErrorKind::InvalidData,
             "answers.json is corrupt",
         ));
     };
-    let newest = items.iter().map(|(_, a)| when(&a.at)).max().unwrap_or(0);
     map.retain(|_, v| {
         let Some(a) = answer_of(v) else { return false };
-        when(&a.at) >= newest - MAX_AGE_SECS
+        when(&a.at) >= now.0 - MAX_AGE_SECS
+            && not_future(&a.at, now)
             && !items
                 .iter()
                 .any(|(_, n)| n.repo == a.repo && n.pr == a.pr && n.head != a.head)
