@@ -783,6 +783,10 @@ pub struct DoctorArgs {
     /// unknown items and verify notes are listed in data.hoist
     #[arg(long)]
     pub remote: bool,
+    /// Also run `splice check` and `hoist check` when each is installed, and fold their exit
+    /// status and output into data.tools; independent of --remote
+    #[arg(long)]
+    pub all: bool,
     /// Print every checklist step and Routine; by default only the steps that need action.
     #[arg(long)]
     pub full: bool,

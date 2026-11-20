@@ -38,7 +38,9 @@ doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{
     fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
-    skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
+    skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str},
+    tools?: {splice: {installed: bool, ok: bool | null, exit_code: int | null, output: any, reason?: str},
+    hoist: {installed: bool, ok: bool | null, exit_code: int | null, output: any, reason?: str}}};
 budget record = {usd: num, provider?: str, session?: str, model?: str | null, issue?: int | null,
     blocked?: bool, over_task_cap?: bool, task_total_usd?: num, prs?: [int], recorded?: [int],
     already_recorded?: [int], usd_per_pr?: num, lesson?: {created?: bool, hits?: int, issue?: int,
@@ -88,7 +90,8 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], labels_todo?: [str], branch_reused?: bool,
+    owner?: str | null, owner_source?: str | null, routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};
