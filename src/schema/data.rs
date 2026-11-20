@@ -97,7 +97,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     owner?: str | null, owner_source?: str | null, owner_skipped?: str | null, owner_suggested?: str | null, routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
-    registry: {action: str, reason?: str, number?: int}};
+    registry: {action: str, reason?: str, number?: int}, ci: str | null, workflows_skipped: [str]};
 uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels: [{action: str,
     name: str, fix?: str}], registry: {action: str, number?: int}};
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
@@ -130,7 +130,7 @@ main-health = {result: str, changed: bool, opened: bool, closed: bool, main_red:
     note: str, rejudged: int, rejudge_errors: [any], skipped_unknown: [int],
     conflicts: [{issue: int, pr: int, posted: bool, fix: str}], conflict_errors: [{error: str,
     issue?: int}], gate_missed: {created?: bool, issue?: int, error?: str} | null,
-    lesson: {created: bool, hits: int, issue: int} | null};
+    lesson: {created: bool, hits: int, issue: int} | null} | {result: str, skipped: str};
 gate-missed = {issue: int, created: bool, key: str};
 review-ci = {pr: int, head_sha?: str, since_sha?: str | null, model?: str, skipped?: str,
     dry_run?: bool, approved?: bool, status?: str, reasons?: [str], task_state?: str | null,
@@ -176,7 +176,7 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     main_open?: {head_sha: str, pr: int}, bodies?: [{after_review: int | null, body: str}],
     body?: str, bootstrap_until?: str | null, head_sha?: str, key_id?: str, policy?: str | null,
     policy_source?: str | null, pr?: int, role?: str, requested?: bool, workflow?: str,
-    ref?: str, ci_ok?: str};
+    ref?: str, ci_ok?: str, comment_id?: int, question_id?: str | null};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, verdict_reapplied: int | null,
@@ -199,7 +199,8 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
     gates?: [{context: str, state: str}], pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]},
-    epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
+    epic_error?: str, task?: int, claim?: {..}, stamps?: [str], risk?: str, verdicts?: [str],
+    approval?: str | null, merge_next?: str, next_command?: str} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
     pending_checks?: [{context: str, state: str}], mode?: str, created?: bool, single_reason?: "bootstrap" | "one-off",

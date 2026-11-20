@@ -138,6 +138,14 @@ pub(crate) fn queue(app: &App, mut pull: Pull, base: &str, rerun: &str, ready: b
             "trailers": trailers,
         })));
     }
+    if super::pr_no_ci::provider_default(gh)? == crate::config::CiProvider::None {
+        return Err(BosunError::needs_human(
+            format!(
+                "PR #{n} has no task and `[ci] provider = \"none\"`: bosun turns on no auto-merge here"
+            ),
+            "open a task for the change (`bosun pr <issue> --ready`), or the orchestrator merges it with `bosun merge`",
+        ));
+    }
     check_local_gates(app, rerun, &pull)?;
     let pending = not_green(gh, base, &pull.head_sha)?;
     let gates = merge_gates(gh, &pull.head_sha)?;

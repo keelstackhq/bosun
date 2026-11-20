@@ -251,6 +251,8 @@ fn every_variant_renders_to_files_that_parse() {
                     ("policy_pin_checked", ""),
                     // Both renders of the App switch, without more variants.
                     ("bosun_app", if owner.is_empty() { "" } else { "1" }),
+                    ("ci_provider", ""),
+                    ("ci_pin_checked", ""),
                 ]
                 .into_iter()
                 .map(|(k, v)| (k, v.to_string()))
@@ -349,6 +351,8 @@ fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, Strin
         ("policy", ""),
         ("policy_pin_checked", ""),
         ("bosun_app", ""),
+        ("ci_provider", ""),
+        ("ci_pin_checked", ""),
     ]
     .into_iter()
     .map(|(k, v)| (k, v.to_string()))
@@ -2024,6 +2028,8 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             ("policy", ""),
             ("policy_pin_checked", ""),
             ("bosun_app", ""),
+            ("ci_provider", ""),
+            ("ci_pin_checked", ""),
         ]
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))
@@ -2039,6 +2045,42 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             want,
             "bosun_version={bosun_version:?}: {config:?}"
         );
+    }
+}
+
+/// `[ci]` follows the same pin rule as the policy: an explicit pin needs `ci_pin_checked`.
+#[test]
+fn an_explicit_pin_writes_ci_only_when_checked() {
+    for (pin, checked, written) in [("0.21.0", "", false), ("0.22.0", "1", true), ("", "", true)] {
+        let vars: BTreeMap<&str, String> = [
+            ("project", "app"),
+            ("owner", ""),
+            ("bosun_version", pin),
+            ("template.version", "0.22.0"),
+            ("rust_path", "."),
+            ("ts_path", "."),
+            ("own_ci", ""),
+            ("intake", ""),
+            ("policy", ""),
+            ("policy_pin_checked", ""),
+            ("ci_provider", "none"),
+            ("ci_pin_checked", checked),
+            ("bosun_app", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+        let files = render_channel(&["core", "rust"], &vars);
+        let text = file(&files, ".bosun/bosun.toml");
+        let config: toml::Table = text.parse().unwrap();
+        let got = config
+            .get("ci")
+            .and_then(|c| c.get("provider"))
+            .and_then(|v| v.as_str());
+        assert_eq!(got.is_some(), written, "pin {pin:?}: {text}");
+        if written {
+            assert_eq!(got, Some("none"));
+        }
     }
 }
 
@@ -2068,6 +2110,8 @@ fn an_explicit_pin_writes_the_policy_only_when_checked() {
             ("intake", ""),
             ("policy", "autonomous"),
             ("policy_pin_checked", checked),
+            ("ci_provider", ""),
+            ("ci_pin_checked", ""),
             ("bosun_app", ""),
         ]
         .into_iter()

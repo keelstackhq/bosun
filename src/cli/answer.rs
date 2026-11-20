@@ -23,7 +23,7 @@ use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 
-fn valid_slack_id(id: &str) -> bool {
+pub(crate) fn valid_slack_id(id: &str) -> bool {
     let b = id.as_bytes();
     b.len() >= 3
         && matches!(b[0], b'U' | b'W')

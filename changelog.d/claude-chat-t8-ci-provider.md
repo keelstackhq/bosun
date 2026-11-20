@@ -1,0 +1,1 @@
+- `[ci] provider = "github"|"circleci"|"none"` config key (missing = github, known from 0.22.0); `none` skips `main-health` and `gate ci-minutes`; `bosun adopt` detects it (`--ci`), writes `[ci]` only for pins from 0.22.0; any `[ci]` change is R-weaken evidence.

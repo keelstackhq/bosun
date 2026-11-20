@@ -204,8 +204,10 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
         }
         Kind::Config => {
             let gated = |k: &str| {
+                // `[ci]` (CI off drops every CI check): any change counts, a non-table `ci` too.
                 k == "stack"
-                    || ["approvals.", "checks.", "prices.", "review."]
+                    || k == "ci"
+                    || ["approvals.", "ci.", "checks.", "prices.", "review."]
                         .iter()
                         .any(|p| k.starts_with(p))
             };
@@ -1305,6 +1307,30 @@ mod tests {
                 "[graph]\nall-features = false\n"
             ),
             ["deny.toml: graph.all-features true → false"]
+        );
+    }
+
+    #[test]
+    fn ci_provider_none_is_a_finding() {
+        let c = ".bosun/bosun.toml";
+        let gh = "project = \"p\"\n[ci]\nprovider = \"github\"\n";
+        assert_eq!(
+            t(c, gh, &gh.replace("github", "none")),
+            [".bosun/bosun.toml: ci.provider github → none"]
+        );
+        assert_eq!(
+            t(c, "project = \"p\"\n", &gh.replace("github", "none")),
+            [".bosun/bosun.toml: ci.provider (none) → none"]
+        );
+        // Moving to another provider (circleci) is a finding too, as is any other change of
+        // `[ci]` and a non-table `ci`.
+        assert_eq!(
+            t(c, gh, &gh.replace("github", "circleci")),
+            [".bosun/bosun.toml: ci.provider github → circleci"]
+        );
+        assert_eq!(
+            t(c, "project = \"p\"\n", "ci = \"none\"\n"),
+            [".bosun/bosun.toml: ci (none) → none"]
         );
     }
 

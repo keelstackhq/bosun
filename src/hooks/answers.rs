@@ -81,10 +81,47 @@ fn when(at: &str) -> i64 {
     parse_rfc3339(at).map_or(i64::MIN, |t| t.0)
 }
 
-/// The stored answer to `question_id` for `repo`, if any.
+/// The stored answer to `question_id` for `repo`, if any; one dated after now (plus the skew)
+/// is ignored.
 pub fn get(dir: &Path, repo: &str, question_id: &str) -> Option<Answer> {
     let a = answer_of(read(&path(dir)?)?.get(question_id)?)?;
-    (a.repo == repo).then_some(a)
+    (a.repo == repo && not_future(&a.at, Timestamp::now())).then_some(a)
+}
+
+/// The ask `approve --list` issued as a Claude Tag post for `question_id` (stored with answer
+/// `asked`), for `repo`. It is no answer: [`current`] and [`held`] ignore it.
+pub fn asked(dir: &Path, repo: &str, question_id: &str) -> Option<Answer> {
+    get(dir, repo, question_id).filter(|a| a.answer == "asked")
+}
+
+/// Record the Claude Tag asks `(question_id, pr, head)` that `approve --list` posts, so the
+/// Slack `--chat` path can require an ask that was actually issued.
+pub fn record_asks(
+    dir: &Path,
+    repo: &str,
+    session: &str,
+    at: &str,
+    asks: &[(String, u64, String)],
+) {
+    let items: Vec<(String, Answer)> = asks
+        .iter()
+        .map(|(id, pr, head)| {
+            let a = Answer {
+                answer: "asked".into(),
+                repo: repo.into(),
+                pr: *pr,
+                head: head.clone(),
+                at: at.into(),
+                session: session.into(),
+                cli_session_id: "approve-list".into(),
+                tool_use_id: String::new(),
+            };
+            (id.clone(), a)
+        })
+        .collect();
+    if let Err(e) = store(dir, &items) {
+        eprintln!("bosun: warning: cannot record the asks: {e}");
+    }
 }
 
 /// The newest answer to `pr` of `repo` at exactly `head` (by `at`; a hold wins a tie). A new
@@ -95,7 +132,13 @@ pub fn current(dir: &Path, repo: &str, pr: u64, head: &str) -> Option<Answer> {
     let now = Timestamp::now();
     map.values()
         .filter_map(answer_of)
-        .filter(|a| a.repo == repo && a.pr == pr && a.head == head && not_future(&a.at, now))
+        .filter(|a| {
+            a.repo == repo
+                && a.pr == pr
+                && a.head == head
+                && a.answer != "asked"
+                && not_future(&a.at, now)
+        })
         .max_by_key(|a| (when(&a.at), a.answer == "hold"))
 }
 

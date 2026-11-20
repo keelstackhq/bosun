@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T9 · no-CI `pr --ready`, local risk, verdict and main-open · this PR

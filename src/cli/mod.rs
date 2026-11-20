@@ -6,6 +6,7 @@ use clap::{Args, Parser, Subcommand};
 pub mod adopt;
 pub mod answer;
 pub mod approve;
+pub mod approve_chat;
 pub mod ask;
 pub mod budget;
 mod budget_pr;
@@ -42,6 +43,7 @@ pub mod plan_pr;
 pub mod pr;
 mod pr_bundle;
 pub mod pr_gov;
+pub mod pr_no_ci;
 pub mod pr_oneoff;
 pub mod pr_single;
 pub mod prereqs;
@@ -696,6 +698,16 @@ pub struct ApproveArgs {
     /// the default branch; an owner key only.
     #[arg(long, requires = "sign_key")]
     pub bootstrap: bool,
+    /// Record the owner's chat answer for one `<pr>@<head>` as a chat approval comment (an
+    /// orchestrator only; spec section 8).
+    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key", "via_signer"])]
+    pub chat: bool,
+    /// With --chat (required): the question id the owner answered (`data.ready[].ask.question_id`).
+    #[arg(long, value_name = "ID", requires = "chat")]
+    pub question: Option<String>,
+    /// With --chat: the owner's Slack user ID who answered in the Claude Tag thread.
+    #[arg(long, value_name = "U...", requires = "chat")]
+    pub slack_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1278,6 +1290,10 @@ pub struct AdoptArgs {
     /// Write `[approvals] policy` into .bosun/bosun.toml (spec §8); the pinned release must know it.
     #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
     pub policy: Option<String>,
+    /// Write `[ci] provider` (spec §9). Default: `circleci` when the repo has `.circleci/` and no
+    /// Actions workflows, else `github`. `none` installs no GitHub workflows. Needs pin 0.22.0+.
+    #[arg(long, value_parser = ["github", "circleci", "none"])]
+    pub ci: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.
     #[arg(long)]
     pub dry_run: bool,

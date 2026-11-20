@@ -677,6 +677,52 @@ pub fn question_id(pr: u64, head: &str, unix: i64) -> String {
     format!("{pr}-{short}-{unix}")
 }
 
+const READY_MARKER: &str = "<!-- bosun:ready v1 head=";
+
+/// The no-CI summary `bosun pr --ready` posts per head; `risk`: `normal` or `high: <ids>`.
+pub fn ready_summary(
+    head: &str,
+    gates: &[String],
+    risk: &str,
+    verdict: &str,
+    approval: Option<&str>,
+) -> String {
+    format!(
+        "/bosun ready {head}\n\n- gates: {}\n- risk: {risk}\n- verdict: {verdict}\n- approval: {}\n\n{READY_MARKER}{head} -->",
+        gates.join(", "),
+        approval.unwrap_or("none")
+    )
+}
+
+/// `body` is a ready summary of `head`: its first line and its marker both name it.
+pub fn parse_ready_summary(body: &str, head: &str) -> bool {
+    let mut lines = body.lines();
+    lines.next() == Some(format!("/bosun ready {head}").as_str())
+        && lines.any(|l| l == format!("{READY_MARKER}{head} -->"))
+}
+
+fn summary_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("- {name}: ");
+    body.lines().find_map(|l| l.strip_prefix(prefix.as_str()))
+}
+
+/// No-CI readiness from the newest summary of the head: high risk with no approval waits.
+pub fn summary_readiness(summary: Option<&str>) -> (Readiness, String) {
+    let Some(body) = summary else {
+        return (Readiness::NotWaiting, String::new());
+    };
+    let verdict = summary_field(body, "verdict")
+        .unwrap_or_default()
+        .to_string();
+    let risk = summary_field(body, "risk").unwrap_or_default();
+    let r = if risk.starts_with("high") && summary_field(body, "approval") == Some("none") {
+        Readiness::Ready(risk_ids(risk))
+    } else {
+        Readiness::NotWaiting
+    };
+    (r, verdict)
+}
+
 #[cfg(test)]
 mod tests {
 

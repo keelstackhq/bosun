@@ -11,6 +11,7 @@ use super::PrArgs;
 use super::reap::{EpicScope, close_done_epics};
 use super::stamps;
 use crate::app::{App, default_branch, kill_switch, set_state, sync_merged, trusted_notes};
+use crate::config::CiProvider;
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
@@ -623,6 +624,18 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     "split the work, or plan it (`bosun plan import`) so it gets a sized task, then rerun",
                 ));
             }
+        }
+        if super::pr_no_ci::provider_default(gh)? == CiProvider::None {
+            if pull.base_ref != base {
+                return Err(BosunError::conflict(
+                    format!(
+                        "PR #{} targets {}, not the default branch {base}",
+                        pull.number, pull.base_ref
+                    ),
+                    "retarget the PR to the default branch: without CI only a PR into it is checked locally",
+                ));
+            }
+            return super::pr_no_ci::ready(&app, n, &issue, plain, pull);
         }
         check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;
