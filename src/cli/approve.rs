@@ -18,12 +18,14 @@ use crate::cli::risk_check::{
     autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
     owner_comment, owner_logins, review_models,
 };
-use crate::config::{CONFIG_FILE, Config};
+use crate::cli::{pr_no_ci::provider_default, risk_check::chat_counted};
+use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
     TRUSTED_CREATOR, api_url_ok, approve_command, batch_message, bootstrap_line, ci_green,
-    in_cloud, only_r_ci, parse_target, policy_line, readiness, signed_comment, signed_message,
-    signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
+    in_cloud, only_r_ci, parse_ready_summary, parse_target, policy_line, readiness, signed_comment,
+    signed_message, signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
+    summary_readiness,
 };
 use crate::core::ask;
 use crate::core::records::{PrHead, Record};
@@ -146,10 +148,31 @@ pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// The board of `pulls`, in their order.
+/// No-CI readiness of `p`: its newest ready summary of the head by a writer.
+fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
+    let comments = gh.list_comments(p.number)?;
+    for c in comments.iter().rev() {
+        if parse_ready_summary(&c.body, &p.head_sha) && crate::app::is_writer(gh, &c.user)? {
+            return Ok(summary_readiness(Some(&c.body)));
+        }
+    }
+    Ok(summary_readiness(None))
+}
+
+/// The board of `pulls`, in their order (no CI: read from the ready summary).
 fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
+        if provider_default(gh)? == CiProvider::None {
+            let (r, verdict) = summary_of(gh, &p)?;
+            if let Readiness::Ready(risk) = r
+                && !chat_counted(gh, &p)?
+                && !hold(gh, &p, &mut board)?
+            {
+                board.ready.push(ready_of(gh, p, risk, verdict)?);
+            }
+            continue;
+        }
         let statuses: Vec<Stat> = crate::github::gate::gate_history(gh, &p.head_sha)?
             .into_iter()
             .map(|s| Stat {
@@ -193,6 +216,19 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
         }
     }
     Ok(board)
+}
+
+fn ready_of(gh: &dyn Github, p: Pull, risk: Vec<String>, verdict: String) -> Result<Ready> {
+    let files = gh.compare_files(&p.base_sha, &p.head_sha)?;
+    Ok(Ready {
+        verdict,
+        pr: p.number,
+        title: p.title.clone(),
+        files: files.into_iter().map(|f| f.filename).collect(),
+        head_sha: p.head_sha,
+        base_sha: p.base_sha,
+        risk,
+    })
 }
 
 pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {

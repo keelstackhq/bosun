@@ -43,6 +43,7 @@ pub mod plan_pr;
 pub mod pr;
 mod pr_bundle;
 pub mod pr_gov;
+pub mod pr_no_ci;
 pub mod pr_oneoff;
 pub mod prereqs;
 pub mod prereqs_gate;

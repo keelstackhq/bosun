@@ -460,6 +460,12 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     ]
 }
 
+/// No-CI mode (spec §4): judge `pull` as the risk workflow would, with a writer that posts nothing.
+pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
+    let w = GateWriter::statuses(app.gh.as_ref()).dry(true);
+    judge(app, &w, pull.clone())
+}
+
 fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;
@@ -1616,6 +1622,19 @@ fn approver(
         by.get_or_insert(key);
     }
     Ok(by.map(|id| (format!("key {id}"), true)))
+}
+
+/// Whether a counted chat record approves the head of `p` (the board's no-CI check).
+pub(crate) fn chat_counted(gh: &dyn Github, p: &Pull) -> Result<bool> {
+    if !chat_enabled(gh, &p.base_sha)? {
+        return Ok(false);
+    }
+    let owners = owner_logins(gh, &p.base_sha)?;
+    let chat = Chat {
+        author: &p.user,
+        base: &p.base_sha,
+    };
+    Ok(chat_approver(gh, p.number, &p.head_sha, &owners, &chat)?.is_some())
 }
 
 /// The owner whose chat record (spec §8) approves `head`: written by an orchestrator session
