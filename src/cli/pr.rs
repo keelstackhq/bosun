@@ -533,7 +533,6 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             .with_data(json!({"pr": p.number})));
         }
         Some(p) => {
-            super::pr_bundle::refuse_gated_bundle(gh, &p, &repo)?;
             super::pr_bundle::require_bundle_closes(&p, &repo, &args.bundle)?;
             touch = touch_check(&app, n, || {
                 let total = gh
@@ -565,7 +564,6 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 .or_else(|| head_subject(&app.ctx.dir).filter(|s| is_conventional(s)))
                 .unwrap_or_else(|| issue.title.clone());
             super::refuse_secret("the PR title", &title)?;
-            super::pr_bundle::refuse_gated_new(gh, &base, &branch, 1 + args.bundle.len())?;
             let body = format!("Closes #{n}\n{bundle}\n<!-- bosun:task-pr {n} -->");
             (gh.create_pull(&title, &branch, &base, &body, true)?, true)
         }

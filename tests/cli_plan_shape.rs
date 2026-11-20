@@ -66,7 +66,11 @@ fn check_reports_shape_reasons_and_size() {
     assert_eq!(items[0]["shape_reasons"][0], "planner chose single");
     assert_eq!(items[1]["shape"], "single");
     assert_eq!(items[1]["size"], 250);
-    assert_eq!(items[1]["shape_reasons"][0], "1 gated tasks run alone");
+    // D-021: a gated task shapes like any task; it is only listed.
+    assert_eq!(
+        items[1]["shape_reasons"][0],
+        "one UC: the goal is testable only whole"
+    );
     assert_eq!(items[1]["gated"][0], "M2/T2");
     assert_eq!(items[0]["gated"].as_array().unwrap().len(), 0);
 }
@@ -113,16 +117,10 @@ fn a_task_touching_a_risk_path_is_gated_and_size_caps_nothing() {
         "[[rule]]\nid = \"src-a\"\nwhy = \"x\"\npaths = [\"src/a.rs\"]\n",
     )
     .unwrap();
-    // src/a.rs (size 5000) is now gated: D-016 caps it at 400.
+    // src/a.rs (size 5000) is now gated: no cap (D-021), only listed.
     let (code, v) = plan(&fake, tmp.path(), &["check", "plan.md"]);
-    assert_eq!(code, 1, "{v}");
-    assert_eq!(v["data"]["errors"][0]["line"], 15, "{v}");
-    assert!(
-        v["data"]["errors"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("size 5000")
-    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["items"][0]["gated"][0], "M3/T2", "{v}");
     std::fs::write(tmp.path().join(".bosun/risk.toml"), "not toml [").unwrap();
     let (code, v) = plan(&fake, tmp.path(), &["check", "plan.md"]);
     assert_eq!(code, 1, "{v}");
@@ -197,25 +195,17 @@ area: core
 - UC-M4-1: ok.
 ";
 
-fn assert_gated_size_error(v: &Value) {
-    let e = &v["data"]["errors"][0];
-    assert!(
-        e["message"]
-            .as_str()
-            .unwrap()
-            .contains("size 401 is over 400 changed lines for a gated task"),
-        "{v}"
-    );
-    assert!(e["fix"].as_str().unwrap().contains("D-016"), "{v}");
-}
-
 #[test]
-fn a_gated_task_over_400_lines_is_a_plan_error() {
+fn a_gated_task_over_400_lines_is_no_plan_error() {
+    // D-021: gated tasks have no line cap.
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     std::fs::write(tmp.path().join("plan.md"), BIG_GATED).unwrap();
     for cmd in ["check", "import", "amend"] {
         let (code, v) = plan(&fake, tmp.path(), &[cmd, "plan.md"]);
-        assert_eq!(code, 1, "{cmd}: {v}");
-        assert_gated_size_error(&v);
+        assert!(
+            !v.to_string().contains("changed lines for a gated task"),
+            "{cmd}: {v}"
+        );
+        assert_ne!(code, 1, "{cmd}: {v}");
     }
 }
