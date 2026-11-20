@@ -18,7 +18,7 @@ use crate::cli::pr::update_pull_call;
 use crate::cli::prereqs_gate::refuse_epic_if_held;
 use crate::cli::risk_check::{base_rules, revert_findings, review_models, verdict_inputs};
 use crate::cli::status::process_red;
-use crate::config::{CONFIG_FILE, Config};
+use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::heal::{
     Action, MAX_ROUNDS, RedPr, capped, capped_main, decide, healed_heads, marker, since_green,
 };
@@ -221,6 +221,12 @@ impl Run<'_> {
         let by = comments.iter().map(|c| (c.user.as_str(), c.body.as_str()));
         if clean_verdicts(by, &pull.head_sha, &excluded, models.as_deref()).is_empty() {
             return skip(format!("no clean independent verdict on the head of #{m}"));
+        }
+        // D-019: with no CI nothing gates an auto-merge; the orchestrator merges the revert.
+        if crate::cli::pr_no_ci::provider_at(gh, &pull.base_sha)? == CiProvider::None {
+            return skip(format!(
+                "`[ci] provider = \"none\"`: no auto-merge; the orchestrator runs `bosun merge {m}` once the revert has its summary, verdict and gates"
+            ));
         }
         if pull.draft {
             match gh.set_draft(&pull.node_id, false) {

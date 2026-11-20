@@ -199,6 +199,8 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
     pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}};
+merge = {pr: int, head_sha: str, merged: bool, already_merged?: bool, method?: str,
+    ci_provider?: str, tasks: [int]};
 status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     integrity_reason?: str, main_red: int | null, process_red: int | null,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,
