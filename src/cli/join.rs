@@ -74,6 +74,9 @@ fn seat_of(args: &JoinArgs, origin: Option<Origin>) -> Result<Option<SlackSeat>,
 }
 
 pub fn run(dir: Option<&Path>, args: &JoinArgs) -> CmdResult {
+    if args.origin.is_some() {
+        crate::ctx::trusted_identity()?;
+    }
     let origin = match args.origin.as_deref() {
         Some(o) => Some(o.parse::<Origin>().map_err(|_| {
             BosunError::error(

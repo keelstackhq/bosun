@@ -68,6 +68,7 @@ pub fn app_verdict(fake: &FakeGithub, session: &str) {
         confidence: Some(0.95),
         major: Some(0),
         model: None,
+        relayed_by: None,
     };
     fake.comment_by(
         20,

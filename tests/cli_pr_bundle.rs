@@ -1,4 +1,4 @@
-//! `bosun pr` refuses a PR that closes several tasks and changes a gated file (D-016 backstop).
+//! `bosun pr` lets a PR that closes several tasks change a gated file (D-021: no backstop).
 
 mod common;
 
@@ -77,49 +77,18 @@ fn world(body: &str, files: &[&str], changed: u64) -> FakeGithub {
 const TWO: &str = "Closes #7\nCloses #8";
 
 #[test]
-fn a_two_task_pr_changing_a_gated_file_is_refused() {
+fn a_two_task_pr_may_change_a_gated_file() {
+    // D-021: no bundle backstop; risk-check asks the owner for the gated path.
     let fake = world(TWO, &["src/a.rs", "crates/x/hoist.toml"], 2);
     let (code, v) = run_pr(&fake, &[]);
-    assert_eq!(code, 3, "{v}");
-    let m = v["error"]["message"].as_str().unwrap();
-    assert!(
-        m.contains("closes 2 tasks") && m.contains("crates/x/hoist.toml"),
-        "{v}"
-    );
-    assert!(m.contains("D-016"), "{v}");
-    assert_eq!(
-        v["error"]["fix"],
-        "move the gated changes to their own task and PR, then run `bosun pr` again"
-    );
-    assert_eq!(fake.labels_of(7), vec![BUILDING]);
+    assert_eq!(code, 0, "{v}");
+    assert!(!v.to_string().contains("gated"), "{v}");
 }
 
 #[test]
-fn an_incomplete_file_list_fails_closed() {
+fn an_incomplete_file_list_of_a_bundle_is_not_refused() {
     let fake = world(TWO, &["src/a.rs"], 3);
     let (code, v) = run_pr(&fake, &[]);
-    assert_eq!(code, 3, "{v}");
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("incomplete"),
-        "{v}"
-    );
-}
-
-#[test]
-fn a_two_task_pr_without_gated_files_passes_the_check() {
-    let fake = world(TWO, &["src/a.rs"], 1);
-    let (code, v) = run_pr(&fake, &[]);
-    assert!(!v.to_string().contains("closes 2 tasks"), "{v}");
-    assert_eq!(code, 0, "{v}");
-}
-
-#[test]
-fn a_one_task_pr_may_change_a_gated_file() {
-    let fake = world("Closes #7", &["crates/x/hoist.toml"], 1);
-    let (_, v) = run_pr(&fake, &[]);
-    assert!(!v.to_string().contains("closes 1 tasks"), "{v}");
-    assert!(!v.to_string().contains("D-016"), "{v}");
+    assert!(!v.to_string().contains("incomplete"), "{v}");
+    assert_ne!(code, 3, "{v}");
 }

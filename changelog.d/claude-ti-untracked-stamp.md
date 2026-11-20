@@ -1,1 +1,0 @@
-- `test-integrity` judges untracked, non-ignored files as added files and stamps the working tree like every gate, so committing gated work keeps its stamp (push-gates no longer refuses "no passing stamp for test-integrity").

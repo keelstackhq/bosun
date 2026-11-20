@@ -1,1 +1,0 @@
-- 2026-11-18 · bot verdict relay · src/core/verdict.rs bot_verdict_json, src/cli/verdict.rs apply, verdict.yml (+ channel), spec §7 · this PR
