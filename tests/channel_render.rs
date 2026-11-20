@@ -2051,12 +2051,12 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
 /// `[ci]` follows the same pin rule as the policy: an explicit pin needs `ci_pin_checked`.
 #[test]
 fn an_explicit_pin_writes_ci_only_when_checked() {
-    for (pin, checked, written) in [("0.20.0", "", false), ("0.21.0", "1", true), ("", "", true)] {
+    for (pin, checked, written) in [("0.21.0", "", false), ("0.22.0", "1", true), ("", "", true)] {
         let vars: BTreeMap<&str, String> = [
             ("project", "app"),
             ("owner", ""),
             ("bosun_version", pin),
-            ("template.version", "0.21.0"),
+            ("template.version", "0.22.0"),
             ("rust_path", "."),
             ("ts_path", "."),
             ("own_ci", ""),
