@@ -17,8 +17,9 @@ use crate::core::records::Record;
 use crate::core::risk::BOT_SESSION;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, bot_verdict_json, closes_issue, comment_body, comment_chunks,
-    comment_json, comment_model, comment_session, effective, valid_model,
+    COMMENT_MARKER, Verdict, bot_verdict_json, closes_issue, comment_chunks, comment_json,
+    comment_model, comment_relayed_by, comment_session, effective, relayed_comment_body,
+    valid_model,
 };
 use crate::github::{Comment, Github, IssuePatch, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -69,20 +70,45 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 &verdict,
                 &app.ctx.session,
                 env_model().as_deref(),
+                None,
             )
         }
         VerdictCmd::Comment(FromArg { from }) => {
-            let verdict = parse(&read_input(from)?)?;
+            // A verdict comment body relayed by another session keeps its reviewer and model.
+            let text = read_input(from)?;
+            let me = app.ctx.session.as_str();
+            // JSON input stays JSON even when a string in it holds the marker.
+            let body = (!text.trim_start().starts_with('{')).then_some(text.as_str());
+            let relay = body.and_then(comment_json);
+            let (json, reviewer, model) = match relay {
+                Some(j) => (
+                    j,
+                    comment_session(&text).unwrap_or(me),
+                    comment_model(&text),
+                ),
+                None => (text.as_str(), me, None),
+            };
+            let mut verdict = parse(json)?;
+            // The chunks line belongs to a comment body; plain JSON lists its own.
+            if relay.is_some() && verdict.chunks_reviewed.is_empty() {
+                verdict.chunks_reviewed = comment_chunks(&text);
+            }
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-            let c = gh.add_comment(
-                verdict.pr,
-                &comment_body(&verdict, &app.ctx.session, env_model().as_deref()),
-            )?;
-            Ok(Outcome::data(
-                json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
-                "comment_id": c.id, "applied_by": "the verdict workflow"}),
-            ))
+            let relayed_by = (reviewer != me).then_some(me);
+            // A relay keeps the body's model only: the relaying session's env is not the reviewer's.
+            let model = match relayed_by {
+                Some(_) => model.map(str::to_string),
+                None => model.map(str::to_string).or_else(env_model),
+            };
+            let body = relayed_comment_body(&verdict, reviewer, model.as_deref(), relayed_by);
+            let c = gh.add_comment(verdict.pr, &body)?;
+            let mut data = json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
+                "comment_id": c.id, "applied_by": "the verdict workflow", "reviewer": reviewer});
+            if let Some(r) = relayed_by {
+                data["relayed_by"] = json!(r);
+            }
+            Ok(Outcome::data(data))
         }
         VerdictCmd::Apply(ApplyArg { comment_id }) => apply(&app, *comment_id),
     }
@@ -97,13 +123,29 @@ fn env_model() -> Option<String> {
 }
 
 fn parse(text: &str) -> Result<Verdict, BosunError> {
-    Verdict::parse(text).map_err(|m| {
+    let v = Verdict::parse(text).map_err(|m| {
         BosunError::usage(
             format!("invalid verdict: {m}"),
             "return the JSON shape in spec §7 (see `bosun review-pack` instructions)",
         )
-    })
+    })?;
+    if counted_approval(&v, text) {
+        return Err(BosunError::usage(COUNTED, COUNTED_FIX));
+    }
+    Ok(v)
 }
+
+/// An approval whose `chunks_reviewed` is a count (`chunk_count`) claims every chunk unread:
+/// post, comment, apply and review-loop refuse it; it must list each chunk it reviewed.
+pub(crate) fn counted_approval(v: &Verdict, text: &str) -> bool {
+    let raw: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    v.verdict == "approve" && raw["chunks_reviewed"].is_number()
+}
+
+const COUNTED: &str =
+    "an approving verdict lists the chunks it reviewed: `chunks_reviewed` is a count";
+const COUNTED_FIX: &str =
+    "review each chunk of `bosun review-pack <pr>` and add its number to \"chunks_reviewed\"";
 
 /// The verdict's PR; exit 3 when the verdict is for another head than the current one.
 pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, BosunError> {
@@ -128,7 +170,7 @@ pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, B
 
 /// Check a verdict comment (unedited, by a member, on its own PR, for the current head) and
 /// record its verdict.
-fn apply(app: &App, id: u64) -> CmdResult {
+pub(crate) fn apply(app: &App, id: u64) -> CmdResult {
     let gh = app.gh.as_ref();
     let refuse = |why: String| {
         BosunError::error(
@@ -142,45 +184,19 @@ fn apply(app: &App, id: u64) -> CmdResult {
     if !c.unedited() {
         return Err(refuse("it was edited".into()));
     }
-    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
-    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
-    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
-    let writer = matches!(permission.as_str(), "admin" | "write");
-    // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
-    // A marker-less comment of a Bot account is a bot verdict even with write access.
     let bot = c.user_type == "Bot";
-    let marked = comment_json(&c.body);
-    let bot_verdict = !writer || (bot && marked.is_none());
-    let text = marked.or_else(|| bot.then(|| bot_verdict_json(&c.body)).flatten());
-    if bot_verdict {
-        let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
-        let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
-        // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
-        let head = |text| match Verdict::parse(text) {
-            Err(_) => "an invalid bot verdict".to_string(),
-            Ok(n) => match gh.get_pull(n.pr) {
-                Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
-                _ => format!("a bot verdict for {}, not the head", n.head_sha),
-            },
-        };
-        let why = if !listed || !bot {
-            format!("{} has {permission} access, not write", c.user)
-        } else if !on_default {
-            "a bot verdict counts only on a PR into the default branch".into()
-        } else if let Some(text) = text {
-            head(text)
-        } else {
-            "no single verdict in the comment".into()
-        };
-        if !why.is_empty() {
-            eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
-            return Ok(Outcome::data(
-                json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
-            ));
-        }
+    let (why, text, bot_verdict, cfg) = neutral_refusal(gh, &c)?;
+    if let Some(why) = why {
+        eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
+        return Ok(Outcome::data(
+            json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
+        ));
     }
     let text = text.ok_or_else(|| refuse(format!("no {COMMENT_MARKER}")))?;
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    if counted_approval(&verdict, text) {
+        return Err(BosunError::error(COUNTED, COUNTED_FIX));
+    }
     if verdict.chunks_reviewed.is_empty() {
         verdict.chunks_reviewed = comment_chunks(&c.body);
     }
@@ -227,7 +243,18 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    let mut out = record(app, &pull, &verdict, recorded, comment_model(&c.body))?;
+    let relayed_by = comment_relayed_by(&c.body);
+    let mut out = record(
+        app,
+        &pull,
+        &verdict,
+        recorded,
+        comment_model(&c.body),
+        relayed_by,
+    )?;
+    if let Some(r) = relayed_by {
+        out.data["relayed_by"] = json!(r);
+    }
     if verdict.verdict == "request-changes" && cfg.mode_effective().mode == ModeName::Autonomous {
         // The verdict is recorded: a failed write is reported, never an error.
         out.data["fix_task"] = match fix_task(gh, &verdict) {
@@ -236,6 +263,52 @@ fn apply(app: &App, id: u64) -> CmdResult {
         };
     }
     Ok(out)
+}
+
+/// What `neutral_refusal` finds: why the comment is refused neutrally (if it is), its verdict
+/// text, whether it is a bot verdict, and the trusted config.
+pub(crate) type Neutral<'c> = (Option<String>, Option<&'c str>, bool, Config);
+
+/// Whether verdict comment `c` is refused neutrally, as verdict.yml ignores it: a bot verdict
+/// (no writer, or a Bot's marker-less ```json verdict) not by a listed Bot with a valid verdict
+/// for the head on a PR into the default branch. Its text is read as `verdict apply` reads it.
+pub(crate) fn neutral_refusal<'c>(
+    gh: &dyn Github,
+    c: &'c Comment,
+) -> Result<Neutral<'c>, BosunError> {
+    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
+    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
+    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
+    let writer = matches!(permission.as_str(), "admin" | "write");
+    // A bot's comment needs no markers: its one top-level ```json verdict counts (spec §7).
+    // A marker-less comment of a Bot account is a bot verdict even with write access.
+    let bot = c.user_type == "Bot";
+    let marked = comment_json(&c.body);
+    let bot_verdict = !writer || (bot && marked.is_none());
+    let text = marked.or_else(|| bot.then(|| bot_verdict_json(&c.body)).flatten());
+    if !bot_verdict {
+        return Ok((None, text, bot_verdict, cfg));
+    }
+    let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
+    let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
+    // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
+    let head = |text| match Verdict::parse(text) {
+        Err(_) => "an invalid bot verdict".to_string(),
+        Ok(n) => match gh.get_pull(n.pr) {
+            Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
+            _ => format!("a bot verdict for {}, not the head", n.head_sha),
+        },
+    };
+    let why = if !listed || !bot {
+        format!("{} has {permission} access, not write", c.user)
+    } else if !on_default {
+        "a bot verdict counts only on a PR into the default branch".into()
+    } else if let Some(text) = text {
+        head(text)
+    } else {
+        "no single verdict in the comment".into()
+    };
+    Ok(((!why.is_empty()).then_some(why), text, bot_verdict, cfg))
 }
 
 /// `.bosun/bosun.toml` on the default branch (as signed keys and owners), and whether the PR the
@@ -320,11 +393,28 @@ pub(crate) fn require_all_chunks(
     if missing.is_empty() {
         return Ok(());
     }
+    const ADD: &str = "add each one you reviewed to \"chunks_reviewed\", then post again";
+    let n = verdict.pr;
+    if missing.len() == count {
+        // No list to paste: nothing was reviewed, so no chunk is named.
+        return Err(BosunError::error(
+            format!("verdict reviews no chunks ({count} chunks)"),
+            format!("review the {count} chunks of `bosun review-pack {n}` (its `chunks`), {ADD}"),
+        ));
+    }
+    // At most `SHOWN` missing chunks are named, then "and K more".
+    const SHOWN: usize = 5;
+    let mut names = format!("{:?}", &missing[..missing.len().min(SHOWN)]);
+    if missing.len() > SHOWN {
+        names.push_str(&format!(" and {} more", missing.len() - SHOWN));
+    }
     let mut listed = verdict.chunks_reviewed.clone();
     listed.sort_unstable();
     Err(BosunError::error(
-        format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
-        "review every chunk of `bosun review-pack <pr>` and list each number in `chunks_reviewed`",
+        format!("verdict lists chunks {listed:?} of {count}; missing {names}"),
+        format!(
+            "review chunks {names} of the {count} in `bosun review-pack {n}` (its `chunks`), {ADD}"
+        ),
     ))
 }
 
@@ -335,6 +425,7 @@ pub(crate) fn record(
     verdict: &Verdict,
     session: &str,
     model: Option<&str>,
+    relayed_by: Option<&str>,
 ) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
@@ -363,6 +454,7 @@ pub(crate) fn record(
         confidence: Some(verdict.confidence),
         major: Some(verdict.count("major") as u32),
         model: model.map(str::to_string),
+        relayed_by: relayed_by.map(str::to_string),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
     w.add_record(n, &format!("{human}\n\n{}", record.to_line()))?;

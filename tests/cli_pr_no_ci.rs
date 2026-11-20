@@ -99,12 +99,14 @@ fn chat(fake: &FakeGithub) {
             "{{\"bosun\":\"join\",\"session\":\"session_orch\",\"origin\":\"local\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
         ),
     );
-    fake.comment_by(
+    // Written at NOW (inside the join's live window), question id minted at NOW (unix 1794304800).
+    fake.comment_at(
         20,
         "ada",
         &format!(
-            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session=session_orch head={head} question=20-{short}-1 -->"
+            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session=session_orch head={head} question=20-{short}-1794304800 -->"
         ),
+        NOW,
     );
 }
 

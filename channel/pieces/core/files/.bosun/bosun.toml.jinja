@@ -16,7 +16,7 @@ profile = "ts-pnpm"
 provider = "{{ ci_provider }}"
 {% else %}
 # `provider = "{{ ci_provider }}"` under [ci] is not written: the explicit bosun_version pin may
-# predate it (0.21.0) and a release that cannot parse it fails every gate. Add it by hand (spec §9).
+# predate it (0.22.0) and a release that cannot parse it fails every gate. Add it by hand (spec §9).
 {% endif %}{% else %}
 [ci]
 # Which CI the repo runs (spec §9): github, circleci or none (bosun then checks locally).

@@ -41,4 +41,31 @@ fn a_small_pr_is_one_chunk() {
     let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["chunks"], json!([["src/a.rs", "bin.png"]]));
+    assert_eq!(v["data"]["verdict_skeleton"]["chunks_reviewed"], json!([]));
+    assert_eq!(v["data"]["chunk_count"], 1);
+}
+
+#[test]
+fn the_pack_carries_a_fail_safe_verdict_skeleton() {
+    let fake = setup();
+    let big = "x".repeat(30_000);
+    for f in ["src/a.rs", "src/b.rs", "src/c.rs"] {
+        fake.pull_file(42, f, "added", 5, 0, Some(&big));
+    }
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    let skel = &v["data"]["verdict_skeleton"];
+    assert_eq!(
+        *skel,
+        json!({"pr": 42, "head_sha": "sha42", "verdict": "request-changes",
+            "confidence": 0.0, "findings": [], "lessons_hit": [],
+            "escalate_risk": false, "chunks_reviewed": []})
+    );
+    // The count is separate: the reviewer adds each chunk it read, nothing is pre-filled.
+    assert_eq!(v["data"]["chunk_count"], 3, "{v}");
+    // Posting it unchanged is a valid verdict that never approves.
+    let parsed = bosun::core::verdict::Verdict::parse(&skel.to_string()).unwrap();
+    assert_eq!(parsed.verdict, "request-changes");
+    let text = v["data"]["instructions"].as_str().unwrap();
+    assert!(text.contains("Start from `verdict_skeleton`"), "{text}");
 }

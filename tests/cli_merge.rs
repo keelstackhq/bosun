@@ -100,12 +100,14 @@ fn verdict_by(fake: &FakeGithub, session: &str) {
 fn chat(fake: &FakeGithub) {
     let head = fake.pull_head(20);
     let short = &head[..7];
-    fake.comment_by(
+    // Written at NOW (inside the join's live window), question id minted at NOW (unix 1794304800).
+    fake.comment_at(
         20,
         "ada",
         &format!(
-            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-{short}-1 -->"
+            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-{short}-1794304800 -->"
         ),
+        NOW,
     );
 }
 
