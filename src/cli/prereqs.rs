@@ -55,7 +55,18 @@ pub(crate) struct Env {
 
 impl Env {
     pub(crate) fn load(app: &App, dir: Option<&Path>, warnings: &mut Vec<String>) -> Result<Env> {
-        let root = app.ctx.dir.as_path();
+        let existing = app.gh.list_issues(&[LABEL], IssueState::All)?;
+        Env::from_dir(app.ctx.dir.as_path(), dir, existing, warnings)
+    }
+
+    /// The rules, approvers and paths of the checkout at `root`; `existing` are the checklist
+    /// issues (none when GitHub is not read).
+    fn from_dir(
+        root: &Path,
+        dir: Option<&Path>,
+        existing: Vec<Issue>,
+        warnings: &mut Vec<String>,
+    ) -> Result<Env> {
         let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
         let rules = match read(RULES_PATH) {
             Some(t) => Rules::parse(&t).map_err(|e| {
@@ -78,7 +89,6 @@ impl Env {
             .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
         let mut roots = vec![root.to_path_buf()];
         roots.extend(std::fs::canonicalize(root).ok());
-        let existing = app.gh.list_issues(&[LABEL], IssueState::All)?;
         Ok(Env {
             rules,
             bosun_code,
@@ -239,6 +249,37 @@ impl Env {
         })
     }
 
+    /// The checklist of one plan with no GitHub: nothing is verified or ticked, so an owner item
+    /// and an API item are both open.
+    fn offline(&self, file: &str, text: &str, setup: &[CheckItem]) -> Result<PlanChecklist> {
+        let plan = plan::parse(text).map_err(|e| plan_errors(file, &e))?;
+        let prereqs = pq::parse(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        let plan_path = plan_key(file, &self.base, &self.roots);
+        check_plan_path(&plan_path)?;
+        let mut items: Vec<CheckItem> = prereqs.iter().map(CheckItem::from).collect();
+        for it in &mut items {
+            it.state = if it.verify == "owner" { "owner" } else { "api" }.into();
+        }
+        items.extend(setup.iter().cloned());
+        let approvals = pq::approvals(&plan, &self.rules, self.bosun_code);
+        if !self.has_delegate && approvals.iter().any(|a| a.needs == "delegate") {
+            items.push(delegate_key());
+        }
+        pq::sort(&mut items);
+        let open = items.iter().filter(|i| !i.done).count();
+        let message = pq::message(&plan.title, &items, &approvals, None);
+        Ok(PlanChecklist {
+            plan_path,
+            title: plan.title,
+            items,
+            approvals,
+            open,
+            issue: None,
+            url: None,
+            message,
+        })
+    }
+
     /// Write the checklist issue of a prepared plan and fill in its number, url and message.
     pub(crate) fn write(&self, app: &App, p: &mut Prepared) -> Result<()> {
         let l = &mut p.list;
@@ -258,7 +299,90 @@ impl Env {
     }
 }
 
+/// The plan files to read: those named, else `plans/*.md`, else `docs/superpowers/plans/*.md`
+/// (sorted); a usage error when there are none.
+fn plan_files(dir: Option<&Path>, named: &[String]) -> Result<Vec<String>> {
+    if !named.is_empty() {
+        return Ok(named.to_vec());
+    }
+    let root = dir.unwrap_or_else(|| Path::new("."));
+    for sub in ["plans", "docs/superpowers/plans"] {
+        let mut found: Vec<String> = std::fs::read_dir(root.join(sub))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".md"))
+            .map(|n| format!("{sub}/{n}"))
+            .collect();
+        if !found.is_empty() {
+            found.sort();
+            return Ok(found);
+        }
+    }
+    Err(BosunError::usage(
+        "no plan file named and none found in plans/ or docs/superpowers/plans/",
+        "name the plan file, for example `bosun prereqs plans/bosun.md`, or put plans in plans/*.md",
+    ))
+}
+
+fn read_plan_file(dir: Option<&Path>, file: &str) -> Result<String> {
+    let path = dir.map_or_else(|| file.into(), |d| d.join(file));
+    std::fs::read_to_string(&path).map_err(|e| {
+        BosunError::error(
+            format!("cannot read {file}: {e}"),
+            "pass the path of a plan file, for example plans/bosun.md",
+        )
+    })
+}
+
+fn plan_json(file: &str, c: &PlanChecklist) -> Value {
+    let issue = c
+        .issue
+        .map(|(number, created)| json!({"number": number, "url": c.url, "created": created}));
+    json!({"file": file, "plan_path": c.plan_path, "title": c.title,
+        "items": c.items, "approvals": c.approvals, "open": c.open, "message": c.message,
+        "issue": issue})
+}
+
+/// Without `--post` and without a token: the checklist from the plan files alone (nothing is
+/// verified through the API, so every API item is open).
+fn run_offline(dir: Option<&Path>, args: &PrereqsArgs, files: &[String]) -> CmdResult {
+    let mut warnings = vec![
+        "no GitHub token: nothing was verified through the API and no checklist issue was read; every item is open"
+            .to_string(),
+    ];
+    let root = dir.unwrap_or_else(|| Path::new("."));
+    let env = Env::from_dir(root, dir, vec![], &mut warnings)?;
+    let setup = if args.no_setup {
+        vec![]
+    } else {
+        doctor_items(dir, &mut warnings)
+    };
+    let (mut plans, mut open, mut seen): (Vec<Value>, usize, Vec<String>) = Default::default();
+    for (k, file) in files.iter().enumerate() {
+        let text = read_plan_file(dir, file)?;
+        let first = if k == 0 { &setup[..] } else { &[] };
+        let c = env.offline(file, &text, first)?;
+        if seen.contains(&c.plan_path) {
+            warnings.push(format!("{file} names {} again: listed once", c.plan_path));
+            continue;
+        }
+        open += c.open;
+        plans.push(plan_json(file, &c));
+        seen.push(c.plan_path);
+    }
+    let message: Vec<&str> = plans.iter().filter_map(|p| p["message"].as_str()).collect();
+    Ok(Outcome::data(json!({"message": message.join("\n\n"),
+        "plans": plans, "open": open, "warnings": warnings})))
+}
+
 pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
+    let files = plan_files(dir, &args.files)?;
+    if !args.post && !crate::github::http::Http::has_token() {
+        return run_offline(dir, args, &files);
+    }
     let app = App::load(dir)?;
     if args.post {
         kill_switch(app.gh.as_ref())?;
@@ -271,14 +395,8 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         doctor_items(dir, &mut warnings)
     };
     let mut prepared = Vec::new();
-    for (k, file) in args.files.iter().enumerate() {
-        let path = dir.map_or_else(|| file.into(), |d| d.join(file));
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            BosunError::error(
-                format!("cannot read {file}: {e}"),
-                "pass the path of a plan file, for example plans/bosun.md",
-            )
-        })?;
+    for (k, file) in files.iter().enumerate() {
+        let text = read_plan_file(dir, file)?;
         // Setup steps belong to the repo: listed once.
         let first = if k == 0 { &setup[..] } else { &[] };
         let p = env.prepare(&app, file, &text, args.post, first, &mut warnings)?;
@@ -301,14 +419,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         }
         let c = p.list;
         open += c.open;
-        let issue = c
-            .issue
-            .map(|(number, created)| json!({"number": number, "url": c.url, "created": created}));
-        plans.push(
-            json!({"file": file, "plan_path": c.plan_path, "title": c.title,
-            "items": c.items, "approvals": c.approvals, "open": c.open, "message": c.message,
-            "issue": issue}),
-        );
+        plans.push(plan_json(file, &c));
     }
     let message: Vec<&str> = plans.iter().filter_map(|p| p["message"].as_str()).collect();
     Ok(Outcome::data(json!({"message": message.join("\n\n"),

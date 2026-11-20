@@ -54,13 +54,15 @@ budget report = {month: str, written: [str], skipped_no_pr: [int], rows: [{pr: i
     top_prs: [{pr: int, title: str, usd: num}]}};
 plan check = {file: str, title: str, project: str | null, items: [{id: str, title: str, area: str,
     shape: str, shape_reasons: [str], size: int, tasks: int, ucs: int, gated: [str],
-    budget_usd?: num}], warnings: [{line: int, message: str, fix: str}]};
+    budget_usd?: num}], warnings: [{line: int, message: str, fix: str}],
+    prereqs_fixed?: [{line: int, from: str, to: str}], fixed_file?: str};
 plan import = {file: str, dry_run: bool, warnings: [str], skipped?: [str], epics: [{id: str,
     action: str, issue: int | null, state?: str, closed?: bool}], tasks: [{id: str, action: str,
     issue: int | null, state: str | null, closed?: bool}], held: [{task: str, needs: [str]}],
     on_default: [any], on_default_open: [any], promoted?: [str], would_promote?: [str],
     closed?: [str], would_close?: [str], reopened?: [str], would_reopen?: [str], updated?: [str],
-    would_update?: [str], unchanged?: {epics?: int, tasks?: int}, summary?: bool};
+    would_update?: [str], unchanged?: {epics?: int, tasks?: int}, summary?: bool, offline?: bool,
+    prereqs_fixed?: [{line: int, from: str, to: str}], fixed_file?: str};
 plan amend = plan import;
 plan pr = {claim: {..} | null, intake: {..}, pr: {..}};
 fail = {issue: int, signature: str, streak: int, stopped: bool, rule?: str, state?: str,
@@ -196,8 +198,10 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
-    pending_checks?: [{context: str, state: str}],
-    trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}};
+    pending_checks?: [{context: str, state: str}], mode?: str, created?: bool,
+    trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}}
+    | {pr: null, task: null, mode: str, created: bool, branch: str, draft: bool,
+    ready: bool | "pending", auto_merge: bool, note: str};
 status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     integrity_reason?: str, main_red: int | null, process_red: int | null,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,

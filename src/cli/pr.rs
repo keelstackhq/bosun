@@ -57,7 +57,7 @@ fn is_writer(gh: &dyn Github, user: &str) -> Result<bool, BosunError> {
     ))
 }
 
-fn current_branch(dir: &Path) -> Result<String, BosunError> {
+pub(crate) fn current_branch(dir: &Path) -> Result<String, BosunError> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -75,7 +75,7 @@ fn current_branch(dir: &Path) -> Result<String, BosunError> {
 }
 
 /// The subject line of the head commit; `None` when git cannot say.
-fn head_subject(dir: &Path) -> Option<String> {
+pub(crate) fn head_subject(dir: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -310,6 +310,20 @@ fn touch_check(
     .with_data(json!({"outside": out})))
 }
 
+/// The ready gates with no stamp for the tree of the local HEAD.
+pub(crate) fn missing_gates(dir: &Path) -> Result<Vec<String>, BosunError> {
+    let tree = stamps::head_tree(dir).ok_or_else(|| {
+        BosunError::error(
+            "cannot read the tree of HEAD",
+            "run bosun inside the repo checkout",
+        )
+    })?;
+    Ok(stamps::ready_gates(dir)?
+        .into_iter()
+        .filter(|g| !stamps::has(dir, &tree, g))
+        .collect())
+}
+
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
 pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(), BosunError> {
@@ -334,16 +348,7 @@ pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(
         )
         .with_data(json!({"pr": n, "head_sha": pull.head_sha, "local_head": local})));
     }
-    let tree = stamps::head_tree(dir).ok_or_else(|| {
-        BosunError::error(
-            "cannot read the tree of HEAD",
-            "run bosun inside the repo checkout",
-        )
-    })?;
-    let missing: Vec<String> = stamps::ready_gates(dir)?
-        .into_iter()
-        .filter(|g| !stamps::has(dir, &tree, g))
-        .collect();
+    let missing = missing_gates(dir)?;
     if missing.is_empty() {
         return Ok(());
     }
@@ -401,6 +406,9 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     }
     if args.one_off {
         return super::pr_oneoff::run(dir, args);
+    }
+    if args.single {
+        return super::pr_single::run(dir, args);
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();

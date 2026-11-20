@@ -43,6 +43,7 @@ pub mod pr;
 mod pr_bundle;
 pub mod pr_gov;
 pub mod pr_oneoff;
+pub mod pr_single;
 pub mod prereqs;
 pub mod prereqs_gate;
 pub mod progress;
@@ -740,8 +741,13 @@ pub struct FromArg {
 #[derive(Debug, Args)]
 pub struct PrArgs {
     /// The task issue number (or `--pr N` for a PR with no task).
-    #[arg(required_unless_present_any = ["pr", "one_off"])]
+    #[arg(required_unless_present_any = ["pr", "one_off", "single"])]
     pub issue: Option<u64>,
+    /// No task issue at all: find or open the PR of the current branch as a draft (title from
+    /// `--title`, else the last commit subject); with `--ready` mark it ready and turn on
+    /// auto-merge once the local gates passed on HEAD.
+    #[arg(long, conflicts_with_all = ["issue", "pr", "bundle", "one_off"])]
+    pub single: bool,
     /// A PR with no task (a governance PR such as `bosun migrate` opens): the same draft, gates
     /// and auto-merge flow, with no task state to move.
     #[arg(long = "pr", value_name = "N", conflicts_with_all = ["issue", "bundle"])]
@@ -1026,8 +1032,8 @@ pub struct PlanAmendArgs {
 
 #[derive(Debug, Args)]
 pub struct PrereqsArgs {
-    /// The plan files, for example plans/bosun.md.
-    #[arg(required = true)]
+    /// The plan files, for example plans/bosun.md (default: plans/*.md, else
+    /// docs/superpowers/plans/*.md).
     pub files: Vec<String>,
     /// Create or update the checklist issue of each plan.
     #[arg(long)]
@@ -1041,6 +1047,9 @@ pub struct PrereqsArgs {
 pub struct PlanCheckArgs {
     /// The plan file, for example plans/bosun.md.
     pub file: String,
+    /// Rewrite the `## Prerequisites` section with its bullets normalized (as `plan import --fix`).
+    #[arg(long)]
+    pub fix: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1060,6 +1069,10 @@ pub struct PlanImportArgs {
     /// List every epic and task; by default only those that changed.
     #[arg(long)]
     pub full: bool,
+    /// Rewrite the `## Prerequisites` section of the plan file with its bullets normalized
+    /// (`- H1: title`, numbered in order); nothing else in the file changes.
+    #[arg(long)]
+    pub fix: bool,
 }
 
 /// `intake "<text>" --source ...` opens a plan issue; a text of exactly `check` is the subcommand.

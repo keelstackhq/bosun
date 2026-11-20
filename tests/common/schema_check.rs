@@ -77,7 +77,13 @@ pub fn check_envelope(v: &Value) -> Result<(), String> {
             && v["exit_code"] == 5
             && next == 1
             && v["next"][0]["tool"] == "send_message";
-        if next > 0 && !handover {
+        // `bosun plan import` with no GitHub token (exit 1) hands over the issues it would
+        // create as `mcp__github__issue_write` calls.
+        let tokenless = v["command"] == "plan import"
+            && v["exit_code"] == 1
+            && (v["next"].as_array().into_iter().flatten())
+                .all(|n| n["tool"] == "mcp__github__issue_write");
+        if next > 0 && !handover && !tokenless {
             return Err("next of a failed envelope is not empty".into());
         }
         return Ok(());

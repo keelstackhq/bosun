@@ -91,6 +91,14 @@ fn api_base_from(v: Option<String>) -> String {
 }
 
 impl Http {
+    /// Whether `GITHUB_TOKEN` or `GH_TOKEN` is set (so `from_env` would work).
+    pub fn has_token() -> bool {
+        ["GITHUB_TOKEN", "GH_TOKEN"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok())
+            .any(|v| !v.trim().is_empty())
+    }
+
     /// Base URL, token and sleep cap from the environment (spec D30, D31).
     pub fn from_env() -> Result<Http> {
         let token = ["GITHUB_TOKEN", "GH_TOKEN"]
