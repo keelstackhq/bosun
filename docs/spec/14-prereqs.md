@@ -61,6 +61,14 @@ the held task; `replaces` never releases another task's hold).
 titles and the reply `approve 12 15`), `data.message_id` (8 hex of the SHA-256 of the shown pairs'
 sorted `<pr>@<head>` lines) and `data.message_pairs`. Only the latest relayed message is
 answerable; PR numbers come only from the owner's chat; each (id, pr) is signed at most once (§8).
+Each `data.ready[]` item also has `ask` (`question_id` `<pr>-<short head>-<unix now>`, `question`
+naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending `[bosun:<id>]`;
+`options` `Approve <short>`, `Hold`). `next` is one `AskUserQuestion` (header `Approve`, options
+`Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
+than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
+`answer "approve <short>…"`. Nothing ready, no `next`. Only the orchestrator asks the owner (D-018):
+a spawned or routine session gets no `next`, only `data.handoff` (hand the question to the orchestrator) with `ask` kept. This is the per-PR form; the daily digest below is the batch form
+and reads only `data`.
 
 **Daily digest (§18, `approvals_batch = "daily"`).** For Claude-Tag-first repos the Slack kind `digest` (§10, opt-in) posts the owner-waiting PRs with GitHub links and the comment to approve with; Slack itself approves nothing. `bosun digest` (the orchestrator, once a day)
 reads the `approve --list` board and the needs-human issues, and writes nothing. `data.message`

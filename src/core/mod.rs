@@ -5,6 +5,7 @@ pub mod adopt;
 pub mod agreement;
 pub mod answer;
 pub mod approve;
+pub mod ask;
 pub mod bisect;
 pub mod budget;
 pub mod budget_report;
