@@ -11,7 +11,7 @@ paths = [".bosun/**", "governance/**", "CODEOWNERS", "docs/CODEOWNERS", ".github
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", ".github/dependabot.yml", "scripts/**", "Makefile", "**/Makefile", "justfile", "**/justfile", "Dockerfile", "**/Dockerfile", ".husky/**", "**/action.yml", "**/action.yaml", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml"{% if "rust" in pieces %}, "**/deny.toml", "**/.deny.toml", "**/deny.exceptions.toml", "**/.deny.exceptions.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+paths = [".github/workflows/**", ".github/actions/**", ".github/dependabot.yml", "scripts/**", "Makefile", "**/Makefile", "justfile", "**/justfile", "Dockerfile", "**/Dockerfile", ".husky/**", "**/action.yml", "**/action.yaml", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "pins.toml", ".bosun/pins.toml"{% if "rust" in pieces %}, "**/deny.toml", "**/.deny.toml", "**/deny.exceptions.toml", "**/.deny.exceptions.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
 
 [[rule]]
 id = "R-secrets"
