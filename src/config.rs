@@ -44,6 +44,9 @@ pub struct Config {
     /// `[routines]`: opt-in Routines (spec §5). Release ordering as for `intake`.
     #[serde(skip_serializing_if = "Routines::is_unset")]
     pub routines: Routines,
+    /// `[ci] provider` (spec §9): which CI the repo runs. Release ordering as for `intake`: set
+    /// it only once `.bosun/version` pins a release that reads it.
+    pub ci: Ci,
 }
 
 /// `[routines]`: the janitor is off unless `janitor = true`; `janitor_cron` (UTC) is its schedule.
@@ -158,6 +161,7 @@ impl Default for Config {
             session: Session::default(),
             mode: ModeConfig::default(),
             routines: Routines::default(),
+            ci: Ci::default(),
         }
     }
 }
@@ -303,6 +307,35 @@ impl Approvals {
 #[serde(deny_unknown_fields, default)]
 pub struct Trailers {
     pub require: bool,
+}
+
+/// `[ci] provider`: `github` (default, also when the key is missing), `circleci` or `none`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Ci {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CiProvider {
+    #[default]
+    Github,
+    Circleci,
+    None,
+}
+
+impl CiProvider {
+    pub const NAMES: [&'static str; 3] = ["github", "circleci", "none"];
+
+    pub fn parse(s: &str) -> Option<CiProvider> {
+        match s {
+            "github" => Some(CiProvider::Github),
+            "circleci" => Some(CiProvider::Circleci),
+            "none" => Some(CiProvider::None),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -578,12 +611,44 @@ impl Config {
                 ));
             }
         }
+
+        if let Some(p) = &c.ci.provider
+            && CiProvider::parse(p).is_none()
+        {
+            return Err(BosunError::error(
+                format!("{file}: ci.provider {p:?} is not a known CI provider"),
+                format!(
+                    "edit {file}: set ci.provider to \"github\", \"circleci\" or \"none\", or remove it"
+                ),
+            ));
+        }
+        // `none` runs no CI, so no App check runs could ever post: refuse the pair.
+        if c.ci_provider() == CiProvider::None && c.checks.mode != CheckMode::Statuses {
+            return Err(BosunError::error(
+                format!(
+                    "{file}: ci.provider = \"none\" cannot go with checks.mode = {:?}",
+                    c.checks.mode.as_str()
+                ),
+                format!(
+                    "edit {file}: set checks.mode = \"statuses\" or ci.provider to \"github\" or \"circleci\""
+                ),
+            ));
+        }
         Ok(c)
     }
 
     /// The knobs `[mode]` resolves to (explicit > preset > default).
     pub fn mode_effective(&self) -> Effective {
         crate::core::mode::resolve(&self.mode)
+    }
+
+    /// The CI provider; a missing key is `github` (validated in `parse`).
+    pub fn ci_provider(&self) -> CiProvider {
+        self.ci
+            .provider
+            .as_deref()
+            .and_then(CiProvider::parse)
+            .unwrap_or_default()
     }
 
     /// Read `<root>/.bosun/bosun.toml`; a missing file gives the defaults.
