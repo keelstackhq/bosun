@@ -316,6 +316,9 @@ pub struct Login {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Release {
     pub tag_name: String,
+    /// RFC 3339 time GitHub published it; `None` when absent (`bosun digest`).
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];

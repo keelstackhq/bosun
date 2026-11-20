@@ -1434,7 +1434,10 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
     ));
 
     // Step 16: the keyless fast lane (D-017, spec section 8), only under the autonomous policy.
-    if ctx.config.approvals.policy() == crate::core::approve::Policy::Autonomous {
+    if matches!(
+        ctx.config.approvals.policy(),
+        crate::core::approve::Policy::Autonomous | crate::core::approve::Policy::Quorum
+    ) {
         items.push(signer_item(root, remote, ctx.config.approvals.signer));
     }
 

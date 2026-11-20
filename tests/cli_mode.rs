@@ -46,7 +46,7 @@ fn lighter_modes_parse_and_fill_the_policy() {
     for (m, policy, source) in [
         ("steady", Policy::Owner, "default"),
         ("booster", Policy::Autonomous, "preset"),
-        ("autonomous", Policy::Autonomous, "preset"),
+        ("autonomous", Policy::Quorum, "preset"),
     ] {
         let c = Config::parse(&format!("[mode]\nname = \"{m}\"\n"), "f.toml").unwrap();
         assert_eq!(c.approvals.policy(), policy, "{m}");

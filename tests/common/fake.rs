@@ -102,6 +102,8 @@ pub struct State {
     pub repo: serde_json::Map<String, Value>,
     /// Tag of the latest release, if any.
     pub release: Option<String>,
+    /// `published_at` of the latest release, if set.
+    pub release_at: Option<String>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
     /// Repository permission by login; a login not listed has `write`.
@@ -669,6 +671,12 @@ impl FakeGithub {
     /// Set a field of the repository document, for example `allow_auto_merge`.
     pub fn repo_set(&self, key: &str, value: Value) {
         self.state.lock().unwrap().repo.insert(key.into(), value);
+    }
+
+    pub fn release_published(&self, tag: &str, at: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.release = Some(tag.into());
+        s.release_at = Some(at.into());
     }
 
     pub fn release(&self, tag: &str) {
@@ -1587,7 +1595,7 @@ fn route(
             ok(v)
         }
         ("GET", ["releases", "latest"]) => match &s.release {
-            Some(t) => ok(json!({"tag_name": t})),
+            Some(t) => ok(json!({"tag_name": t, "published_at": s.release_at})),
             None => msg(404, "Not Found"),
         },
         ("GET", ["rules", "branches", _]) => ok(if s.ruleset_checks.is_empty() {

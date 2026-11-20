@@ -361,6 +361,8 @@ pub fn bootstrap_line(until: &str) -> String {
 
 /// The note line of an autonomous-mode signature (D-017).
 pub const AUTONOMOUS_LINE: &str = "Signed in autonomous mode (D-017), not an owner answer";
+/// The note line of a quorum signature (D-022).
+pub const QUORUM_LINE: &str = "Signed under the quorum policy (D-022), not an owner answer";
 
 /// `[approvals] policy`: who may approve gated PRs once bootstrap mode (D-012) is over (D-014).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
@@ -376,6 +378,9 @@ pub enum Policy {
     /// As `Orchestrator`, gated PRs included, but only with a clean independent verdict on the
     /// head (D-017); releases, environments and secrets stay with the owner.
     Autonomous,
+    /// D-022: an autonomous signature plus two counting verdicts passes on every path except the
+    /// trust root (`risk::TRUST_ROOT`); needs a pin of 0.22.0 or later.
+    Quorum,
 }
 
 impl Policy {
@@ -385,6 +390,7 @@ impl Policy {
             Policy::OwnerGated => "owner-gated",
             Policy::Orchestrator => "orchestrator",
             Policy::Autonomous => "autonomous",
+            Policy::Quorum => "quorum",
         }
     }
 }
@@ -427,12 +433,25 @@ pub struct OrchestratorCase<'a> {
     pub workflows: &'a [String],
     /// `risk::autonomous_excluded` output: owner-only under [`Policy::Autonomous`].
     pub autonomous_excluded: &'a [String],
+    /// `risk::trust_root_changed` output: owner-only under [`Policy::Quorum`] (D-022).
+    pub trust_root: &'a [String],
     /// The PR's capabilities (labels and linked task metadata, plus `weaken` for findings).
     pub capabilities: &'a [String],
 }
 
 /// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
 pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
+    // D-022 decides before the R-weaken refusals: the quorum covers everything but the trust root.
+    // risk-check adds the verdict, signature and halt conditions.
+    if c.policy == Policy::Quorum {
+        if c.trust_root.is_empty() {
+            return Ok("quorum, D-022".into());
+        }
+        return Err(format!(
+            "quorum (D-022) never covers the trust root ({}): the owner approves",
+            c.trust_root.join(", ")
+        ));
+    }
     // A weakened gate is the owner's under every policy and in the window (owner decision).
     if c.rules.contains(&"R-weaken") {
         return Err("a PR that weakens a gate (R-weaken) always needs the owner".into());
@@ -491,7 +510,7 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
     let label = |p: Policy| Ok(format!("policy {}, D-014", p.name()));
     match c.policy {
         Policy::Orchestrator => label(c.policy),
-        Policy::Autonomous => unreachable!("decided above"),
+        Policy::Autonomous | Policy::Quorum => unreachable!("decided above"),
         Policy::Owner => Err(format!(
             "approval policy owner: only the owner approves ({window})"
         )),
@@ -949,8 +968,52 @@ mod tests {
             rules: &["R-ci"],
             workflows: &[],
             autonomous_excluded: &[],
+            trust_root: &[],
             capabilities: &[],
         }
+    }
+
+    #[test]
+    fn quorum_decides_before_weaken_and_ignores_every_exclusion_but_the_trust_root() {
+        let w = vec![".github/workflows/ci.yml".to_string()];
+        let x = vec!["hoist.toml".to_string(), "R-secrets".to_string()];
+        let caps = vec!["weaken".to_string()];
+        let mut c = case(Policy::Quorum, None, "2027-01-01");
+        c.requirement = "owner";
+        c.rules = &["R-weaken", "R-gate", "R-gov", "R-ci", "R-secrets", "R-deps"];
+        c.excluded = &w;
+        c.workflows = &w;
+        c.autonomous_excluded = &x;
+        c.capabilities = &caps;
+        assert_eq!(orchestrator_counts(&c).unwrap(), "quorum, D-022");
+        let t = vec![".bosun/approvers.toml".to_string()];
+        c.trust_root = &t;
+        let why = orchestrator_counts(&c).unwrap_err();
+        assert!(
+            why.contains("D-022") && why.contains(".bosun/approvers.toml") && why.contains("owner"),
+            "{why}"
+        );
+        assert_eq!(Policy::Quorum.name(), "quorum");
+    }
+
+    #[test]
+    fn autonomous_still_refuses_weaken_and_ignores_the_trust_root_field() {
+        let t = vec![".bosun/approvers.toml".to_string()];
+        let mut c = case(Policy::Autonomous, None, "2027-01-01");
+        c.trust_root = &t;
+        assert_eq!(orchestrator_counts(&c).unwrap(), "autonomous mode, D-017");
+        c.rules = &["R-weaken"];
+        assert!(orchestrator_counts(&c).unwrap_err().contains("R-weaken"));
+    }
+
+    #[test]
+    fn a_quorum_waiting_status_is_not_an_owner_wait() {
+        let mut s = base();
+        s[0].description =
+            "high risk, quorum (D-022): 2 clean verdicts and orchestrator signature needed: R-ci"
+                .into();
+        assert_eq!(readiness(&s, &[]), Readiness::NotWaiting);
+        assert!(!s[0].description.starts_with(WAITING_PREFIX));
     }
 
     #[test]

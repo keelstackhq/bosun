@@ -31,7 +31,7 @@ mode = "subagent"
 policy = "{{ policy }}"
 {% else %}
 # `policy = "{{ policy }}"` under [approvals] is not written: the explicit bosun_version pin
-# may predate it (owner, owner-gated, orchestrator: 0.5.0; autonomous: 0.8.0) and a release that
+# may predate it (owner, owner-gated, orchestrator: 0.5.0; autonomous: 0.8.0; quorum: 0.22.0) and a release that
 # cannot parse it fails every gate. Add it by hand once the pin reads it (spec §8).
 {% endif %}{% endif %}{% else %}
 [approvals]

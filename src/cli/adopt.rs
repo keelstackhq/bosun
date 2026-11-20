@@ -175,10 +175,10 @@ const CI_MIN: &str = "0.22.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
 fn policy_min(value: &str) -> &'static str {
-    if value == "autonomous" {
-        "0.8.0"
-    } else {
-        "0.5.0"
+    match value {
+        "quorum" => "0.22.0",
+        "autonomous" => "0.8.0",
+        _ => "0.5.0",
     }
 }
 

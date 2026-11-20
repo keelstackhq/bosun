@@ -121,7 +121,14 @@ knobs!(
 
 /// The approval policy a mode implies; `Config::parse` fills it when `[approvals]` has none.
 pub fn preset_policy(m: ModeName) -> Option<Policy> {
-    (m >= ModeName::Booster).then_some(Policy::Autonomous)
+    // `autonomous` mode maps to the quorum (D-022). Safe because base config and the base-pinned
+    // binary judge each PR: the switch takes effect only after an owner-approved pin bump (the
+    // bump PR is judged under the old policy, where the `.bosun` directory is owner-only).
+    match m {
+        ModeName::Gatekeeper | ModeName::Steady => None,
+        ModeName::Booster => Some(Policy::Autonomous),
+        ModeName::Autonomous => Some(Policy::Quorum),
+    }
 }
 
 /// Brake trips: main red this often, reverts this many, red-CI rate points over the target.

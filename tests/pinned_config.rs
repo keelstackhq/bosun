@@ -353,6 +353,16 @@ const KNOWN_POLICIES: &[(&str, &[&str])] = &[
         "0.10.0",
         &["owner", "owner-gated", "orchestrator", "autonomous"],
     ),
+    (
+        "0.22.0",
+        &[
+            "owner",
+            "owner-gated",
+            "orchestrator",
+            "autonomous",
+            "quorum",
+        ],
+    ),
 ];
 
 /// `major.minor.patch` as numbers, so `0.10.0` sorts after `0.9.0`. A pre-release or `v`-prefixed
@@ -548,6 +558,13 @@ fn signer_is_known_from_0_15_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"signer"));
     assert!(!has("0.14.0"));
     assert!(has("0.15.0"));
+}
+
+#[test]
+fn quorum_is_known_from_0_22_0() {
+    assert_eq!(policy_known("0.21.0", "quorum"), Some(false));
+    assert_eq!(policy_known("0.22.0", "quorum"), Some(true));
+    assert_eq!(policy_known("0.22.0", "autonomous"), Some(true));
 }
 
 #[test]

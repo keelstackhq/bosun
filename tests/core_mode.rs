@@ -50,10 +50,7 @@ fn preset_policy_only_for_the_fast_lane() {
     assert_eq!(preset_policy(ModeName::Gatekeeper), None);
     assert_eq!(preset_policy(ModeName::Steady), None);
     assert_eq!(preset_policy(ModeName::Booster), Some(Policy::Autonomous));
-    assert_eq!(
-        preset_policy(ModeName::Autonomous),
-        Some(Policy::Autonomous)
-    );
+    assert_eq!(preset_policy(ModeName::Autonomous), Some(Policy::Quorum));
 }
 
 #[test]

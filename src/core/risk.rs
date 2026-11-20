@@ -1075,6 +1075,48 @@ pub fn autonomous_excluded(
     why
 }
 
+/// The trust root of the quorum policy (D-022): paths a quorum signature never covers, always
+/// the owner's own approval. Whole-file match on purpose: a table-level diff of `bosun.toml`
+/// (only `[approvals]`) is not done, so any edit of the file needs the owner.
+///
+/// The list is compiled into the binary that judges the PR. The risk workflow runs the base
+/// pin, so a PR cannot widen or shrink it for itself; a change to it lands with a pin bump the
+/// old binary judges (under the old policy, `.bosun/**` is owner-only).
+pub const TRUST_ROOT: [&str; 5] = [
+    ".bosun/approvers.toml",
+    ".bosun/bosun.toml",
+    // Only in bosun's own repo (`bosun_code`): the code that holds this list and verifies signatures.
+    "src/core/risk.rs",
+    "src/core/approve.rs",
+    "src/cli/risk_check.rs",
+];
+/// How many of [`TRUST_ROOT`] apply in every repo (the rest only where `bosun_code` is true).
+const TRUST_ROOT_EVERYWHERE: usize = 2;
+/// Counting verdicts from different sessions a quorum approval needs (D-022). One verdict's bar is
+/// [`VERDICT_MIN_CONFIDENCE`] (0.9), stricter than D-022's 0.85; it stays 0.9.
+pub const QUORUM_VERDICTS: usize = 2;
+
+/// The changed trust-root paths among `(path, previous path)` pairs ([`TRUST_ROOT`]); a rename
+/// counts on both sides, any case; a `..` segment counts as a hit. Empty: a quorum can count.
+pub fn trust_root_changed(files: &[(&str, Option<&str>)], bosun_code: bool) -> Vec<String> {
+    let n = if bosun_code {
+        TRUST_ROOT.len()
+    } else {
+        TRUST_ROOT_EVERYWHERE
+    };
+    let globs: Vec<Glob> = (TRUST_ROOT[..n].iter())
+        .map(|g| Glob::parse(g).expect("built-in trust-root glob"))
+        .collect();
+    (files.iter())
+        .filter(|(path, prev)| {
+            (std::iter::once(path).chain(prev)).any(|p| {
+                p.split('/').any(|s| s == "..") || globs.iter().any(|g| matches_any_case(g, p))
+            })
+        })
+        .map(|(path, _)| path.to_string())
+        .collect()
+}
+
 /// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
 /// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
 /// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that would not count (edited too),
@@ -2665,5 +2707,39 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             };
             assert!(!critical(&[], &[f], false).is_empty(), "{t}");
         }
+    }
+
+    #[test]
+    fn trust_root_names_the_files_and_counts_renames_case_and_dotdot() {
+        let t = |files: &[(&str, Option<&str>)], code| trust_root_changed(files, code);
+        assert!(t(&[("src/a.rs", None), ("docs/x.md", None)], true).is_empty());
+        assert_eq!(t(&[(".bosun/approvers.toml", None)], false).len(), 1);
+        assert_eq!(t(&[(".bosun/bosun.toml", None)], false).len(), 1);
+        // Whole file: any edit of bosun.toml counts, not only `[approvals]`.
+        assert_eq!(t(&[(".bosun/bosun.toml", None)], true).len(), 1);
+        // A rename away from the file counts, and so does any case.
+        assert_eq!(
+            t(&[("docs/old.txt", Some(".bosun/approvers.toml"))], false),
+            ["docs/old.txt"]
+        );
+        assert_eq!(t(&[(".BOSUN/Approvers.TOML", None)], false).len(), 1);
+        assert_eq!(t(&[("a/../.bosun/bosun.toml", None)], false).len(), 1);
+        assert_eq!(t(&[("src/../x", None)], false).len(), 1);
+        // The code that judges counts only in bosun's own repo.
+        for f in [
+            "src/core/risk.rs",
+            "src/core/approve.rs",
+            "src/cli/risk_check.rs",
+        ] {
+            assert!(t(&[(f, None)], false).is_empty(), "{f}");
+            assert_eq!(t(&[(f, None)], true), [f], "{f}");
+            assert_eq!(t(&[("src/z.rs", Some(f))], true).len(), 1, "{f}");
+        }
+        assert!(t(&[("src/core/risk_other.rs", None)], true).is_empty());
+    }
+
+    #[test]
+    fn quorum_needs_two_verdicts() {
+        assert_eq!(QUORUM_VERDICTS, 2);
     }
 }

@@ -272,6 +272,49 @@ High-risk PRs:
   covered: release environments, secrets, tags. `policy =
   "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
   pinning a release that knows it.
+- Quorum policy (D-022, 0.22.0). `[approvals] policy = "quorum"`, or `[mode] name = "autonomous"`
+  with no `[approvals] policy` (booster keeps `autonomous`; `data.policy_source` says `preset`),
+  lets the orchestrator approve every PR except the trust root. Same signature as D-017
+  (`/bosun approve <head> autonomous`, owner or signer key, task link and lease rules, unedited
+  verdicts, a request for changes on the head blocks) with the note line `Signed under the quorum
+  policy (D-022), not an owner answer` and `data.policy = "quorum"`, but it decides before every
+  other refusal in `orchestrator_counts`: the allowlist, the deny set, workflows, R-weaken (also
+  the `weaken` capability), R-gate, R-gov, R-ci, R-ci-review, R-deps, R-secrets, R-oneoff-size
+  and the critical floor do not stop it. Only the trust root does (below), and the existing
+  trust-file and unseen-diff refusals (`signed_ok`: key, owner and CODEOWNERS files, `R-unseen`)
+  still make signatures not count (fail closed).
+  - Two counting verdicts (`risk::QUORUM_VERDICTS`) from two different sessions, on unedited
+    comments by the verdict author, on the exact head, none of them a lease holder on a linked
+    issue (the PR author), and no verdict on the head that would not count (`risk::autonomous_verdicts`).
+    One verdict's bar stays `VERDICT_MIN_CONFIDENCE` = 0.9 (approve, no major finding), stricter
+    than the 0.85 of D-022's text; lowering it is its own decision. `data.quorum_verdicts` lists
+    the counted sessions. Waiting is `high risk, quorum (D-022): 2 clean verdicts and orchestrator
+    signature needed: <ids>`, which does not start with the owner-wait text, so it stays off the
+    owner board. `bosun approve --bootstrap` (also `--via-signer`) signs under this policy only
+    with two counting verdicts, none from the signer's own session (that one is excluded from the
+    count, so neither author nor signer counts), no trust-root path and bosun not halted.
+  - Halt: in risk-check, if `halt_reason` says halted or cannot tell (a read error), the
+    signature does not count (reason on stderr); `approve` refuses with exit 4 as everywhere.
+  - Trust root (`risk::TRUST_ROOT`, `trust_root_changed`; always the owner's own GitHub approval
+    or chat approval): `.bosun/approvers.toml` (who may sign), `.bosun/bosun.toml` and, only
+    where `src/cli/risk_check.rs` exists at the base (bosun's own repo), `src/core/risk.rs`
+    (holds this list), `src/core/approve.rs` (signed messages, `verify_ed25519`, `Policy`) and
+    `src/cli/risk_check.rs` (signature checks and the quorum gate). `.bosun/bosun.toml` matches
+    as a whole file: a table-level diff (only `[approvals]`) is not done, so any edit of it
+    needs the owner (the owner's PR is also R-weaken for `approvals.*`). A rename counts on both
+    sides, any case, and a `..` segment is a hit. The list is compiled into the binary that
+    judges the PR; the risk workflow runs the base pin, and the policy is read from the base
+    config, so a PR cannot widen or narrow it. A change of the list ships in a release, and the
+    pin-bump PR that adopts it is judged by the old binary.
+  - Why `mode = "autonomous"` can map to quorum: base config plus the base-pinned binary judge
+    each PR, so the switch takes effect only after an owner-approved pin bump (the bump PR is
+    judged under the old autonomous policy, where `.bosun/**` is owner-only); before that, the
+    pinned release rejects `quorum` as unknown, and `KNOWN_POLICIES` in `tests/pinned_config.rs`
+    lists it from 0.22.0.
+  - Secrets: quorum counts on R-secrets hits (path or content). Every counting verdict is already
+    clean (approve, no major finding), so a reviewer treats a real secret value in the diff as a
+    blocker (`approved = false`: nothing counts) and approves only the false positives; a
+    placeholder or test fixture is not a blocker.
 - Keyless fast lane: the CI signer (D-017 in ephemeral sessions). Off by default: `[approvals]
   signer = true` turns it on (an `[approvals]` change, so R-weaken: the owner decides), it needs
   `[checks] mode = "checks"` with the gate App (`approve --as signer` refuses otherwise, exit 1, and

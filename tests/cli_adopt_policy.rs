@@ -60,6 +60,7 @@ fn without_the_flag_there_is_no_approvals_table() {
 fn a_policy_the_pinned_release_cannot_parse_is_a_usage_error() {
     for (pin, policy, min) in [
         ("0.7.0", "autonomous", "0.8.0"),
+        ("0.21.0", "quorum", "0.22.0"),
         ("0.4.0", "owner-gated", "0.5.0"),
         ("0.4.0", "owner", "0.5.0"),
     ] {
@@ -70,7 +71,11 @@ fn a_policy_the_pinned_release_cannot_parse_is_a_usage_error() {
         assert!(fix.contains(min), "{fix}");
         assert!(!t.path().join(".bosun").exists(), "wrote files");
     }
-    for (pin, policy) in [("0.8.0", "autonomous"), ("0.5.0", "orchestrator")] {
+    for (pin, policy) in [
+        ("0.8.0", "autonomous"),
+        ("0.5.0", "orchestrator"),
+        ("0.22.0", "quorum"),
+    ] {
         let t = common::git_tempdir();
         let (code, v) = adopt(t.path(), &["--bosun-version", pin, "--policy", policy]);
         assert_eq!(code, 0, "{pin} {policy}: {v}");

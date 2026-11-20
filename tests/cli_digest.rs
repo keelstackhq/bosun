@@ -178,3 +178,40 @@ fn an_answer_without_a_valid_header_is_a_usage_error() {
     let (code, v) = digest(&fake, &["--answer", "--sign-key", "k.pem"], &fine);
     assert_eq!(code, 4, "{v}");
 }
+
+#[test]
+fn the_digest_summarizes_the_last_day_merged_released_and_blocked() {
+    let fake = setup();
+    // BOSUN_NOW is 2026-11-12T06:00:00Z: two merged PRs in the last 24h, one older, one open.
+    for (n, at) in [
+        (50, "2026-11-12T01:00:00Z"),
+        (51, "2026-11-11T07:00:00Z"),
+        (52, "2026-11-10T23:00:00Z"),
+    ] {
+        fake.pull(n, &format!("merged {n}"), &format!("m{n}"), "");
+        fake.pull_set(n, "state", json!("closed"));
+        fake.pull_set(n, "merged", json!(true));
+        fake.pull_set(n, "merged_at", json!(at));
+        fake.pull_set(n, "updated_at", json!(at));
+    }
+    fake.release_published("v0.22.0", "2026-11-12T02:00:00Z");
+    let (code, v) = digest(&fake, &[], "");
+    assert_eq!(code, 0, "{v}");
+    let s = &v["data"]["summary"];
+    let merged: Vec<u64> = s["merged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["pr"].as_u64().unwrap())
+        .collect();
+    assert_eq!(merged, [50, 51], "{s}");
+    assert_eq!(s["released"][0]["tag"], "v0.22.0");
+    let blocked = s["blocked"].as_array().unwrap();
+    assert!(blocked.iter().any(|b| b["pr"] == 12), "{s}");
+    assert!(blocked.iter().any(|b| b["issue"] == 30), "{s}");
+    // An old release is not news.
+    let fake = setup();
+    fake.release_published("v0.21.0", "2026-11-01T02:00:00Z");
+    let (_, v) = digest(&fake, &[], "");
+    assert_eq!(v["data"]["summary"]["released"], json!([]));
+}

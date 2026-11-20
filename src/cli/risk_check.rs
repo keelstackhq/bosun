@@ -39,7 +39,7 @@ const RULES_PATH: &str = ".bosun/risk.toml";
 pub const OWNERS_PATH: &str = "governance/owners.toml";
 const CONTEXT: &str = "risk-check";
 /// A base with this file carries bosun's own approval code, which is then critical too.
-const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
+pub(crate) const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
 
 /// Owner logins from `governance/owners.toml` at `git_ref`; empty when the file is missing.
 pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
@@ -700,10 +700,13 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
-        orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
+        let ctx = (&excluded[..], &capabilities[..], bosun_code);
+        orchestrator_window(gh, base, &today[..10], pr, ctx)?
     } else {
         (Err("signed approvals do not count on this PR".into()), None)
     };
+    let quorum = policy_source.is_some_and(|(p, _)| p == Policy::Quorum);
+    let policy_source = policy_source.map(|(_, s)| s);
     let repo = app.ctx.repo.to_string();
     let linked = linked_issues_in(&pull.body, &repo);
     // D-017: the signature counts only with a clean verdict and a task the author leased.
@@ -713,10 +716,38 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         None
     };
     if policy_source.is_some() && bootstrap.is_ok() && auto.is_none() {
-        bootstrap =
-            Err("autonomous mode (D-017) needs an open linked task leased by the author".into());
+        let rule = if quorum {
+            "quorum (D-022)"
+        } else {
+            "autonomous mode (D-017)"
+        };
+        bootstrap = Err(format!(
+            "{rule} needs an open linked task leased by the author"
+        ));
     }
     let autonomous = auto.is_some();
+    // D-022: a halted bosun (or one that cannot tell) counts no signature.
+    if quorum && bootstrap.is_ok() {
+        match halt_reason(gh) {
+            Ok(None) => {}
+            Ok(Some((why, _))) => {
+                eprintln!(
+                    "bosun: risk-check: bosun is halted ({why}): the quorum signature does not count"
+                );
+                bootstrap = Err(format!("bosun is halted: {why}"));
+            }
+            Err(e) => {
+                eprintln!(
+                    "bosun: risk-check: cannot tell whether bosun is halted ({}): the quorum signature does not count",
+                    e.message
+                );
+                bootstrap = Err(format!(
+                    "cannot tell whether bosun is halted: {}",
+                    e.message
+                ));
+            }
+        }
+    }
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
     let models = review_models(gh, base)?;
@@ -734,6 +765,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         linked: &linked,
         unlinked,
         autonomous: auto.as_ref(),
+        quorum,
         models: models.as_deref(),
         signer_on: signer_on(gh, base)?,
         chat: chat_on.then_some(Chat {
@@ -792,6 +824,11 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             "high risk ({}), approved by two verdicts: {}",
             ids.join(", "),
             verdicts.join(", ")
+        ),
+        (None, _) if autonomous && quorum => format!(
+            "high risk, quorum (D-022): {} clean verdicts and orchestrator signature needed: {}",
+            risk::QUORUM_VERDICTS,
+            ids.join(", ")
         ),
         (None, _) if autonomous => format!(
             "high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed: {}",
@@ -882,9 +919,12 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             data["critical"] = json!(critical);
         }
         if autonomous {
-            data["policy"] = json!("autonomous");
+            data["policy"] = json!(if quorum { "quorum" } else { "autonomous" });
             data["policy_source"] = json!(policy_source);
             data["autonomous_verdicts"] = json!(autonomous_verdicts);
+            if quorum {
+                data["quorum_verdicts"] = json!(autonomous_verdicts);
+            }
         }
     }
     if passed {
@@ -932,7 +972,14 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             "a chat approval record for head {head} exists but does not count: it is unsigned (no owner's unedited comment carries it); the orchestrator must post it again as the owner, or: "
         ),
     };
-    let fix = if autonomous {
+    let fix = if autonomous && quorum {
+        format!(
+            "get {} independent clean verdicts (approve, confidence >= {}, no major finding) on head {head} from {} different reviewer sessions (`bosun verdict comment --from -`; neither the author nor the signer), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap` (or `--via-signer`); or an owner approval: {owner_fix}",
+            risk::QUORUM_VERDICTS,
+            risk::VERDICT_MIN_CONFIDENCE,
+            risk::QUORUM_VERDICTS
+        )
+    } else if autonomous {
         format!(
             "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
             risk::VERDICT_MIN_CONFIDENCE
@@ -1122,6 +1169,8 @@ struct Need<'a> {
     /// Autonomous policy (D-017), nothing excluded: the PR comments and the lease sessions the
     /// signature's clean verdict is judged by.
     autonomous: Option<&'a (Vec<Comment>, Vec<String>)>,
+    /// Quorum policy (D-022): the signature also needs [`risk::QUORUM_VERDICTS`] counting verdicts.
+    quorum: bool,
     /// `[approvals] review_models` at base: when set, only verdicts by these models count.
     models: Option<&'a [String]>,
     /// `[approvals] signer` at base: a signer key's signature counts only while it is true.
@@ -1177,7 +1226,12 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     let mut bootstrap = need.bootstrap;
     if let Some((comments, excluded)) = need.autonomous {
         found.autonomous_verdicts = autonomous_clean(comments, sha, excluded, need.models);
-        if found.autonomous_verdicts.is_empty() {
+        let min = if need.quorum {
+            risk::QUORUM_VERDICTS
+        } else {
+            1
+        };
+        if found.autonomous_verdicts.len() < min {
             bootstrap = None;
         }
     }
@@ -2063,6 +2117,9 @@ fn signed_approver(
     Ok(None)
 }
 
+/// The signing policy (autonomous or quorum) in force at base and who set it; `None` for the rest.
+type SignedPolicy = Option<(Policy, &'static str)>;
+
 /// The label of an orchestrator approval (a bootstrap-form signature) when it can count on this
 /// PR, else why not: `[approvals]` at base, read like the rules, decides with the window (D-012),
 /// `policy` (D-014) and the PR's rules, exclusions and workflow files.
@@ -2071,8 +2128,8 @@ fn orchestrator_window(
     base: &str,
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
-    (excluded, capabilities): (&[String], &[String]),
-) -> Result<(std::result::Result<String, String>, Option<&'static str>)> {
+    (excluded, capabilities, bosun_code): (&[String], &[String], bool),
+) -> Result<(std::result::Result<String, String>, SignedPolicy)> {
     let (files, matches, requirement) = pr;
     let approvals = match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
@@ -2092,6 +2149,7 @@ fn orchestrator_window(
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();
     autonomous_excluded.extend(risk::path_attributes(&patches));
+    let trust_root = risk::trust_root_changed(&paths, bosun_code);
     let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
         bootstrap_until: approvals.bootstrap_until.as_deref(),
@@ -2101,10 +2159,12 @@ fn orchestrator_window(
         rules: &rules,
         workflows: &workflows,
         autonomous_excluded: &autonomous_excluded,
+        trust_root: &trust_root,
         capabilities,
     });
-    let autonomous = approvals.policy() == Policy::Autonomous;
-    Ok((counts, autonomous.then(|| approvals.policy_source())))
+    let p = approvals.policy();
+    let signed = matches!(p, Policy::Autonomous | Policy::Quorum);
+    Ok((counts, signed.then(|| (p, approvals.policy_source()))))
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.
