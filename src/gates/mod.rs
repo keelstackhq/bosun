@@ -92,7 +92,8 @@ fn missing_in_base(req: &Request, stack: &Stack, files: &[String]) -> bool {
             return false;
         }
         if !dir.pop() {
-            return true;
+            // A true bootstrap has no `.bosun/` in the base either; with one, the gate runs.
+            return !git_has(req.root, &format!("{}:.bosun", req.base));
         }
     }
 }

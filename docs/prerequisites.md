@@ -16,8 +16,9 @@ A plan lists them in a `## Prerequisites` section. The plan parser ignores this 
 
 `bosun prereqs` and the checklist read the bullets strictly (`- H1: title`, ids H1 to H999, each
 once). `bosun plan import` reads them leniently: `* ` bullets, `- H3 - title`, and `- H:` or
-`- H<n>:` with a missing, duplicate or out-of-order number are accepted and numbered H1..Hn in
-order (each keeps its id when the numbers are already unique and increasing). It reports each
+`- H<n>:` with a missing, duplicate or out-of-order number are accepted; only bullets with a
+missing or duplicate id are renumbered (lowest unused number, in file order), and a unique valid id
+stays as written, even out of order. It reports each
 change in `data.prereqs_fixed` (`line`, `from`, `to`). `bosun plan import --fix` (or
 `bosun plan check --fix`) also rewrites the plan file; only the `## Prerequisites` section changes
 and `data.fixed_file` names the file. Both work without a GitHub token. `bosun prereqs` with no

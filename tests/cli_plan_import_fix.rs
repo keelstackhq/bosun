@@ -73,7 +73,7 @@ fn import_reads_sloppy_bullets_and_reports_what_it_fixed() {
             (
                 first + 4,
                 "* H3 - runner".to_string(),
-                "- H2: runner".to_string()
+                "- H3: runner".to_string()
             ),
         ]
     );
@@ -93,7 +93,7 @@ fn fix_rewrites_only_the_prerequisite_section() {
     let now = std::fs::read_to_string(tmp.path().join("plan.md")).unwrap();
     let want = plan_text()
         .replace("- H: token", "- H1: token")
-        .replace("* H3 - runner", "- H2: runner");
+        .replace("* H3 - runner", "- H3: runner");
     assert_eq!(now, want);
     assert!(now.ends_with("## Notes\n\n- H: x\n"));
     // A second run has nothing left to fix.
@@ -118,7 +118,7 @@ fn plan_check_fix_rewrites_the_section_too() {
     assert_eq!(v["data"]["fixed_file"], "plan.md");
     assert_eq!(v["data"]["prereqs_fixed"].as_array().unwrap().len(), 2);
     let now = std::fs::read_to_string(tmp.path().join("plan.md")).unwrap();
-    assert!(now.contains("- H1: token\n") && now.contains("- H2: runner\n"));
+    assert!(now.contains("- H1: token\n") && now.contains("- H3: runner\n"));
 }
 
 #[test]
@@ -214,5 +214,5 @@ fn the_checklist_reads_the_bullets_plan_import_accepted() {
     let v = common::one_object(&out.stdout);
     let text = v.to_string();
     assert!(!text.contains("not a valid"), "{v}");
-    assert!(text.contains("H1") && text.contains("H2"), "{v}");
+    assert!(text.contains("H1") && text.contains("H3"), "{v}");
 }

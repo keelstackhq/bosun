@@ -123,6 +123,17 @@ fn deps_is_neutral_when_the_base_has_no_deny_toml() {
 }
 
 #[test]
+fn deps_runs_when_the_base_has_bosun_dir_but_no_deny_config() {
+    let r = repo(&[".bosun/bosun.toml"]);
+    write(&r.root, "deny.toml", "# new\n");
+    r.commit("src/lib.rs");
+    let (code, v) = r.gate("deps", "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["error"]["message"], "gate deps failed (exit 1)");
+    assert_eq!(r.calls(), vec!["deny check"]);
+}
+
+#[test]
 fn deps_runs_when_the_base_has_deny_toml() {
     let r = repo(&["deny.toml"]);
     r.commit("src/lib.rs");

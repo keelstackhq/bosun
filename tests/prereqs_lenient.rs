@@ -30,7 +30,7 @@ fn bare_h_duplicates_and_disorder_are_numbered_in_order() {
     let s = format!("- H: first\n{F}- H3: second\n{F}- H3: third\n{F}- H1: fourth\n{F}");
     let l = lenient(&s);
     let ids: Vec<&str> = l.prereqs.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, ["H1", "H2", "H3", "H4"]);
+    assert_eq!(ids, ["H2", "H3", "H4", "H1"]);
     let titles: Vec<&str> = l.prereqs.iter().map(|p| p.title.as_str()).collect();
     assert_eq!(titles, ["first", "second", "third", "fourth"]);
     // Only the bullets that changed are reported, each with its line.
@@ -43,15 +43,24 @@ fn bare_h_duplicates_and_disorder_are_numbered_in_order() {
     assert_eq!(
         rows,
         [
-            (base, "- H: first", "- H1: first"),
-            (base + 4, "- H3: second", "- H2: second"),
-            (base + 12, "- H1: fourth", "- H4: fourth"),
+            (base, "- H: first", "- H2: first"),
+            (base + 8, "- H3: third", "- H4: third"),
         ]
     );
-    assert!(l.text.contains("- H1: first\n"));
-    assert!(l.text.contains("- H2: second\n"));
-    assert!(l.text.contains("- H3: third\n"));
-    assert!(l.text.contains("- H4: fourth\n"));
+    assert!(l.text.contains("- H2: first\n"));
+    assert!(l.text.contains("- H3: second\n"));
+    assert!(l.text.contains("- H4: third\n"));
+    assert!(l.text.contains("- H1: fourth\n"));
+}
+
+#[test]
+fn strict_valid_out_of_order_ids_are_left_alone() {
+    let s = format!("- H2: b\n{F}- H1: a\n{F}");
+    let l = lenient(&s);
+    assert!(l.fixed.is_empty());
+    assert_eq!(l.text, format!("{PLAN}\n## Prerequisites\n\n{s}"));
+    let ids: Vec<&str> = l.prereqs.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["H2", "H1"]);
 }
 
 #[test]

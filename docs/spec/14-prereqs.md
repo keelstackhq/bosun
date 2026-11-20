@@ -45,8 +45,9 @@ the GitHub MCP issue tools) that carries one of bosun's markers (`bosun:prereq`,
 - Every reader of the section takes the bullets leniently (`parse_lenient`, through `parse_read`):
   `bosun prereqs`, `prereqs --post`, the checklist, the gate and `hold` never refuse a file that
   `plan import` accepted. `plan import` and `plan check --fix` also normalize them: `* ` and `+ ` bullets, `- Hn - title`, and
-  `- H:` / `- H<n>:` with a missing, duplicate or out-of-order number become `- H<k>: title`. When any
-  number is wrong all bullets are numbered H1..Hn in order, else each keeps its id. Import lists each
+  `- H:` / `- H<n>:` with a missing, duplicate or out-of-order number become `- H<k>: title`. Only
+  bullets with a missing or duplicate id are renumbered (lowest unused H<n>, in file order); a unique valid id
+  stays, even out of order, so a strictly valid section is never changed. Import lists each
   changed bullet in `data.prereqs_fixed: [{line, from, to}]` and builds the checklist from the
   normalized text; with `--fix` it also rewrites the plan file (only the `## Prerequisites` section
   changes) and reports `data.fixed_file`. Other prerequisite errors stay errors, on the same lines.

@@ -309,8 +309,8 @@ pub struct Lenient {
 
 /// `parse` after normalizing the bullets of the `## Prerequisites` section: `* ` and `+ `
 /// bullets, `- H3 - title`, and `- H:` or `- H<n>:` with a missing, duplicate or out-of-order
-/// number. When any number is wrong the bullets are numbered H1..Hn in order; otherwise each
-/// keeps its id. Fields and every other line are left as written, so the other errors are
+/// number. Only bullets with a missing or duplicate id are renumbered (lowest unused H<n>, in
+/// file order); every unique valid id stays, even out of order. Fields and every other line are left as written, so the other errors are
 /// `parse`'s, on the same lines.
 pub fn parse_lenient(text: &str, plan: &Plan) -> Result<Lenient, Vec<PlanError>> {
     let (bom, body) = match text.strip_prefix('\u{feff}') {
@@ -347,15 +347,26 @@ pub fn parse_lenient(text: &str, plan: &Plan) -> Result<Lenient, Vec<PlanError>>
             .then(|| d.parse().ok())
             .flatten()
     };
+    // A unique valid id stays as is, even out of order; a missing or duplicate one (the later
+    // bullet of a pair) takes the lowest unused number, in file order.
     let nums: Vec<Option<u32>> = found.iter().map(|f| number(&f.1)).collect();
-    let in_order = nums.iter().all(Option::is_some) && nums.windows(2).all(|w| w[0] < w[1]);
+    let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let keep: Vec<bool> = nums
+        .iter()
+        .map(|n| n.is_some_and(|n| used.insert(n)))
+        .collect();
+    let mut next = 1u32;
     let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     let mut fixed = Vec::new();
     for (k, (i, digits, title)) in found.iter().enumerate() {
-        let id = if in_order {
+        let id = if keep[k] {
             digits.clone()
         } else {
-            (k + 1).to_string()
+            while used.contains(&next) {
+                next += 1;
+            }
+            used.insert(next);
+            next.to_string()
         };
         let to = format!("- H{id}: {title}");
         let raw = lines[*i];
