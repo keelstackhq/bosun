@@ -126,6 +126,9 @@ fn kind(path: &str) -> Kind {
     }
 }
 
+/// Render sources of template and channel repos, never tests of the repo itself.
+const TEMPLATE_SOURCES: [&str; 2] = ["template*/pieces/*/files/**", "channel/pieces/*/files/**"];
+
 impl Kit {
     fn is_test_file(&self, path: &str, text: &str) -> bool {
         match (self, kind(path)) {
@@ -316,7 +319,15 @@ pub fn run(req: &Request) -> CmdResult {
     ];
     let kits = kits(req.root, req.stacks)?;
     // Each side is read with the kit of the innermost stack holding its own path.
-    let is_test_file = |p: &str, t: &str| kit_for(&kits, p).is_test_file(p, t);
+    // Template sources (render input of a template or channel repo) are not tests of this repo:
+    // moving one to `.jinja` or dropping a test there is no finding.
+    let sources: Vec<Glob> = TEMPLATE_SOURCES
+        .iter()
+        .map(|g| Glob::parse(g).expect("built-in glob"))
+        .collect();
+    let is_test_file = |p: &str, t: &str| {
+        !sources.iter().any(|g| g.matches(p)) && kit_for(&kits, p).is_test_file(p, t)
+    };
     let pending_markers = |p: &str, t: &str| kit_for(&kits, p).pending_markers(p, t);
     let test_count = |p: &str, t: &str| kit_for(&kits, p).test_count(p, t);
     let assertions = |p: &str, t: &str| kit_for(&kits, p).assertions(p, t);
