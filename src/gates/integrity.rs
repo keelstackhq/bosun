@@ -13,6 +13,7 @@ use super::profile::Profile;
 use super::ts;
 use super::{git, stack_rel};
 use crate::config::Stack;
+use crate::core::glob::Glob;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub struct Request<'a> {
@@ -251,6 +252,46 @@ fn finding(
     json!({"kind": kind, "file": file, "base": base, "head": head, "allowed": allowed})
 }
 
+/// Why `deleted-test` and `fewer-tests` are waived for a test file, besides the plan task's
+/// `allow`: the base is the bare template render (no `.bosun/`), or the base's own
+/// `.bosun/template-tests` lists the file. Read from the base only, never from head.
+fn template_waiver(root: &Path, merge_base: &str) -> impl Fn(&str) -> Option<&'static str> {
+    let bootstrap = !super::git_has(root, &format!("{merge_base}:.bosun"));
+    let globs: Vec<Glob> = base_text(root, merge_base, ".bosun/template-tests")
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| Glob::parse(l).ok())
+        .collect();
+    move |path: &str| {
+        if bootstrap {
+            Some("bootstrap: base has no .bosun")
+        } else if globs.iter().any(|g| g.matches(path)) {
+            Some("template-tests: listed in base .bosun/template-tests")
+        } else {
+            None
+        }
+    }
+}
+
+/// `finding` for a kind that `delete-test` or a template waiver allows; the reason is added when
+/// only the waiver allows it.
+fn deletion_finding(
+    kind: &str,
+    file: &str,
+    base: Option<usize>,
+    head: Option<usize>,
+    explicit: bool,
+    waiver: Option<&str>,
+) -> Value {
+    let mut f = finding(kind, file, base, head, explicit || waiver.is_some());
+    if let (false, Some(why)) = (explicit, waiver) {
+        f["reason"] = json!(why);
+    }
+    f
+}
+
 pub fn run(req: &Request) -> CmdResult {
     // Compare with the merge base: a branch behind its base must not look like it lost tests.
     // Four views are judged, and any finding refuses: the commits (merge base to HEAD), the
@@ -280,6 +321,7 @@ pub fn run(req: &Request) -> CmdResult {
     let test_count = |p: &str, t: &str| kit_for(&kits, p).test_count(p, t);
     let assertions = |p: &str, t: &str| kit_for(&kits, p).assertions(p, t);
     let only_count = |p: &str, t: &str| kit_for(&kits, p).only_count(p, t);
+    let waiver = template_waiver(req.root, &merge_base);
     let allows = |name: &str| req.allow.iter().any(|a| a == name);
     let mut findings: Vec<Value> = Vec::new();
     let mut checked: std::collections::BTreeSet<String> = Default::default();
@@ -334,13 +376,13 @@ pub fn run(req: &Request) -> CmdResult {
                 Some(h) if is_test => h,
                 _ => {
                     // Deleted, or no longer a test file: the base tests are gone.
-                    let allowed = allows("delete-test");
-                    findings.push(finding(
+                    findings.push(deletion_finding(
                         "deleted-test",
                         file,
                         Some(base_asserts),
                         None,
-                        allowed,
+                        allows("delete-test"),
+                        waiver(old_path),
                     ));
                     continue;
                 }
@@ -392,13 +434,13 @@ pub fn run(req: &Request) -> CmdResult {
             let base_tests = base_text.map_or(0, |t| test_count(old_path, t));
             let head_tests = test_count(new_path, head);
             if head_tests < base_tests {
-                let allowed = allows("delete-test");
-                findings.push(finding(
+                findings.push(deletion_finding(
                     "fewer-tests",
                     file,
                     Some(base_tests),
                     Some(head_tests),
-                    allowed,
+                    allows("delete-test"),
+                    waiver(old_path),
                 ));
             }
             let head_asserts = assertions(new_path, head);

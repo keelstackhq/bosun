@@ -51,6 +51,8 @@ fn repo() -> Repo {
         ("a/src/lib.rs", ""),
         ("b/src/lib.rs", ""),
         ("docs/x.md", "x\n"),
+        // A base with `.bosun/` is not a bootstrap base (that one may drop template tests).
+        (".bosun/bosun.toml", ""),
         ("tests/t.rs", "#[test]\nfn t() {\n    assert!(true);\n}\n"),
     ] {
         write(&root, rel, text);

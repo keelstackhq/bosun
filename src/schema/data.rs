@@ -13,7 +13,8 @@ wave plan = {epic: int, shape: str, warnings: [str], run: [{issue: int, plan_id:
 msg = {session: str, chars: int};
 keygen = {id: str, role: str, path: str, public_key: str, enrolled: bool, toml: str, steps: [str]};
 test-integrity = {base: str, files_checked: int, integrity: str, integrity_reason?: str,
-    findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool}], allow?: [str],
+    findings: [{file: str, kind: str, base: int, head: int | null, allowed: bool, reason?: str}],
+    allow?: [str],
     task?: int};
 review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, since_sha: str | null,
     changed_files: int, chunks: [[str]], delta_fallback: str | null, delta_not_in_pr: [str],
