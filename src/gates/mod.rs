@@ -79,6 +79,13 @@ fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
     !git_has(req.root, &format!("{}:{}", req.base, path.display()))
 }
 
+/// Is `file` missing in the stack at the base commit? Only the base counts: a bootstrap PR that
+/// adds the file has it at head, and the gate stays neutral until the base has it.
+fn missing_in_base(req: &Request, stack: &Stack, file: &str) -> bool {
+    let path = Path::new(stack_rel(&stack.path)).join(file);
+    !git_has(req.root, &format!("{}:{}", req.base, path.display()))
+}
+
 /// The profile's manifest when the stack has none, head or base: a stack that never had one has
 /// nothing to check yet.
 fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> Option<&'a str> {
@@ -178,11 +185,23 @@ pub fn run(req: &Request) -> CmdResult {
             .requires
             .as_deref()
             .filter(|f| missing_file(req, stack, f));
+        let bootstrap = gate
+            .base_requires
+            .as_deref()
+            .filter(|f| missing_in_base(req, stack, f));
         let run = match missing_manifest(req, stack, profile) {
             Some(manifest) => json!({
                 "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
                 "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
                 "reason": format!("no {manifest} in {}", stack.path),
+            }),
+            None if bootstrap.is_some() => json!({
+                "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                "reason": format!(
+                    "no {} in base: bootstrap PR, gate neutral",
+                    bootstrap.unwrap_or_default()
+                ),
             }),
             None => match lacks {
                 Some(file) => json!({
@@ -194,6 +213,27 @@ pub fn run(req: &Request) -> CmdResult {
             },
         };
         let status = run["exit_status"].as_i64().unwrap_or(0);
+        if status != 0
+            && gate.is_locked()
+            && let Some(lock) = profile.lockfile.as_deref()
+            && !req.root.join(stack_rel(&stack.path)).join(lock).exists()
+        {
+            let at = match stack_rel(&stack.path) {
+                "" => String::new(),
+                rel => format!(" in {rel}"),
+            };
+            return Err(BosunError::error(
+                format!(
+                    "gate {} failed: no {lock}{at}, and the gate runs with `--locked`",
+                    req.gate
+                ),
+                format!(
+                    "run `cargo generate-lockfile` and commit {lock}, then rerun `bosun gate {}`",
+                    req.gate
+                ),
+            )
+            .with_data(run));
+        }
         runs.push(run);
         if status != 0 {
             failed = Some(status);

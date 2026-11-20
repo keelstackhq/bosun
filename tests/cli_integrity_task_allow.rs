@@ -30,6 +30,9 @@ fn repo_without_its_test() -> (tempfile::TempDir, PathBuf) {
         "#[test]\nfn t() {\n    assert!(true);\n}\n",
     )
     .unwrap();
+    // A base with `.bosun/` is not a bootstrap base (that one may drop template tests).
+    fs::create_dir_all(root.join(".bosun")).unwrap();
+    fs::write(root.join(".bosun/bosun.toml"), "").unwrap();
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "base"]);
     git(&root, &["checkout", "-q", "-b", "work"]);

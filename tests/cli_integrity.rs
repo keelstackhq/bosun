@@ -38,6 +38,8 @@ fn repo() -> Repo {
     );
     r.put("tests/snapshots/a.snap", "one\n");
     r.put("src/lib.rs", "pub fn f() {}\n");
+    // A base with `.bosun/` is not a bootstrap base (that one may drop template tests).
+    r.put(".bosun/bosun.toml", "");
     git(&r.root, &["add", "."]);
     git(&r.root, &["commit", "-q", "-m", "base"]);
     git(&r.root, &["checkout", "-q", "-b", "work"]);
