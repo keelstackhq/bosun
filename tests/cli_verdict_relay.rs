@@ -5,7 +5,7 @@ mod common;
 
 use bosun::core::verdict::{Verdict, comment_body};
 use common::fake::FakeGithub;
-use common::{bosun, one_object, run};
+use common::{bosun, noci, one_object, run};
 use serde_json::Value;
 
 const T0: &str = "2026-11-18T10:00:00Z";
@@ -280,29 +280,40 @@ fn apply_records_the_relayer() {
     );
 }
 
+/// `verdict comment --from <input> --sign-key <enrolled reviewer key>` as `session`.
+fn signed_comment(fake: &FakeGithub, session: &str, input: &str) -> (i32, Value) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("v.txt");
+    std::fs::write(&file, input).unwrap();
+    let key = dir.path().join("k.pem");
+    std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
+    let (f, k) = (file.to_str().unwrap(), key.to_str().unwrap());
+    run(
+        fake,
+        session,
+        T0,
+        &["verdict", "comment", "--from", f, "--sign-key", k],
+    )
+}
+
 /// A key signs only its holder's own verdict: `--sign-key` on a relayed body is refused, nothing
-/// is posted and no key is read (a relay must never launder another session's review).
+/// is posted (a relay must never launder another session's review). The key is an enrolled
+/// reviewer key that signs the reviewer's own verdict, so the refusal is the relay alone.
 #[test]
 fn a_relayed_body_is_never_signed() {
     let fake = setup();
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("v.txt");
-    std::fs::write(&file, reviewed_body()).unwrap();
-    let key = dir.path().join("missing.key");
-    let (code, v) = run(
-        &fake,
-        "session_orch",
-        T0,
-        &[
-            "verdict",
-            "comment",
-            "--from",
-            file.to_str().unwrap(),
-            "--sign-key",
-            key.to_str().unwrap(),
-        ],
-    );
+    noci::enroll(&fake);
+    let (code, v) = signed_comment(&fake, "session_orch", &reviewed_body());
     assert_eq!(code, 2, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("own verdict") && msg.contains("session_rev"),
+        "{v}"
+    );
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty(), "{v}");
     assert!(fake.comments_of(42).is_empty(), "{v}");
+    // The same key signs the reviewer's own verdict.
+    let (code, v) = signed_comment(&fake, "session_rev", JSON);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["signed"], true, "{v}");
 }
