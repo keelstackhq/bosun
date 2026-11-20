@@ -1,0 +1,1 @@
+- 2026-11-19 · tests scrub integrity allow env · tests/common clears BOSUN_INTEGRITY_ALLOW and BOSUN_PR_BODY (CI task-allow leak, seen on #693) · one-off PR

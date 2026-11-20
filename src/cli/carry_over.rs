@@ -13,7 +13,7 @@ use crate::core::carry::{
     self, CarryFacts, Entry, FileChange, Hop, Kind, LockTexts, RawTree, Refusal,
 };
 use crate::core::records::{Record, parse_record};
-use crate::core::risk::{VERDICT_AUTHOR, apply_record, is_bot_session};
+use crate::core::risk::{VERDICT_AUTHOR, apply_record, is_bot_session, relayer_excluded};
 use crate::github::{Comment, Compare, GitCommit, Github, PrFile, Pull, Review, Status};
 
 /// Seven hex characters of a sha taken from GitHub data, else `?`.
@@ -247,10 +247,16 @@ fn approved_by_independent(
             approved,
             confidence,
             model,
+            relayed_by,
             ..
         }) if head_sha == h => {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
-            Some((session, approved && confidence.is_some() && enrolled))
+            // A verdict relayed by the lease holder is the lease holder's (spec §7).
+            let relayed = relayer_excluded(relayed_by.as_deref(), excluded);
+            Some((
+                session,
+                approved && confidence.is_some() && enrolled && !relayed,
+            ))
         }
         _ => None,
     };

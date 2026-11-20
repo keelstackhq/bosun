@@ -135,10 +135,6 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
         .and_then(|c| Limits::load(root).map(|l| per_task_if_on(&c, &l)))
         .unwrap_or(None);
     let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
-    let errs = shape::gated_size_errors(&p.items, &gated);
-    if !errs.is_empty() {
-        return Err(plan_errors(&a.file, &errs));
-    }
     let items: Vec<Value> = p
         .items
         .iter()
@@ -264,7 +260,7 @@ struct Importer<'a> {
     local_text: String,
     /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
     main_tasks: Option<HashMap<String, Task>>,
-    /// Path globs of the risk rules: a task touching one is gated (D-016).
+    /// Path globs of the risk rules: a task touching one is gated: its PR needs the owner (D-021).
     gated: shape::Gated,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
@@ -636,11 +632,8 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     let globs = crate::app::gated_from_default(app.gh.as_ref())?;
     // Wildcard touches are resolved against the default branch's tree (one read).
     let files = crate::app::base_files(app.gh.as_ref())?;
-    let (resolved, mut errs) = shape::resolve_gated(&p.items, &globs, files.as_deref());
+    let (resolved, errs) = shape::resolve_gated(&p.items, &globs, files.as_deref());
     let gated = shape::Gated { globs, resolved };
-    errs.extend(shape::gated_size_errors_by(&p.items, &|i, t| {
-        gated.is(i, t)
-    }));
     if !errs.is_empty() {
         return Err(plan_errors(&a.file, &errs));
     }

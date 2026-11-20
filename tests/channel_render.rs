@@ -1262,9 +1262,16 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
                     .unwrap()
                     .contains("echo \"$SHA256  $RUNNER_TEMP/bin/bosun\" | sha256sum -c --quiet")
             );
+            let pnpm = step(&b, "name", "pnpm install");
+            assert_eq!(
+                pnpm["env"]["TS_PATHS"],
+                "${{ needs.bosun-trusted.outputs.ts_paths }}"
+            );
             assert!(
-                b.iter()
-                    .any(|s| s["run"] == "pnpm install --frozen-lockfile")
+                pnpm["run"]
+                    .as_str()
+                    .unwrap()
+                    .contains("(cd \"$d\" && pnpm install --frozen-lockfile)")
             );
             let gates = step(&b, "name", "bosun gates");
             assert_eq!(
@@ -1402,6 +1409,7 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
                     ("REF", git_ref),
                     ("DEFAULT_BRANCH", "main"),
                     ("BASE", &base),
+                    ("TS_PATHS", "."),
                 ],
             );
             let log = fs::read_to_string(log).unwrap_or_default();
@@ -1575,6 +1583,7 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
                 ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
                 ("BASE", &base_sha),
                 ("GITHUB_SHA", sha),
+                ("TS_PATH", "."),
                 ("EVENT", event),
                 ("REF", "refs/heads/main"),
                 ("DEFAULT_BRANCH", "main"),
@@ -1738,6 +1747,255 @@ fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
     assert_eq!(
         fs::read_to_string(out).unwrap().trim(),
         "pr_gates=fmt lint test"
+    );
+}
+
+/// The pnpm steps follow the ts-pnpm stacks of the (base's) .bosun/bosun.toml, not the render's
+/// ts_path: a stack the owner moved to `action/` still gets pnpm (a client repo's main went red).
+#[test]
+fn the_pnpm_steps_follow_the_configured_ts_stack_paths() {
+    let files = variant(&["ts-pnpm"], "");
+    let wf = file(&files, BOSUN_YML);
+    assert!(
+        !wf.contains("hashFiles("),
+        "no step keys off the render's path"
+    );
+    let Some(j) = yaml_json(wf) else {
+        return;
+    };
+    let a = steps(&j, "");
+    let outs = &j["jobs"][TRUSTED]["outputs"];
+    for k in ["path", "paths", "lock"] {
+        assert_eq!(
+            outs[format!("ts_{k}")],
+            format!("${{{{ steps.stack.outputs.{k} }}}}")
+        );
+    }
+    let audit = step(&a, "name", "pnpm for the audit");
+    assert!(
+        audit["if"]
+            .as_str()
+            .unwrap()
+            .ends_with("&& steps.stack.outputs.lock == 'true'")
+    );
+    assert_eq!(audit["env"]["TS_PATH"], "${{ steps.stack.outputs.path }}");
+    let b = check_steps(&j, "");
+    let lock = "needs.bosun-trusted.outputs.pr_gates != '' && needs.bosun-trusted.outputs.ts_lock == 'true'";
+    for u in [
+        "pnpm/action-setup@",
+        "actions/setup-node@",
+        "keelstackhq/hoard@",
+    ] {
+        let s = b
+            .iter()
+            .find(|s| s["uses"].as_str().is_some_and(|x| x.starts_with(u)))
+            .unwrap();
+        assert_eq!(s["if"], lock, "{u}");
+    }
+    assert_eq!(step(&b, "name", "pnpm install")["if"], lock);
+    let setup = b
+        .iter()
+        .find(|s| {
+            s["uses"]
+                .as_str()
+                .is_some_and(|x| x.starts_with("pnpm/action-setup@"))
+        })
+        .unwrap();
+    assert_eq!(
+        setup["with"]["package_json_file"],
+        "${{ needs.bosun-trusted.outputs.ts_path }}/package.json"
+    );
+    // The paths step, on a bosun.toml (Some: the outputs; None: it fails).
+    let run = step(&a, "id", "stack")["run"].as_str().unwrap().to_string();
+    let case = |toml: &str, setup: &str| -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        fs::create_dir_all(d.join(".bosun")).unwrap();
+        fs::write(d.join(".bosun/bosun.toml"), toml).unwrap();
+        if !setup.is_empty() {
+            git_in(d, setup);
+        }
+        let out = d.join("out");
+        let ok = bash_in(d, &run, &[("GITHUB_OUTPUT", out.to_str().unwrap())]);
+        ok.then(|| fs::read_to_string(out).unwrap())
+    };
+    let ts =
+        |p: &str| format!("project = \"a\"\n\n[[stack]]\npath = \"{p}\"\nprofile = \"ts-pnpm\"\n");
+    let rust = "[[stack]]\npath = \".\"\nprofile = \"rust\"\n";
+    assert_eq!(
+        case(
+            &format!("{rust}{}\n[review]\nmode = \"subagent\"\n", ts("action")),
+            "mkdir action && touch action/pnpm-lock.yaml"
+        )
+        .as_deref(),
+        Some("paths=action\npath=action\nlock=true\n")
+    );
+    assert_eq!(
+        case(
+            &format!("{}{}", ts("web"), ts("api")),
+            "mkdir api && touch api/pnpm-lock.yaml"
+        )
+        .as_deref(),
+        Some("paths=web api\npath=api\nlock=true\n"),
+        "the first stack with a lockfile names pnpm"
+    );
+    assert_eq!(
+        case(&ts("action"), "").as_deref(),
+        Some("paths=action\npath=\nlock=false\n"),
+        "no lockfile yet"
+    );
+    assert_eq!(
+        case(rust, "touch pnpm-lock.yaml").as_deref(),
+        Some("paths=\npath=\nlock=false\n"),
+        "no ts-pnpm stack"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let link = format!("ln -s {} out", outside.path().display());
+    for (p, setup) in [
+        ("../x", ""),
+        ("/etc", ""),
+        ("a b", ""),
+        ("out/web", link.as_str()),
+    ] {
+        assert_eq!(case(&ts(p), setup), None, "{p}");
+    }
+}
+
+/// A PR that adds a ts-pnpm stack in a subdirectory: deps still audits its lockfile through a `{}`
+/// stand-in package.json, which is gone right after deps (no created file reaches a later gate).
+#[test]
+fn bosun_trusted_audits_a_new_stacks_lockfile_through_a_stand_in() {
+    let files = variant(&["ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let run = step(&steps(&j, ""), "name", "bosun gates")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    git_in(
+        d,
+        "git init -q -b main && git config user.email a@b.c && git config user.name n \
+         && echo x > x && git add -A && git commit -qm base \
+         && mkdir action && echo '{\"name\":\"a\",\"pnpm\":{}}' > action/package.json \
+         && echo lock > action/pnpm-lock.yaml && git add -A && git commit -qm pr",
+    );
+    let base = git_in(d, "git rev-parse HEAD~1");
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let log = tmp.path().join("log");
+    fs::write(
+        bin.join("bosun"),
+        format!(
+            "#!/bin/sh\necho \"$2: $(cat action/package.json 2>/dev/null) $(cat action/pnpm-lock.yaml)\" >> {}\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(bin.join("bosun"), fs::Permissions::from_mode(0o755)).unwrap();
+    let out = tmp.path().join("out");
+    let script = format!(
+        "export BOSUN_SHA256=\"$(sha256sum \"$RUNNER_TEMP/bin/bosun\" | cut -d' ' -f1)\"\n{run}"
+    );
+    assert!(bash_in(
+        d,
+        &script,
+        &[
+            ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
+            ("GITHUB_OUTPUT", out.to_str().unwrap()),
+            ("GITHUB_SHA", "unused"),
+            ("GATES", "test-integrity deps"),
+            ("ONLY", ""),
+            ("EVENT", "pull_request"),
+            ("BASE", &base),
+            ("TS_PATHS", "web action"),
+        ],
+    ));
+    assert_eq!(
+        fs::read_to_string(log).unwrap(),
+        "test-integrity: {\"name\":\"a\",\"pnpm\":{}} lock\ndeps: {} lock\n"
+    );
+    assert!(
+        !d.join("action/package.json").exists(),
+        "the stand-in is gone"
+    );
+    assert!(
+        !d.join("web").exists(),
+        "nothing for a stack without a lockfile"
+    );
+}
+
+/// The stack paths are the base's: a PR that moves its stack in .bosun/bosun.toml changes
+/// nothing until it merges.
+#[test]
+fn the_ts_stack_paths_come_from_the_bases_bosun_toml() {
+    let files = variant(&["ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let a = steps(&j, "");
+    let base_cfg = step(&a, "name", "the base's config for the gates")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let stack = step(&a, "id", "stack")["run"].as_str().unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let toml = |p: &str| {
+        format!(
+            "printf '[[stack]]\\npath = \"{p}\"\\nprofile = \"ts-pnpm\"\\n' > .bosun/bosun.toml"
+        )
+    };
+    git_in(
+        d,
+        &format!(
+            "git init -q -b main && git config user.email a@b.c && git config user.name n \
+             && mkdir -p .bosun action web && echo 1.2.3 > .bosun/version && {} \
+             && echo l > action/pnpm-lock.yaml && git add -A && git commit -qm base \
+             && {} && echo l > web/pnpm-lock.yaml && git add -A && git commit -qm pr",
+            toml("action"),
+            toml("web")
+        ),
+    );
+    let base = git_in(d, "git rev-parse HEAD~1");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out");
+    assert!(bash_in(
+        d,
+        &base_cfg,
+        &[("BASE", &base), ("GITHUB_SHA", "unused")]
+    ));
+    assert!(bash_in(
+        d,
+        &stack,
+        &[("GITHUB_OUTPUT", out.to_str().unwrap())]
+    ));
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        "paths=action\npath=action\nlock=true\n"
+    );
+    // A form the parser does not read (an inline table) is named in a warning.
+    fs::write(
+        d.join(".bosun/bosun.toml"),
+        "stack = [{ path = \"action\", profile = \"ts-pnpm\" }]\n",
+    )
+    .unwrap();
+    let o = Command::new("bash")
+        .args(["-eo", "pipefail", "-c", &stack])
+        .current_dir(d)
+        .env("GITHUB_OUTPUT", &out)
+        .output()
+        .unwrap();
+    assert!(o.status.success());
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        said.contains("::warning::.bosun/bosun.toml names ts-pnpm")
+            && said.contains("inline tables"),
+        "{said}"
     );
 }
 

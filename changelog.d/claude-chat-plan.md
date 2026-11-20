@@ -1,0 +1,1 @@
+- Adds the chat-approval implementation plan (`docs/superpowers/plans/2026-11-10-chat-approval.md`), updated for the port onto 0.20.0.
